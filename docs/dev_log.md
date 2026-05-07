@@ -57,3 +57,32 @@
   - `npx eslint . --no-cache` 通过（存在 1 条模板生成文件警告：`.expo/types/router.d.ts` 未使用的 eslint-disable）。
 - 遗留问题：现有模板 `app/(tabs)/explore.tsx` 等旧示例仍在仓库中，但不影响阶段 B token 建设目标。
 - 下一步：进入阶段 C，优先抽取基础组件（如页面头、主按钮、卡片容器、进度点）并统一接入 token。
+
+### 2026-05-07 - 第2步阶段C：通用组件层
+
+- 任务目标：基于 `src/styles/tokens.ts` 创建可复用 UI 组件，不还原完整页面，不接业务逻辑。
+- 修改文件：
+  - `src/components/ui/ScreenContainer.tsx`
+  - `src/components/ui/CardContainer.tsx`
+  - `src/components/ui/PrimaryButton.tsx`
+  - `src/components/ui/SegmentControl.tsx`
+  - `src/components/ui/index.ts`
+  - `src/components/wrongbook/OfflineBadge.tsx`
+  - `src/components/wrongbook/BrandHeader.tsx`
+  - `src/components/wrongbook/ProgressDots.tsx`
+  - `src/components/wrongbook/StatusPill.tsx`
+  - `src/components/wrongbook/TagChip.tsx`
+  - `src/components/wrongbook/SectionTitle.tsx`
+  - `src/components/wrongbook/index.ts`
+  - `src/components/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 10 个通用组件：`ScreenContainer`、`OfflineBadge`、`BrandHeader`、`CardContainer`、`PrimaryButton`、`ProgressDots`、`StatusPill`、`TagChip`、`SectionTitle`、`SegmentControl`。
+  - 组件样式统一基于 `tokens`（颜色、间距、圆角、字体、阴影）。
+  - `SegmentControl` 提供本地选中态（受控/非受控均支持），仅负责展示与交互外壳。
+  - 新增组件聚合导出，方便后续阶段页面组合使用。
+- 验收结果：
+  - `npm run typecheck` 通过。
+  - `npx eslint . --no-cache` 通过（存在 1 条模板生成文件警告：`.expo/types/router.d.ts` 未使用的 eslint-disable）。
+- 遗留问题：当前页面尚未接入新组件，预计在下一阶段页面还原中逐步替换占位结构。
+- 下一步：进入阶段 D，先落地今日页静态还原并复用本阶段组件。
