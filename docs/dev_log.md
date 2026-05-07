@@ -348,3 +348,20 @@
   - Web 端 SQLite 能力依赖运行环境实现，若浏览器不支持或受限，需在 Android 真机优先验证。
 - 下一步：
   - 进入阶段 3-G：实现“复做一次”的事务化调试接口（写入 `review_records` + 更新 `mistakes` 进度），并在开发页补充一键验证流程。
+
+### 2026-05-08 - Web 热修复：expo-sqlite wasm 资源解析
+
+- 任务目标：修复 Web 端 `expo-sqlite` 报错 `Unable to resolve module ... wa-sqlite.wasm`。
+- 修改文件：
+  - `metro.config.js`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 Metro 配置并基于 `expo/metro-config` 扩展默认项。
+  - 将 `wasm` 加入 `resolver.assetExts`，让 Metro 将 `wa-sqlite.wasm` 作为静态资源解析而不是源码模块。
+- 验收结果：
+  - 本地配置检查通过：`assetExts` 已包含 `wasm`。
+  - `npx expo export --platform web` 在当前环境仍受 `spawn EPERM` 阻塞，无法在本机完成最终 Web 打包验收。
+- 遗留问题：
+  - 当前机器存在进程启动权限问题（`spawn EPERM`），会影响 Metro/Web 打包命令。
+- 下一步：
+  - 先修复本机 `spawn EPERM` 环境权限，再重新执行 `npm run web` 或 `npx expo export --platform web` 复验。
