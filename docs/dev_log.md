@@ -323,3 +323,28 @@
   - 当前仅提供基础 CRUD；尚未实现“同事务写入复做记录 + 更新错题进度”的组合接口。
 - 下一步：
   - 进入阶段 3-F：实现复做事务服务（Service 层）或协调器，统一串联 `ReviewRecordRepository` 与 `MistakeRepository.updateReviewProgress`。
+
+### 2026-05-08 - 第3步阶段3-F：数据库健康检查开发页
+
+- 任务目标：新增仅开发调试使用的数据库健康检查页面，便于在 Web/Android 验证 SQLite 初始化、查询与重置能力。
+- 修改文件：
+  - `app/dev/db.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增路由页 `app/dev/db.tsx`，可通过 `/dev/db` 访问，且不放入底部 Tab。
+  - 页面提供返回按钮与“仅开发调试使用”提示。
+  - 接入数据库调试能力按钮：
+    - 初始化数据库：`initDatabase()`
+    - 健康检查：`checkDatabaseHealth()`
+    - 插入示例错题：`MistakeRepository.createMistake()`（固定 mock 数据）
+    - 查询错题列表：`MistakeRepository.listMistakes({ limit: 20, offset: 0 })`
+    - 查询统计：`MistakeRepository.getMistakeStats()`
+    - 清空开发数据：二次确认后调用 `resetDatabaseForDev()` 并重新初始化
+  - 页面展示关键结果：健康检查结构化输出、最近插入 ID、错题列表、统计数据。
+  - 所有异常均在页面展示，并调用 `Logger.error` 记录。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - Web 端 SQLite 能力依赖运行环境实现，若浏览器不支持或受限，需在 Android 真机优先验证。
+- 下一步：
+  - 进入阶段 3-G：实现“复做一次”的事务化调试接口（写入 `review_records` + 更新 `mistakes` 进度），并在开发页补充一键验证流程。
