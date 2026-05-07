@@ -365,3 +365,31 @@
   - 当前机器存在进程启动权限问题（`spawn EPERM`），会影响 Metro/Web 打包命令。
 - 下一步：
   - 先修复本机 `spawn EPERM` 环境权限，再重新执行 `npm run web` 或 `npx expo export --platform web` 复验。
+
+### 2026-05-08 - 第3步阶段3-G：App 启动初始化 + 首页轻量统计读取
+
+- 任务目标：在 App 启动时初始化 SQLite，并在首页轻量读取统计数据验证数据库可用，不全面切库。
+- 修改文件：
+  - `app/_layout.tsx`
+  - `app/(tabs)/index.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 在根布局接入一次性数据库初始化：
+    - 使用模块级 `appDatabaseInitPromise` 缓存初始化过程，避免重复初始化。
+    - 在 `useEffect` 中触发 `initDatabase()`，初始化成功 `Logger.info`，失败 `Logger.error`。
+    - 不增加复杂阻塞流程，保持页面可正常渲染。
+  - 在今日页接入统计轻量读取：
+    - 挂载时调用 `MistakeRepository.getMistakeStats()`。
+    - 用数据库统计替换任务卡片中的四项数字：
+      - 今日待复做（`dueToday`）
+      - 总错题（`total`）
+      - 已七刷（`mastered`）
+      - 完成率（`mastered / total` 计算）
+    - 读取失败时回退为 `0`，并展示轻量提示，同时 `Logger.error` 记录错误。
+    - 保留优先复做与错题队列卡片为静态 mock，仅加注释性提示文案说明未接真实列表。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 首页当前仅接统计数字，错题列表仍为 mock；与预期一致，后续阶段再逐步接入真实列表。
+- 下一步：
+  - 进入阶段 3-H：新增“复做一次”的事务化服务接口（写 `review_records` + 更新 `mistakes` 进度）并在 `/dev/db` 增加联调按钮。

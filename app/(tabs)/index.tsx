@@ -1,4 +1,5 @@
 import { useRouter } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
@@ -10,6 +11,8 @@ import {
   StatusPill,
 } from '@/src/components';
 import { todayMock, type TodayMistakeMock } from '@/src/mocks/today';
+import { MistakeRepository, type MistakeStats } from '@/src/repositories';
+import { Logger } from '@/src/services/Logger';
 import { colors, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 function ThumbnailPlaceholder() {
@@ -61,6 +64,74 @@ function MistakeCard({ item, pressable }: { item: TodayMistakeMock; pressable?: 
 
 export default function TodayScreen() {
   const router = useRouter();
+  const [stats, setStats] = useState<MistakeStats>({
+    total: 0,
+    active: 0,
+    mastered: 0,
+    dueToday: 0,
+  });
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [statsLoaded, setStatsLoaded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadStats() {
+      try {
+        const result = await MistakeRepository.getMistakeStats();
+        if (!active) {
+          return;
+        }
+        setStats(result);
+        setStatsError(null);
+      } catch (error) {
+        Logger.error('TodayScreen', 'Failed to load mistake stats.', error);
+        if (!active) {
+          return;
+        }
+        setStats({
+          total: 0,
+          active: 0,
+          mastered: 0,
+          dueToday: 0,
+        });
+        setStatsError('统计读取失败，当前显示默认值 0');
+      } finally {
+        if (active) {
+          setStatsLoaded(true);
+        }
+      }
+    }
+
+    loadStats();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const completionRate = useMemo(() => {
+    if (stats.total <= 0) {
+      return 0;
+    }
+    return Math.round((stats.mastered / stats.total) * 100);
+  }, [stats.mastered, stats.total]);
+
+  const summaryStats = useMemo(() => {
+    return [
+      {
+        label: todayMock.taskSummary.stats[0]?.label ?? '总错题',
+        value: String(stats.total),
+      },
+      {
+        label: todayMock.taskSummary.stats[1]?.label ?? '已七刷',
+        value: String(stats.mastered),
+      },
+      {
+        label: todayMock.taskSummary.stats[2]?.label ?? '完成率',
+        value: `${completionRate}%`,
+      },
+    ];
+  }, [completionRate, stats.mastered, stats.total]);
 
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
@@ -69,18 +140,26 @@ export default function TodayScreen() {
       <CardContainer style={styles.taskSummaryCard} padding={spacing.xl}>
         <Text style={styles.taskCaption}>{todayMock.taskSummary.title}</Text>
         <View style={styles.taskDueRow}>
-          <Text style={styles.taskDueCount}>{todayMock.taskSummary.dueCount}</Text>
+          <Text style={styles.taskDueCount}>{stats.dueToday}</Text>
           <Text style={styles.taskDueLabel}>{todayMock.taskSummary.dueLabel}</Text>
         </View>
 
         <View style={styles.taskStatsRow}>
-          {todayMock.taskSummary.stats.map((stat) => (
+          {summaryStats.map((stat) => (
             <View key={stat.label} style={styles.taskStatCell}>
               <Text style={styles.taskStatLabel}>{stat.label}</Text>
               <Text style={styles.taskStatValue}>{stat.value}</Text>
             </View>
           ))}
         </View>
+
+        <Text style={[styles.statsHint, statsError ? styles.statsHintError : null]}>
+          {statsError
+            ? statsError
+            : statsLoaded
+              ? '统计来自本地 SQLite；下方错题卡片仍为静态 mock。'
+              : '正在读取本地统计...'}
+        </Text>
       </CardContainer>
 
       <View style={styles.sectionBlock}>
@@ -163,6 +242,14 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 34,
     lineHeight: 40,
+  },
+  statsHint: {
+    marginTop: spacing.md,
+    ...typography.caption,
+    color: '#C1C4CC',
+  },
+  statsHintError: {
+    color: '#F8B4B4',
   },
   sectionBlock: {
     gap: spacing.md,
