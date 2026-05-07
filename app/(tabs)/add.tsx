@@ -120,7 +120,7 @@ const styles = StyleSheet.create({
     width: 78,
     height: 78,
     borderRadius: radius.md,
-    backgroundColor: colors.successBg,
+    backgroundColor: colors.surfaceMuted,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -129,7 +129,7 @@ const styles = StyleSheet.create({
     height: 48,
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: '#D6EAD9',
+    borderColor: colors.border,
     backgroundColor: colors.white,
     paddingTop: spacing.sm,
     paddingHorizontal: spacing.xs,
@@ -138,13 +138,13 @@ const styles = StyleSheet.create({
   introDocLine: {
     height: 3,
     borderRadius: radius.pill,
-    backgroundColor: '#8CB495',
+    backgroundColor: colors.textMuted,
   },
   introDocLineShort: {
     width: 22,
     height: 3,
     borderRadius: radius.pill,
-    backgroundColor: '#8CB495',
+    backgroundColor: colors.textMuted,
   },
   introPlusCircle: {
     position: 'absolute',
@@ -153,7 +153,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: radius.pill,
-    backgroundColor: colors.success,
+    backgroundColor: colors.black,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -245,4 +245,3 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
 });
-
