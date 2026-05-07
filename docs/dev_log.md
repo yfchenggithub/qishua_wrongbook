@@ -216,3 +216,37 @@
   - 当前仅完成 schema 与类型定义，尚未实现数据库初始化、迁移策略、Repository 读写。
 - 下一步：
   - 进入阶段 3-C：实现 `initDatabase` 与 `openDatabaseAsync` 初始化流程（含建表执行、版本管理、基础错误处理），随后再进入 Repository 层。
+
+### 2026-05-07 - 第3步阶段3-C：DatabaseService 初始化与迁移
+
+- 任务目标：实现 SQLite 打开、初始化、版本检查、健康检查与开发重置能力，不接页面和 Repository CRUD。
+- 修改文件：
+  - `src/db/database.ts`
+  - `src/db/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `getDatabase()`：
+    - 使用 `SQLite.openDatabaseAsync(DATABASE_NAME)`。
+    - 缓存数据库实例，避免重复打开。
+    - 增加并发打开保护（`openingDatabasePromise`）。
+  - 新增 `initDatabase()`：
+    - 执行 `PRAGMA foreign_keys = ON`。
+    - 执行 `PRAGMA journal_mode = WAL`。
+    - 读取 `PRAGMA user_version`。
+    - 执行基线迁移流程（当前为 v1）：执行 `CREATE_SCHEMA_SQL`，并设置 `user_version = DATABASE_VERSION`。
+    - 初始化成功/失败均记录日志，失败抛错。
+  - 新增 `getDatabaseVersion()`：读取并返回 `PRAGMA user_version`。
+  - 新增 `resetDatabaseForDev()`（仅开发调试）：
+    - 删除 `review_records` / `mistake_images` / `mistakes` 三张表。
+    - 重置 `user_version = 0` 后重新执行 `initDatabase()`。
+  - 新增 `checkDatabaseHealth()`：
+    - 检查三张核心表是否存在。
+    - 返回结构化结果：`{ ok, version, tables, message }`。
+  - 新增 `src/db/index.ts` 统一导出 DB 能力。
+  - 全部异常路径统一 `Logger.error`。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仅有基线迁移（v1）；后续若提升 `DATABASE_VERSION`，需补充分版本迁移分支。
+- 下一步：
+  - 进入阶段 3-D：实现 `repositories`（Mistake / MistakeImage / ReviewRecord）基础 CRUD 与查询方法，页面仍先保持静态调用隔离。
