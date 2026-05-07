@@ -86,3 +86,22 @@
   - `npx eslint . --no-cache` 通过（存在 1 条模板生成文件警告：`.expo/types/router.d.ts` 未使用的 eslint-disable）。
 - 遗留问题：当前页面尚未接入新组件，预计在下一阶段页面还原中逐步替换占位结构。
 - 下一步：进入阶段 D，先落地今日页静态还原并复用本阶段组件。
+
+### 2026-05-07 - 第2步阶段D：今日页静态还原
+
+- 任务目标：按 `docs/design/01_today.png` 还原今日页 UI，全部使用静态 mock 数据，不接业务逻辑。
+- 修改文件：
+  - `src/mocks/today.ts`
+  - `app/(tabs)/index.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增今日页 mock 数据文件，包含品牌区、今日任务统计、优先复做卡片、错题队列两条数据。
+  - 今日页改为静态还原结构：顶部品牌区、黑色任务大卡、优先复做模块、错题队列模块。
+  - 复用阶段 C 组件：`ScreenContainer`、`BrandHeader`、`SectionTitle`、`CardContainer`、`ProgressDots`、`StatusPill`。
+  - 优先复做卡片点击跳转到 `/mistake/demo-1`；缩略图使用本地线框占位图形，不接真实图片。
+- 验收结果：
+  - `npm run typecheck` 通过。
+  - `npx eslint . --no-cache` 通过（存在 1 条模板生成文件警告：`.expo/types/router.d.ts` 未使用的 eslint-disable）。
+  - 仍需在 Web/Android 进行手工对照设计图验收。
+- 遗留问题：当前为纯静态 mock 展示，列表与进度均未接入真实数据源。
+- 下一步：进入阶段 E，完成“新增页”静态还原并复用通用组件。
