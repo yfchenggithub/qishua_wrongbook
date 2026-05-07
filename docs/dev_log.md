@@ -250,3 +250,40 @@
   - 当前仅有基线迁移（v1）；后续若提升 `DATABASE_VERSION`，需补充分版本迁移分支。
 - 下一步：
   - 进入阶段 3-D：实现 `repositories`（Mistake / MistakeImage / ReviewRecord）基础 CRUD 与查询方法，页面仍先保持静态调用隔离。
+
+### 2026-05-08 - 第3步阶段3-D：MistakeRepository 基础 CRUD
+
+- 任务目标：实现 `mistakes` 表的数据访问层，提供创建、查询、统计、更新、删除能力，不接页面与拍照逻辑。
+- 修改文件：
+  - `src/repositories/MistakeRepository.ts`
+  - `src/repositories/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `MistakeRepository`，提供 8 个方法：
+    - `createMistake`
+    - `getMistakeById`
+    - `listMistakes`
+    - `listDueMistakes`
+    - `getMistakeStats`
+    - `updateMistake`
+    - `updateReviewProgress`
+    - `deleteMistake`
+  - Repository 内部统一调用 `getDatabase()`，并通过 `ensureDatabaseReady()` 懒初始化数据库（内部调用 `initDatabase()`，且在注释中明确启动期应先初始化）。
+  - `createMistake` 自动生成 `id`（`M + 时间戳 + 4 位随机数`），并填充默认字段：
+    - `subject = math`
+    - `difficulty = 3`
+    - `review_count = 0`
+    - `status = active`
+    - `created_at / updated_at = now ISO`
+    - `next_review_at` 未传时默认当前时间
+  - 所有 SQL 均使用参数绑定，动态筛选仅拼接固定 SQL 片段，不拼接用户输入值。
+  - `updateMistake` 支持仅更新传入字段，自动更新 `updated_at`，并处理“无字段更新”场景避免空 SQL。
+  - `updateReviewProgress` 仅更新错题进度字段，不创建 `review_records`。
+  - `deleteMistake` 删除主表记录并依赖外键级联清理关联表。
+  - 新增 `src/repositories/index.ts` 统一导出 Repository 与相关类型。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仅完成 `mistakes` 表 Repository；`mistake_images` 与 `review_records` Repository 仍待实现。
+- 下一步：
+  - 进入阶段 3-E：实现 `ReviewRecordRepository` 和 `MistakeImageRepository`，并补齐“一次复做事务写入”所需的数据层接口。
