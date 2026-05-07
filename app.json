@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "qishua_wrongbook",
+    "name": "七刷错题本",
     "slug": "qishua_wrongbook",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -38,7 +38,8 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-sqlite"
     ],
     "experiments": {
       "typedRoutes": true,
