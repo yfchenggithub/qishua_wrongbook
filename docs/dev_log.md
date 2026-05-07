@@ -124,3 +124,23 @@
   - 仍需在 Web/Android 进行手工对照设计图验收。
 - 遗留问题：当前拍照入口与保存按钮均为占位交互，未接业务能力。
 - 下一步：进入阶段 F，完成“题库页”静态还原并复用通用组件。
+
+### 2026-05-07 - 第2步阶段F：题库页静态还原
+
+- 任务目标：按 `docs/design/03_library.png` 还原题库页 UI，只做静态 mock，不做真实搜索和真实筛选。
+- 修改文件：
+  - `src/mocks/library.ts`
+  - `app/(tabs)/library.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增题库页 mock 数据，包含品牌区、搜索 placeholder、分段筛选项与 3 条错题卡片数据。
+  - 题库页改为静态还原结构：顶部品牌区、搜索框、分段筛选、错题列表卡片。
+  - 分段筛选使用本地 `selected` 状态切换，仅改变视觉高亮，不触发真实数据过滤。
+  - 搜索框支持输入文本，但不执行真实搜索逻辑。
+  - 三张卡片均支持点击跳转：`/mistake/demo-1`、`/mistake/demo-2`、`/mistake/demo-3`。
+- 验收结果：
+  - `npm run typecheck` 通过。
+  - `npx eslint . --no-cache` 通过（存在 1 条模板生成文件警告：`.expo/types/router.d.ts` 未使用的 eslint-disable）。
+  - 仍需在 Web/Android 进行手工对照设计图验收。
+- 遗留问题：当前搜索与筛选均为 UI 占位态，尚未接入真实数据源。
+- 下一步：进入阶段 G，完成“错题详情 / 复做页”静态还原并复用通用组件。
