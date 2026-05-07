@@ -188,3 +188,31 @@
   - 项目 UI 与静态 mock 骨架已完整，但运行态验收仍需在可读写 `.gitignore` 的环境下复核。
 - 下一步：
   - 进入第 3 步 SQLite 数据库层前，先确保本机对仓库目录（尤其 `.gitignore`、`.expo/`）有稳定读写权限，再开始数据层接入。
+
+### 2026-05-07 - 第3步阶段3-B：数据模型 types + schema SQL
+
+- 任务目标：仅建立 SQLite 数据层的 TypeScript 数据模型与 schema SQL，不做数据库初始化、不接页面。
+- 修改文件：
+  - `src/models/Mistake.ts`
+  - `src/models/MistakeImage.ts`
+  - `src/models/ReviewRecord.ts`
+  - `src/db/constants.ts`
+  - `src/db/schema.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `Mistake` / `MistakeImage` / `ReviewRecord` 三类模型与创建入参类型，字段与 `docs/data_contract.md` 对齐。
+  - 在 `Mistake` 模型中补充状态与结果相关联合类型：`MistakeStatus`、`MistakeImageType`、`ReviewResult`。
+  - 新增 `src/db/constants.ts`，定义数据库名与版本：`qishua_wrongbook.db`、`1`。
+  - 新增 `src/db/schema.ts`，集中定义建表 SQL、索引 SQL 与聚合 schema SQL：
+    - `CREATE_MISTAKES_TABLE_SQL`
+    - `CREATE_MISTAKE_IMAGES_TABLE_SQL`
+    - `CREATE_REVIEW_RECORDS_TABLE_SQL`
+    - `CREATE_INDEXES_SQL`
+    - `CREATE_SCHEMA_SQL`
+  - schema 中加入主键、外键（含 `ON DELETE CASCADE`）、默认值与基础 `CHECK` 约束（难度/复做次数/枚举值）。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仅完成 schema 与类型定义，尚未实现数据库初始化、迁移策略、Repository 读写。
+- 下一步：
+  - 进入阶段 3-C：实现 `initDatabase` 与 `openDatabaseAsync` 初始化流程（含建表执行、版本管理、基础错误处理），随后再进入 Repository 层。
