@@ -1,1 +1,10 @@
-{ "recommendations": ["expo.vscode-expo-tools"] }
+{
+  "recommendations": [
+    "expo.vscode-expo-tools",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "eamodio.gitlens",
+    "usernamehw.errorlens",
+    "gruntfuggly.todo-tree"
+  ]
+}
