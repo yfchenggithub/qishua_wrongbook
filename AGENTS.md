@@ -67,10 +67,13 @@
 - 启动 Android：`npm run android`
 - 启动 iOS：`npm run ios`
 - 启动 Web：`npm run web`
+- 启动 Dev Client：`npm run dev-client`
+- 检查 Expo 依赖匹配：`npm run check:deps`
+- TypeScript 类型检查：`npm run typecheck`
 - 运行 Lint：`npm run lint`
 - 重置模板项目：`npm run reset-project`
 
-当前缺少常见脚本（如测试、类型检查、格式化等）：建议后续补充。
+当前缺少常见脚本（如测试、格式化等）：建议后续补充。
 
 ## 8. 每次完成任务后的输出格式
 Codex 每次完成任务后，输出必须包含：
