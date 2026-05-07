@@ -1,13 +1,13 @@
 import { useRouter } from 'expo-router';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
-export default function TodayScreen() {
+export default function LibraryScreen() {
   const router = useRouter();
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>今日</Text>
-      <Text style={styles.description}>今日待复做错题将在这里展示</Text>
+      <Text style={styles.title}>题库</Text>
+      <Text style={styles.description}>所有错题将在这里展示</Text>
 
       <Pressable style={styles.button} onPress={() => router.push('/mistake/demo-1' as never)}>
         <Text style={styles.buttonText}>查看示例错题</Text>
