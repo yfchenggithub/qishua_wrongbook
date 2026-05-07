@@ -287,3 +287,39 @@
   - 当前仅完成 `mistakes` 表 Repository；`mistake_images` 与 `review_records` Repository 仍待实现。
 - 下一步：
   - 进入阶段 3-E：实现 `ReviewRecordRepository` 和 `MistakeImageRepository`，并补齐“一次复做事务写入”所需的数据层接口。
+
+### 2026-05-08 - 第3步阶段3-E：MistakeImageRepository + ReviewRecordRepository
+
+- 任务目标：实现 `mistake_images` 与 `review_records` 两张表的 Repository 数据访问能力，不接 UI、不接拍照、不接文件系统。
+- 修改文件：
+  - `src/repositories/MistakeImageRepository.ts`
+  - `src/repositories/ReviewRecordRepository.ts`
+  - `src/repositories/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `MistakeImageRepository`，提供：
+    - `createMistakeImage`
+    - `listImagesByMistakeId`
+    - `listImagesByType`
+    - `deleteImage`
+    - `deleteImagesByMistakeId`
+  - `createMistakeImage` 自动生成 `id`（`IMG + 时间戳 + 4 位随机数`）与 `created_at`，创建后回查返回记录。
+  - 新增 `ReviewRecordRepository`，提供：
+    - `createReviewRecord`
+    - `listReviewRecordsByMistakeId`
+    - `getLatestReviewRecord`
+    - `deleteReviewRecord`
+    - `deleteReviewRecordsByMistakeId`
+  - `createReviewRecord` 自动生成 `id`（`R + 时间戳 + 4 位随机数`）与 `created_at`，并对 `review_index` 做 `1-7` 范围检查。
+  - 两个 Repository 均在内部调用 `getDatabase()`，并使用懒初始化保护（`initDatabase()`）避免未初始化直接调用导致失败。
+  - 全部 SQL 使用参数绑定，不拼接用户输入。
+  - 更新 `src/repositories/index.ts` 统一导出：
+    - `MistakeRepository`
+    - `MistakeImageRepository`
+    - `ReviewRecordRepository`
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仅提供基础 CRUD；尚未实现“同事务写入复做记录 + 更新错题进度”的组合接口。
+- 下一步：
+  - 进入阶段 3-F：实现复做事务服务（Service 层）或协调器，统一串联 `ReviewRecordRepository` 与 `MistakeRepository.updateReviewProgress`。
