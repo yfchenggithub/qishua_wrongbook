@@ -393,3 +393,35 @@
   - 首页当前仅接统计数字，错题列表仍为 mock；与预期一致，后续阶段再逐步接入真实列表。
 - 下一步：
   - 进入阶段 3-H：新增“复做一次”的事务化服务接口（写 `review_records` + 更新 `mistakes` 进度）并在 `/dev/db` 增加联调按钮。
+
+### 2026-05-08 - 第4步阶段4-B：图片类型、目录规则、文件命名规则
+
+- 任务目标：只定义图片相关类型与路径/命名规则，不调用相机、不访问文件系统、不接页面与数据库。
+- 修改文件：
+  - `src/models/LocalImage.ts`
+  - `src/constants/image.ts`
+  - `src/services/ImagePathService.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `LocalImageType`、`LocalImage`、`PickedImageResult`、`SavedImageResult` 类型定义。
+  - 新增图片常量：
+    - `IMAGE_ROOT_DIR_NAME = 'qishua_wrongbook'`
+    - `MISTAKE_IMAGE_DIR_NAME = 'mistakes'`
+    - `IMAGE_FILE_PREFIX`（`question/my_solution/answer/review_solution`）
+    - `IMAGE_FILE_EXTENSION = 'jpg'`
+    - `IMAGE_QUALITY = 0.85`
+    - `IMAGE_MAX_WIDTH = 1800`
+    - `IMAGE_MAX_HEIGHT = 2400`
+  - 新增纯函数服务 `ImagePathService`（不依赖 FileSystem）：
+    - `normalizeImageType(type)`
+    - `buildMistakeImageDir(mistakeId)`
+    - `buildImageFileName(type, index?)`
+    - `buildImageRelativePath(mistakeId, type, fileName)`
+    - `createImageId()`
+  - 路径规则按相对目录约定：`qishua_wrongbook/mistakes/{mistakeId}/...`
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仅完成规则定义，尚未实现真实拍照、选图和文件持久化动作。
+- 下一步：
+  - 进入阶段 4-C：实现 `ImageService` 与文件系统持久化（目录创建、复制、删除、错误处理），并在 `/dev/images` 做开发调试验证。
