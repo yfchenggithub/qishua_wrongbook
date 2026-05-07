@@ -425,3 +425,32 @@
   - 当前仅完成规则定义，尚未实现真实拍照、选图和文件持久化动作。
 - 下一步：
   - 进入阶段 4-C：实现 `ImageService` 与文件系统持久化（目录创建、复制、删除、错误处理），并在 `/dev/images` 做开发调试验证。
+
+### 2026-05-08 - 第4步阶段4-C：ImageStorageService 本地目录与文件持久化
+
+- 任务目标：实现本地图片目录创建、临时图复制到持久目录、图片信息读取与删除，不接相机、页面和 SQLite。
+- 修改文件：
+  - `src/services/ImageStorageService.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `ImageStorageService`，使用 `expo-file-system@~19.0.22` 当前 SDK 的 `File / Directory / Paths` API（不混用 legacy API）。
+  - 实现方法：
+    - `ensureImageRootDir()`
+    - `ensureMistakeImageDir(mistakeId)`
+    - `saveTempImageToMistakeFolder(params)`
+    - `getImageInfo(uri)`
+    - `listMistakeImageFiles(mistakeId)`
+    - `deleteLocalImage(uri)`
+    - `deleteMistakeImageFolder(mistakeId)`
+  - 目录与命名规则严格复用常量与路径服务：
+    - 根目录：`qishua_wrongbook/`
+    - 错题目录：`qishua_wrongbook/mistakes/{mistakeId}/`
+    - 文件名：`question_001.jpg` / `my_solution_001.jpg` / `answer_001.jpg` / `review_001.jpg`
+  - `saveTempImageToMistakeFolder` 在目标文件已存在时自动递增 index，必要时 fallback 到时间戳避免覆盖。
+  - 按要求不删除 `tempUri` 源文件；保存失败返回 `ok: false` 并记录 `Logger.error`。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仅完成文件系统层，不含拍照/选图入口；需下一阶段接入调试页联调。
+- 下一步：
+  - 进入阶段 4-D：新增 `/dev/images` 调试页，串联图片选择（后续）+ `ImageStorageService` 保存/列表/删除能力。
