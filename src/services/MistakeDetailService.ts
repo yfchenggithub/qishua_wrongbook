@@ -1,8 +1,12 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
-import type { DetailImageSlot, MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
+import type {
+  DetailImageSlot,
+  DetailReviewRecordItem,
+  MistakeDetailViewModel,
+} from '@/src/models/MistakeDetailViewModel';
 import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
-import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
+import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import { getImageInfo } from '@/src/services/ImageStorageService';
 import { formatDateShort } from '@/src/utils/date';
@@ -182,6 +186,29 @@ function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSl
     createdAt: mistake.created_at,
     updatedAt: mistake.updated_at,
     imageSlots,
+    reviewRecords: [],
+  };
+}
+
+function mapReviewRecords(mistakeReviewRecords: Awaited<ReturnType<typeof ReviewRecordRepository.listReviewRecordsByMistakeId>>): DetailReviewRecordItem[] {
+  return mistakeReviewRecords.map((record) => ({
+    id: record.id,
+    reviewIndex: record.review_index,
+    createdAt: record.created_at,
+    result: record.result,
+    solutionImageUri: normalizeOptionalText(record.solution_image_uri),
+  }));
+}
+
+function mapMistakeToDetailViewModelWithRecords(
+  mistake: Mistake,
+  imageSlots: DetailImageSlot[],
+  reviewRecords: DetailReviewRecordItem[],
+): MistakeDetailViewModel {
+  const base = mapMistakeToDetailViewModel(mistake, imageSlots);
+  return {
+    ...base,
+    reviewRecords,
   };
 }
 
@@ -206,7 +233,9 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
 
     const mistakeImages = await MistakeImageRepository.listImagesByMistakeId(mistakeId);
     const imageSlots = await buildImageSlots(mistake, mistakeImages);
-    const detail = mapMistakeToDetailViewModel(mistake, imageSlots);
+    const mistakeReviewRecords = await ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId);
+    const reviewRecords = mapReviewRecords(mistakeReviewRecords);
+    const detail = mapMistakeToDetailViewModelWithRecords(mistake, imageSlots, reviewRecords);
 
     return {
       ok: true,

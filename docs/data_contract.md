@@ -121,3 +121,11 @@
 - 当 `status = archived` 时，业务层必须拒绝继续复做。
 - 当 `review_count >= 7` 时，`status` 必须为 `mastered`。
 - 当 `status = mastered` 时，`next_review_at` 必须为 `null`。
+## 8. 第8步数据契约补充（8-D）
+
+- `status = mastered` 时，`next_review_at` 必须为 `null`。
+- `review_records` 是错题复做历史，按 `review_index` 表示第几刷。
+- `mistake_images.type = review_solution` 对应每次复做拍摄的解题照片。
+- 复做详情展示可同时使用：
+  - `review_records.solution_image_uri`（本次复做记录）
+  - `mistake_images(type=review_solution)`（图片资产追踪）

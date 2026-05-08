@@ -1,5 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -134,6 +134,7 @@ export default function LibraryScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const hasLoadedRef = useRef(false);
+  const hasFocusedRef = useRef(false);
   const requestIdRef = useRef(0);
 
   const loadList = useCallback(
@@ -189,6 +190,22 @@ export default function LibraryScreen() {
 
     void loadList(filter, mode);
   }, [debouncedKeyword, loadList, selectedFilter]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasFocusedRef.current) {
+        hasFocusedRef.current = true;
+        return undefined;
+      }
+
+      const filter: MistakeListFilter = {
+        segment: mapSegmentValueToFilterSegment(selectedFilter),
+        keyword: debouncedKeyword,
+      };
+      void loadList(filter, 'refresh');
+      return undefined;
+    }, [debouncedKeyword, loadList, selectedFilter]),
+  );
 
   const handleClearSearch = useCallback(() => {
     setSearchText('');

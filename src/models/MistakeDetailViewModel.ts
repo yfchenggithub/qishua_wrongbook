@@ -1,4 +1,4 @@
-import type { MistakeStatus } from '@/src/models/Mistake';
+import type { MistakeStatus, ReviewResult } from '@/src/models/Mistake';
 
 export type DetailImageSlotType =
   | 'question'
@@ -13,6 +13,14 @@ export interface DetailImageSlot {
   exists?: boolean;
   fileSize?: number | null;
   emptyText: string;
+}
+
+export interface DetailReviewRecordItem {
+  id: string;
+  reviewIndex: number;
+  createdAt: string;
+  result: ReviewResult;
+  solutionImageUri?: string | null;
 }
 
 export interface MistakeDetailViewModel {
@@ -31,4 +39,5 @@ export interface MistakeDetailViewModel {
   createdAt: string;
   updatedAt: string;
   imageSlots: DetailImageSlot[];
+  reviewRecords: DetailReviewRecordItem[];
 }

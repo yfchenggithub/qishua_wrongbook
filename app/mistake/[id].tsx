@@ -1,7 +1,8 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -18,7 +19,7 @@ import {
   SectionTitle,
   StatusPill,
 } from '@/src/components';
-import type { MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
+import type { DetailReviewRecordItem, MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
@@ -93,6 +94,64 @@ function isReviewButtonDisabled(detail: MistakeDetailViewModel): boolean {
   return detail.reviewCount >= detail.maxReviewCount;
 }
 
+function formatReviewResultLabel(result: DetailReviewRecordItem['result']): string {
+  if (result === 'still_wrong') {
+    return '仍然错';
+  }
+  if (result === 'too_easy') {
+    return '过于简单';
+  }
+  return '完成';
+}
+
+function pad2(value: number): string {
+  return value < 10 ? `0${value}` : String(value);
+}
+
+function formatReviewCreatedAt(iso: string): string {
+  const parsed = new Date(iso);
+  if (Number.isNaN(parsed.getTime())) {
+    return iso;
+  }
+
+  const year = parsed.getFullYear();
+  const month = pad2(parsed.getMonth() + 1);
+  const day = pad2(parsed.getDate());
+  const hour = pad2(parsed.getHours());
+  const minute = pad2(parsed.getMinutes());
+  const second = pad2(parsed.getSeconds());
+  return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
+function ReviewRecordCard({ record }: { record: DetailReviewRecordItem }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const hasImage = !!record.solutionImageUri;
+  const canShowImage = hasImage && !imageFailed;
+
+  return (
+    <View style={styles.reviewRecordRow}>
+      <View style={styles.reviewRecordMain}>
+        <Text style={styles.reviewRecordTitle}>第 {record.reviewIndex} 刷</Text>
+        <Text style={styles.reviewRecordMeta}>时间：{formatReviewCreatedAt(record.createdAt)}</Text>
+        <Text style={styles.reviewRecordMeta}>结果：{formatReviewResultLabel(record.result)}</Text>
+      </View>
+
+      {canShowImage ? (
+        <Image
+          source={{ uri: record.solutionImageUri! }}
+          style={styles.reviewRecordImage}
+          resizeMode="cover"
+          onError={() => setImageFailed(true)}
+        />
+      ) : hasImage ? (
+        <View style={styles.reviewRecordBadge}>
+          <Text style={styles.reviewRecordBadgeText}>已保存照片</Text>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function StateCard({
   title,
   message,
@@ -136,6 +195,7 @@ export default function MistakeDetailScreen() {
   const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const requestIdRef = useRef(0);
+  const hasFocusedRef = useRef(false);
 
   const handleBack = useCallback(() => {
     if (typeof router.canGoBack === 'function' && router.canGoBack()) {
@@ -234,6 +294,18 @@ export default function MistakeDetailScreen() {
     void loadDetail();
   }, [loadDetail]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasFocusedRef.current) {
+        hasFocusedRef.current = true;
+        return undefined;
+      }
+
+      void loadDetail({ keepCurrent: true });
+      return undefined;
+    }, [loadDetail]),
+  );
+
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
       <Pressable style={styles.backButton} onPress={handleBack}>
@@ -322,8 +394,21 @@ export default function MistakeDetailScreen() {
                     fileSize={slot.fileSize}
                     emptyText={slot.emptyText}
                   />
-                ))}
+              ))}
             </View>
+          </CardContainer>
+
+          <CardContainer style={styles.reviewRecordsCard} padding={spacing.lg}>
+            <SectionTitle title="复做记录" />
+            {state.detail.reviewRecords.length <= 0 ? (
+              <Text style={styles.reviewRecordsEmptyText}>还没有复做记录</Text>
+            ) : (
+              <View style={styles.reviewRecordsList}>
+                {state.detail.reviewRecords.map((record) => (
+                  <ReviewRecordCard key={record.id} record={record} />
+                ))}
+              </View>
+            )}
           </CardContainer>
 
           <PrimaryButton
@@ -486,5 +571,61 @@ const styles = StyleSheet.create({
   },
   slotList: {
     gap: spacing.sm,
+  },
+  reviewRecordsCard: {
+    borderRadius: radius.xl,
+    gap: spacing.md,
+  },
+  reviewRecordsEmptyText: {
+    ...typography.body,
+    color: colors.textSecondary,
+  },
+  reviewRecordsList: {
+    gap: spacing.sm,
+  },
+  reviewRecordRow: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  reviewRecordMain: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  reviewRecordTitle: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  reviewRecordMeta: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  reviewRecordImage: {
+    width: 72,
+    height: 72,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  reviewRecordBadge: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  reviewRecordBadgeText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
   },
 });

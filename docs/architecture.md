@@ -137,3 +137,17 @@
 - 页面层不能直接更新 `mistakes.review_count`，也不能绕过服务层直接写 `review_records`。
 - `review_count`、`review_records`、`mistake_images(type=review_solution)` 必须在同一事务中写入。
 - 事务更新 `mistakes` 时必须使用条件保护（`id + oldReviewCount + status=active`），防止重复提交。
+## 10. 第8步联动刷新策略（8-D）
+
+- 复做提交后，页面通过 `router.replace('/mistake/[id]')` 回到详情页。
+- 详情页（`app/mistake/[id].tsx`）在以下时机重新读取 `MistakeDetailService.getMistakeDetail(id)`：
+  - 路由 `id` 初始化或变化时。
+  - 页面重新 focus 时（轻量刷新）。
+- 题库页（`app/(tabs)/library.tsx`）在以下时机刷新列表：
+  - 筛选或搜索条件变化时。
+  - 页面 focus 返回时执行 refresh 查询。
+- 首页（`app/(tabs)/index.tsx`）在页面 focus 时统一刷新统计、优先复做和错题队列。
+- 统一原则：
+  - 不引入全局状态库或事件总线。
+  - 页面只通过 Service 拉取最新数据。
+  - `CompleteReviewService.completeReview` 仍是唯一复做提交入口。

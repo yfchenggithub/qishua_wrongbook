@@ -998,3 +998,28 @@
   - 暂不接入“从相册选择”入口（本阶段可选项，已保留拍照主链路）。
 - 下一步：
   - 进入 8-D：复做历史展示与详情页联动刷新体验收口（含 Android 真机回归清单）。
+### 2026-05-08 - 第8步阶段8-D：详情 / 首页 / 题库联动刷新与 Android 回归
+
+- 任务目标：在不新增业务能力前提下，完成复做提交后的多页状态一致刷新，补齐详情复做记录展示与 7/7 场景回归。
+- 修改文件：
+  - `app/mistake/[id].tsx`
+  - `app/(tabs)/library.tsx`
+  - `src/models/MistakeDetailViewModel.ts`
+  - `src/services/MistakeDetailService.ts`
+  - `docs/testing.md`
+  - `docs/architecture.md`
+  - `docs/data_contract.md`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 详情页增加 focus 刷新机制，复做返回后自动重拉真实详情。
+  - 详情页新增“复做记录”模块，展示第 N 刷、created_at、result、照片状态。
+  - `MistakeDetailService` 聚合 `review_records`，页面不直接访问 SQL。
+  - 题库页新增 focus 刷新，确保从详情/复做返回时进度与状态即时更新。
+  - 保持首页既有 focus 刷新策略，确保统计与队列与复做结果同步。
+  - 7/7 场景继续由 `CompleteReviewService` + 状态文案/禁用按钮共同保证。
+- 验收结果：
+  - 待执行：`npm run typecheck` / `npm run lint`。
+- 遗留问题：
+  - 本阶段未新增全局事件总线；依赖 focus 刷新策略，符合 MVP 简化约束。
+- 下一步：
+  - 可进入最终验收阶段，执行 Android 真机全链路回归并收口问题清单。
