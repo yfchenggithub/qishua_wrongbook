@@ -6,6 +6,7 @@ import {
   FlatList,
   Image,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
@@ -50,9 +51,9 @@ function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListF
 function ThumbnailPlaceholder() {
   return (
     <View style={styles.thumb}>
-      <View style={styles.thumbAxisX} />
-      <View style={styles.thumbAxisY} />
-      <View style={styles.thumbCurve} />
+      <MaterialIcons size={28} name="image-not-supported" color={colors.textMuted} />
+      <Text style={styles.thumbPlaceholderText}>题目</Text>
+      <Text style={styles.thumbPlaceholderText}>无图</Text>
     </View>
   );
 }
@@ -65,6 +66,11 @@ function MistakeLibraryCard({
   onPress: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [item.thumbnailUri]);
+
   const showImage = !!item.thumbnailUri && !imageFailed;
 
   return (
@@ -171,9 +177,9 @@ export default function LibraryScreen() {
       segment: mapSegmentValueToFilterSegment(selectedFilter),
       keyword: debouncedKeyword,
     };
-
     const mode: 'initial' | 'refresh' = hasLoadedRef.current ? 'refresh' : 'initial';
     hasLoadedRef.current = true;
+
     void loadList(filter, mode);
   }, [debouncedKeyword, loadList, selectedFilter]);
 
@@ -190,12 +196,44 @@ export default function LibraryScreen() {
     void loadList(filter, 'refresh');
   }, [debouncedKeyword, loadList, selectedFilter]);
 
+  const handleGoAddMistake = useCallback(() => {
+    router.push('/add' as never);
+  }, [router]);
+
+  const emptyConfig = useMemo(() => {
+    if (debouncedKeyword.length > 0) {
+      return {
+        message: '没有找到相关错题',
+        showAddButton: false,
+      };
+    }
+
+    if (selectedFilter === 'pending') {
+      return {
+        message: '今天没有待复做错题',
+        showAddButton: true,
+      };
+    }
+
+    if (selectedFilter === 'mastered') {
+      return {
+        message: '还没有完成七刷的错题',
+        showAddButton: true,
+      };
+    }
+
+    return {
+      message: '暂无错题，去新增页录入第一题',
+      showAddButton: true,
+    };
+  }, [debouncedKeyword.length, selectedFilter]);
+
   const listEmpty = useMemo(() => {
     if (isLoading) {
       return (
         <View style={styles.stateWrap}>
           <ActivityIndicator size="small" color={colors.textPrimary} />
-          <Text style={styles.stateText}>正在加载题库...</Text>
+          <Text style={styles.stateText}>正在加载错题...</Text>
         </View>
       );
     }
@@ -203,28 +241,25 @@ export default function LibraryScreen() {
     if (errorMessage) {
       return (
         <View style={styles.stateWrap}>
-          <Text style={styles.stateErrorText}>题库读取失败：{errorMessage}</Text>
+          <Text style={styles.stateErrorText}>数据读取失败：{errorMessage}</Text>
           <Pressable onPress={handleRetry} style={styles.retryButton}>
-            <Text style={styles.retryText}>点击重试</Text>
+            <Text style={styles.retryText}>重试</Text>
           </Pressable>
-        </View>
-      );
-    }
-
-    if (debouncedKeyword.length > 0) {
-      return (
-        <View style={styles.stateWrap}>
-          <Text style={styles.stateText}>没有找到相关错题</Text>
         </View>
       );
     }
 
     return (
       <View style={styles.stateWrap}>
-        <Text style={styles.stateText}>题库还没有错题，先去新增页录入一题。</Text>
+        <Text style={styles.stateText}>{emptyConfig.message}</Text>
+        {emptyConfig.showAddButton ? (
+          <Pressable onPress={handleGoAddMistake} style={styles.goAddButton}>
+            <Text style={styles.goAddButtonText}>去新增错题</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
-  }, [debouncedKeyword.length, errorMessage, handleRetry, isLoading]);
+  }, [emptyConfig, errorMessage, handleGoAddMistake, handleRetry, isLoading]);
 
   return (
     <ScreenContainer withPadding={false}>
@@ -237,8 +272,14 @@ export default function LibraryScreen() {
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
-        refreshing={isRefreshing}
-        onRefresh={handleRetry}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRetry}
+            tintColor={colors.textPrimary}
+            colors={[colors.textPrimary]}
+          />
+        }
         ListHeaderComponent={
           <View style={styles.screenContent}>
             <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
@@ -371,6 +412,20 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '700',
   },
+  goAddButton: {
+    marginTop: spacing.xs,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  goAddButtonText: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '700',
+  },
   cardPressable: {
     marginHorizontal: spacing.screenPadding,
     borderRadius: radius.xl,
@@ -433,6 +488,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     justifyContent: 'center',
     alignItems: 'center',
+    gap: spacing.xs,
+  },
+  thumbPlaceholderText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
   },
   thumbImage: {
     width: 112,
@@ -441,25 +502,5 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
-  },
-  thumbAxisX: {
-    position: 'absolute',
-    width: 76,
-    height: 1.5,
-    backgroundColor: '#8E949D',
-  },
-  thumbAxisY: {
-    position: 'absolute',
-    width: 1.5,
-    height: 76,
-    backgroundColor: '#8E949D',
-  },
-  thumbCurve: {
-    width: 54,
-    height: 40,
-    borderWidth: 1.5,
-    borderColor: '#8E949D',
-    borderRadius: radius.pill,
-    transform: [{ rotate: '-18deg' }],
   },
 });
