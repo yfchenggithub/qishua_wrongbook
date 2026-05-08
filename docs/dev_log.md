@@ -359,3 +359,34 @@
   - 当前事务能力依赖运行时 `withTransactionAsync` 可用性；后续可在 db 层统一封装事务 API，减少服务层分支判断。
 - 下一步：
   - 进入 5-D：在新增页接入草稿状态与保存调用（含按钮 loading、防重复点击、错误提示、成功后跳转/重置草稿）。
+
+### 2026-05-08 - 第5步阶段5-D：新增页接入本地草稿交互（不落库）
+
+- 任务目标：将新增页从静态展示升级为本地可交互草稿页，支持标签选择、图片拍照/选图/预览/删除，以及保存前校验；本阶段不写 SQLite。
+- 修改文件：
+  - `app/(tabs)/add.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 页面初始化：使用 `createEmptyAddMistakeDraft()` 初始化本地草稿，进入页面即生成 `draftId` 并展示在页面中。
+  - 表单状态接入：接入 `module`、`errorReason`、`difficulty`、`title`、`note`、`questionImage`、`mySolutionImage`、`answerImage` 本地状态。
+  - 图片交互接入：
+    - 题目图：`takePhotoAndSave({ mistakeId: draft.draftId, type: 'question' })` / `pickImageAndSave(...)`
+    - 我的做法：`type: 'my_solution'`
+    - 答案解析：`type: 'answer'`
+    - 选图后展示预览图与文件名。
+  - 删除图片：点击删除调用 `deleteLocalImage(uri)`，并清空草稿对应字段；删除失败会有提示。
+  - 标签选择：
+    - 模块：Chip 单选（再次点击可取消）
+    - 错因：Chip 单选（可取消）
+    - 难度：1-5 Chip 选择
+  - 保存按钮行为：仅执行 `validateAddMistakeDraft(draft)`，
+    - 通过：提示“草稿校验通过，下一阶段接入保存”
+    - 失败：弹窗+页面错误卡片展示
+    - 不调用 `CreateMistakeService`，不写数据库
+  - 防重复点击：图片相关操作期间统一进入 busy 状态，禁用图片操作按钮和底部主按钮。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仍未接入正式保存链路（`CreateMistakeService`）与成功后页面状态清理流程（按阶段边界保留）。
+- 下一步：
+  - 进入 5-E：在新增页接入 `CreateMistakeService` 正式保存、保存中状态、成功后重置草稿与失败错误兜底。
