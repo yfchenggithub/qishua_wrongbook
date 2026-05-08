@@ -749,3 +749,37 @@
 - 下一步：
   - 可结束第6步，进入第7步前先明确详情页查询边界（仅读取 + 展示，不提前接入复做更新）。
 - 补充更正：`app/modal.tsx` 最终保留 `href="/"`，并已验证可通过 `npm run typecheck`。
+
+### 2026-05-08 - 第7步阶段7-B：详情页 ViewModel / DetailService
+
+- 任务目标：新增错题详情展示模型与服务层聚合能力，打通“按 id 读取错题 + 图片记录 + 本地文件存在性检查”的只读链路，不改详情页 UI。
+- 修改文件：
+  - `src/models/MistakeDetailViewModel.ts`
+  - `src/services/MistakeDetailService.ts`
+  - `src/services/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `MistakeDetailViewModel`：
+    - 定义 `DetailImageSlotType`：`question/my_solution/answer/review_solution`。
+    - 定义 `DetailImageSlot`：`type/title/uri/exists/fileSize/emptyText`。
+    - 定义 `MistakeDetailViewModel`：聚合详情页展示所需字段（标题、副标题、状态、进度、图片槽位等）。
+  - 新增 `MistakeDetailService.getMistakeDetail(id)`：
+    - 入参校验：`id` 为空直接返回 `ok: false`。
+    - 读取主记录：`MistakeRepository.getMistakeById(id)`；找不到返回 `notFound: true`。
+    - 读取图片记录：`MistakeImageRepository.listImagesByMistakeId(id)`。
+    - 构建图片槽位（本阶段三块）：
+      - 题目：优先 `mistake.question_image_uri`，否则回退 `mistake_images(type=question)`。
+      - 我的做法：取 `mistake_images(type=my_solution)`。
+      - 答案：优先 `mistake.answer_image_uri`，否则回退 `mistake_images(type=answer)`。
+    - 对每个有 `uri` 的槽位调用 `ImageStorageService.getImageInfo(uri)`，回填 `exists/fileSize`。
+      - 图片检查异常时不抛出到页面，槽位回退为 `exists=false`。
+    - 组装展示字段：
+      - `statusLabel`：`已七刷/已归档/第 N 刷`。
+      - `title`：优先 `mistake.title`，为空回退 `${module}错题`。
+      - `subtitle`：`error_reason + difficulty + created_at`（短日期）组合。
+  - 更新服务导出：
+    - `src/services/index.ts` 新增 `MistakeDetailService` 导出。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 下一步：
+  - 进入 7-C：在不改业务边界的前提下，将 `app/mistake/[id].tsx` 接入 `getMistakeDetail`，补 `loading/error/notFound` 三态并移除 mock 依赖。
