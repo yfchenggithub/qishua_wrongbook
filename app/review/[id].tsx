@@ -124,8 +124,18 @@ export default function ReviewScreen() {
   const requestIdRef = useRef(0);
 
   const handleBack = useCallback(() => {
-    router.back();
-  }, [router]);
+    if (typeof router.canGoBack === 'function' && router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    if (routeId) {
+      router.replace(`/mistake/${routeId}` as never);
+      return;
+    }
+
+    router.replace('/(tabs)/library' as never);
+  }, [routeId, router]);
 
   const loadPageData = useCallback(async () => {
     if (!routeId) {
@@ -140,11 +150,27 @@ export default function ReviewScreen() {
     requestIdRef.current = requestId;
     setState({ kind: 'loading' });
 
-    const result = await ReviewFlowService.getReviewPageData(routeId);
-    if (requestId !== requestIdRef.current) {
+    let result: Awaited<ReturnType<typeof ReviewFlowService.getReviewPageData>>;
+    try {
+      result = await ReviewFlowService.getReviewPageData(routeId);
+    } catch (error) {
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+      Logger.error(PAGE_SCOPE, 'Unexpected error while loading review page data.', {
+        routeId,
+        error,
+      });
+      setState({
+        kind: 'error',
+        message: toBriefErrorMessage(error instanceof Error ? error.message : String(error)),
+      });
       return;
     }
 
+    if (requestId !== requestIdRef.current) {
+      return;
+    }
     if (result.ok && result.data) {
       setState({ kind: 'success', data: result.data });
       return;
@@ -167,6 +193,11 @@ export default function ReviewScreen() {
   useEffect(() => {
     void loadPageData();
   }, [loadPageData]);
+
+  useEffect(() => {
+    setCapturedReviewImage(null);
+    setSubmitErrorMessage(null);
+  }, [routeId]);
 
   const handleCaptureReviewPhoto = useCallback(async () => {
     if (!routeId || state.kind !== 'success') {
