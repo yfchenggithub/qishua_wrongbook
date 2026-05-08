@@ -22,6 +22,12 @@ export interface DatabaseHealthReport {
   message: string;
 }
 
+export type DatabaseTransactionCallback<T> = (db: SQLite.SQLiteDatabase) => Promise<T>;
+
+type TransactionCapableDatabase = SQLite.SQLiteDatabase & {
+  withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
+};
+
 let databaseInstance: SQLite.SQLiteDatabase | null = null;
 let openingDatabasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -89,6 +95,58 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     });
 
   return openingDatabasePromise;
+}
+
+export async function withDatabaseTransaction<T>(
+  callback: DatabaseTransactionCallback<T>,
+): Promise<T> {
+  const db = await getDatabase();
+  const transactionDatabase = db as TransactionCapableDatabase;
+
+  if (typeof transactionDatabase.withTransactionAsync === 'function') {
+    let hasResult = false;
+    let result!: T;
+
+    try {
+      await transactionDatabase.withTransactionAsync(async () => {
+        result = await callback(db);
+        hasResult = true;
+      });
+    } catch (error) {
+      Logger.error(DB_SCOPE, 'Transaction failed via withTransactionAsync.', error);
+      throw error;
+    }
+
+    if (!hasResult) {
+      const missingResultError = new Error('Transaction callback completed without a result.');
+      Logger.error(DB_SCOPE, 'Transaction result is missing after withTransactionAsync.', missingResultError);
+      throw missingResultError;
+    }
+
+    return result;
+  }
+
+  // Fallback for environments where withTransactionAsync is unavailable.
+  try {
+    await db.execAsync('BEGIN IMMEDIATE;');
+  } catch (error) {
+    Logger.error(DB_SCOPE, 'Failed to begin fallback transaction.', error);
+    throw error;
+  }
+
+  try {
+    const result = await callback(db);
+    await db.execAsync('COMMIT;');
+    return result;
+  } catch (error) {
+    try {
+      await db.execAsync('ROLLBACK;');
+    } catch (rollbackError) {
+      Logger.error(DB_SCOPE, 'Failed to rollback fallback transaction.', rollbackError);
+    }
+    Logger.error(DB_SCOPE, 'Transaction failed in fallback mode.', error);
+    throw error;
+  }
 }
 
 export async function initDatabase(): Promise<void> {

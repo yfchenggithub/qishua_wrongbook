@@ -163,3 +163,12 @@
 ### 12.5 稳定性
 - [ ] FlatList 的 key 使用 `item.id`，不使用 index。
 - [ ] 列表为空、图片失败、查询失败均不崩溃。
+
+## 13. 第8-B 服务层验收点
+
+- [ ] `mastered` 状态调用 `completeReview` 被拒绝。
+- [ ] `archived` 状态调用 `completeReview` 被拒绝。
+- [ ] `reviewIndex` 与 `review_count + 1` 不一致时提交被拒绝。
+- [ ] `solutionImageUri` 为空时提交被拒绝。
+- [ ] 第 7 刷提交后 `status = mastered` 且 `next_review_at = null`。
+- [ ] 事务失败时尝试清理本次复做图片孤儿文件（仅目标 `solutionImageUri`）。

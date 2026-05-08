@@ -937,3 +937,35 @@
   - `npm run typecheck` 仍被 `.expo/types/router.d.ts` 语法损坏阻塞（非本阶段改动引入）。
 - 下一步：
   - 可进入 7-H：详情页与调试页联动回归（从 `/dev/db` 一键打开详情，覆盖存在图/缺图/无图场景）。
+
+### 2026-05-08 - 第8步阶段8-B：复做服务层闭环（事务一致性）
+
+- 任务目标：仅实现复做提交服务层闭环，不改 UI 页面。
+- 修改文件：
+  - `src/utils/date.ts`
+  - `src/services/ReviewScheduleService.ts`
+  - `src/models/ReviewFlow.ts`
+  - `src/db/database.ts`
+  - `src/db/index.ts`
+  - `src/repositories/MistakeRepository.ts`
+  - `src/repositories/ReviewRecordRepository.ts`
+  - `src/repositories/MistakeImageRepository.ts`
+  - `src/repositories/index.ts`
+  - `src/services/CompleteReviewService.ts`
+  - `src/services/index.ts`
+  - `docs/architecture.md`
+  - `docs/data_contract.md`
+  - `docs/testing.md`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `ReviewScheduleService`，统一复做索引、可复做判断、下次复做日期和状态计算。
+  - 新增 `ReviewFlow` 模型，定义 `ReviewSession`、`CompleteReviewInput`、`CompleteReviewResult`。
+  - 新增 `withDatabaseTransaction`，优先复用 `withTransactionAsync`，无该 API 时回退 `BEGIN IMMEDIATE/COMMIT/ROLLBACK`。
+  - 新增 `CompleteReviewService.completeReview()`：参数校验、状态硬校验、防重复提交、统一事务写入、失败孤儿图片清理。
+  - Repository 最小增强：新增事务内写入方法（`createReviewRecordInTransaction`、`createMistakeImageInTransaction`、`updateReviewProgressInTransaction`）。
+- 验收结果：
+  - 需执行 `npm run typecheck` 验证类型通过。
+- 遗留问题：
+  - 本阶段不含 UI 接入，下一阶段再接复做页与详情按钮。
+- 下一步：
+  - 进入 8-C：复做页 UI 与提交流程接线。

@@ -130,3 +130,10 @@
 - 页面层不拼接 SQL，不直接访问 SQLite。
 - 查询条件中的用户输入均由 Repository 参数绑定。
 - 展示模型与数据库表解耦，避免页面直接依赖数据库字段。
+
+## 9. 第8步复做提交流程（8-B）
+
+- `CompleteReviewService.completeReview` 是复做提交唯一入口。
+- 页面层不能直接更新 `mistakes.review_count`，也不能绕过服务层直接写 `review_records`。
+- `review_count`、`review_records`、`mistake_images(type=review_solution)` 必须在同一事务中写入。
+- 事务更新 `mistakes` 时必须使用条件保护（`id + oldReviewCount + status=active`），防止重复提交。

@@ -112,3 +112,12 @@
 - 页面应优先消费 `MistakeListItem`，不要在页面层直接依赖 `mistakes` 表字段拼装展示文案。
 - `MistakeListItem` 中如 `subtitle`、`statusLabel`、`displayStatus`、`maxReviewCount` 属于展示衍生字段，不落库。
 - 数据库结构仍以 `mistakes` / `mistake_images` / `review_records` 为准，本补充不涉及 schema 变更。
+
+## 7. 第8步复做数据契约补充（8-B）
+
+- `review_records.solution_image_uri` 在复做提交业务层为必填。
+- 每次复做提交都应写入 `mistake_images` 一条 `type = review_solution` 的记录，用于追踪复做照片。
+- 当 `status = mastered` 时，业务层必须拒绝继续复做。
+- 当 `status = archived` 时，业务层必须拒绝继续复做。
+- 当 `review_count >= 7` 时，`status` 必须为 `mastered`。
+- 当 `status = mastered` 时，`next_review_at` 必须为 `null`。

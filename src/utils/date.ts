@@ -2,6 +2,13 @@ function pad2(value: number): string {
   return value < 10 ? `0${value}` : String(value);
 }
 
+export function addDays(date: Date, days: number): Date {
+  const safeDays = Number.isFinite(days) ? Math.floor(days) : 0;
+  const next = new Date(date.getTime());
+  next.setDate(next.getDate() + safeDays);
+  return next;
+}
+
 export function toDateOnlyString(date: Date): string {
   const year = date.getFullYear();
   const month = pad2(date.getMonth() + 1);

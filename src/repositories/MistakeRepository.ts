@@ -7,6 +7,7 @@ import type {
   UpdateMistakeInput,
 } from '@/src/models/Mistake';
 import { Logger } from '@/src/services/Logger';
+import type * as SQLite from 'expo-sqlite';
 
 const REPO_SCOPE = 'MistakeRepository';
 const DEFAULT_SUBJECT = 'math';
@@ -73,6 +74,15 @@ export interface UpdateReviewProgressParams {
   reviewCount: number;
   nextReviewAt?: string | null;
   status?: MistakeStatus;
+}
+
+export interface UpdateReviewProgressInTransactionParams {
+  mistakeId: string;
+  oldReviewCount: number;
+  newReviewCount: number;
+  newStatus: MistakeStatus;
+  nextReviewAt?: string | null;
+  updatedAt: string;
 }
 
 type MistakeStatsRow = {
@@ -654,6 +664,35 @@ WHERE id = ?;`,
       return await MistakeRepository.updateMistake(params.mistakeId, input);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'updateReviewProgress failed.', { params, error });
+      throw error;
+    }
+  },
+
+  async updateReviewProgressInTransaction(
+    db: SQLite.SQLiteDatabase,
+    params: UpdateReviewProgressInTransactionParams,
+  ): Promise<number> {
+    try {
+      const normalizedOldReviewCount = normalizeReviewCount(params.oldReviewCount);
+      const normalizedNewReviewCount = normalizeReviewCount(params.newReviewCount);
+      const nextReviewAt = params.nextReviewAt ?? null;
+
+      const result = await db.runAsync(
+        `UPDATE mistakes
+SET review_count = ?, status = ?, next_review_at = ?, updated_at = ?
+WHERE id = ? AND review_count = ? AND status = ?;`,
+        normalizedNewReviewCount,
+        params.newStatus,
+        nextReviewAt,
+        params.updatedAt,
+        params.mistakeId,
+        normalizedOldReviewCount,
+        REVIEW_STATUS.ACTIVE,
+      );
+
+      return result.changes;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateReviewProgressInTransaction failed.', { params, error });
       throw error;
     }
   },

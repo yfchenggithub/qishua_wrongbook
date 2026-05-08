@@ -2,6 +2,7 @@ import { getDatabase, initDatabase } from '@/src/db';
 import type { MistakeImageType } from '@/src/models/Mistake';
 import type { CreateMistakeImageInput, MistakeImage } from '@/src/models/MistakeImage';
 import { Logger } from '@/src/services/Logger';
+import type * as SQLite from 'expo-sqlite';
 
 const REPO_SCOPE = 'MistakeImageRepository';
 
@@ -72,6 +73,18 @@ function mapMistakeImageRow(row: MistakeImage): MistakeImage {
   };
 }
 
+function buildMistakeImage(
+  input: CreateMistakeImageInput & { id?: string; createdAt?: string },
+): MistakeImage {
+  return {
+    id: input.id?.trim() || buildMistakeImageId(),
+    mistake_id: input.mistake_id,
+    type: input.type,
+    uri: input.uri,
+    created_at: input.createdAt ?? nowIso(),
+  };
+}
+
 async function getImageByIdInternal(id: string): Promise<MistakeImage | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<MistakeImage>(
@@ -93,23 +106,7 @@ export const MistakeImageRepository = {
     try {
       await ensureDatabaseReady();
       const db = await getDatabase();
-
-      const record: MistakeImage = {
-        id: buildMistakeImageId(),
-        mistake_id: input.mistake_id,
-        type: input.type,
-        uri: input.uri,
-        created_at: nowIso(),
-      };
-
-      await db.runAsync(
-        INSERT_MISTAKE_IMAGE_SQL,
-        record.id,
-        record.mistake_id,
-        record.type,
-        record.uri,
-        record.created_at,
-      );
+      const record = await MistakeImageRepository.createMistakeImageInTransaction(db, input);
 
       const created = await getImageByIdInternal(record.id);
       if (!created) {
@@ -181,6 +178,28 @@ ORDER BY created_at ASC;`,
       return result.changes;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'deleteImagesByMistakeId failed.', { mistakeId, error });
+      throw error;
+    }
+  },
+
+  async createMistakeImageInTransaction(
+    db: SQLite.SQLiteDatabase,
+    input: CreateMistakeImageInput & { id?: string; createdAt?: string },
+  ): Promise<MistakeImage> {
+    try {
+      const record = buildMistakeImage(input);
+      await db.runAsync(
+        INSERT_MISTAKE_IMAGE_SQL,
+        record.id,
+        record.mistake_id,
+        record.type,
+        record.uri,
+        record.created_at,
+      );
+
+      return mapMistakeImageRow(record);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'createMistakeImageInTransaction failed.', { input, error });
       throw error;
     }
   },

@@ -3,6 +3,7 @@ import { MAX_REVIEW_COUNT } from '@/src/constants/review';
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { CreateReviewRecordInput, ReviewRecord } from '@/src/models/ReviewRecord';
 import { Logger } from '@/src/services/Logger';
+import type * as SQLite from 'expo-sqlite';
 
 const REPO_SCOPE = 'ReviewRecordRepository';
 const DEFAULT_REVIEW_RESULT: ReviewResult = 'done';
@@ -84,6 +85,19 @@ function mapReviewRecordRow(row: ReviewRecord): ReviewRecord {
   };
 }
 
+function buildReviewRecord(
+  input: CreateReviewRecordInput & { id?: string; createdAt?: string },
+): ReviewRecord {
+  return {
+    id: input.id?.trim() || buildReviewRecordId(),
+    mistake_id: input.mistake_id,
+    review_index: normalizeReviewIndex(input.review_index),
+    solution_image_uri: input.solution_image_uri ?? null,
+    result: input.result ?? DEFAULT_REVIEW_RESULT,
+    created_at: input.createdAt ?? nowIso(),
+  };
+}
+
 async function getReviewRecordByIdInternal(id: string): Promise<ReviewRecord | null> {
   const db = await getDatabase();
   const row = await db.getFirstAsync<ReviewRecord>(
@@ -105,25 +119,7 @@ export const ReviewRecordRepository = {
     try {
       await ensureDatabaseReady();
       const db = await getDatabase();
-
-      const record: ReviewRecord = {
-        id: buildReviewRecordId(),
-        mistake_id: input.mistake_id,
-        review_index: normalizeReviewIndex(input.review_index),
-        solution_image_uri: input.solution_image_uri ?? null,
-        result: input.result ?? DEFAULT_REVIEW_RESULT,
-        created_at: nowIso(),
-      };
-
-      await db.runAsync(
-        INSERT_REVIEW_RECORD_SQL,
-        record.id,
-        record.mistake_id,
-        record.review_index,
-        record.solution_image_uri ?? null,
-        record.result,
-        record.created_at,
-      );
+      const record = await ReviewRecordRepository.createReviewRecordInTransaction(db, input);
 
       const created = await getReviewRecordByIdInternal(record.id);
       if (!created) {
@@ -198,6 +194,29 @@ LIMIT 1;`,
       return result.changes;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'deleteReviewRecordsByMistakeId failed.', { mistakeId, error });
+      throw error;
+    }
+  },
+
+  async createReviewRecordInTransaction(
+    db: SQLite.SQLiteDatabase,
+    input: CreateReviewRecordInput & { id?: string; createdAt?: string },
+  ): Promise<ReviewRecord> {
+    try {
+      const record = buildReviewRecord(input);
+      await db.runAsync(
+        INSERT_REVIEW_RECORD_SQL,
+        record.id,
+        record.mistake_id,
+        record.review_index,
+        record.solution_image_uri ?? null,
+        record.result,
+        record.created_at,
+      );
+
+      return mapReviewRecordRow(record);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'createReviewRecordInTransaction failed.', { input, error });
       throw error;
     }
   },
