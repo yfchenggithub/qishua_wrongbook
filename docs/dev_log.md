@@ -455,6 +455,42 @@
 - 下一步：
   - 进入阶段 4-D：新增 `/dev/images` 调试页，串联图片选择（后续）+ `ImageStorageService` 保存/列表/删除能力。
 
+### 2026-05-08 - 第4步阶段4-E：ImageService 组合拍照/选图与持久化
+
+- 任务目标：封装页面唯一图片入口，完成“拍照/选图 -> 临时 URI -> 本地持久目录保存 -> 返回 LocalImage”流程，不接 SQLite。
+- 修改文件：
+  - `src/services/ImageService.ts`
+  - `src/services/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `ImageService`，对外提供：
+    - `takePhotoAndSave(params)`
+    - `pickImageAndSave(params)`
+    - `getLocalImageInfo(uri)`
+    - `deleteLocalImage(uri)`
+    - `deleteMistakeImages(mistakeId)`
+  - `takePhotoAndSave` 内部流程：
+    - 调用 `ImagePickerService.takePhoto()`
+    - 用户取消安全返回 `ok: false`
+    - 成功后调用 `ImageStorageService.saveTempImageToMistakeFolder()`
+    - 返回 `SavedImageResult`
+  - `pickImageAndSave` 内部流程：
+    - 调用 `ImagePickerService.pickImageFromLibrary()`
+    - 用户取消安全返回 `ok: false`
+    - 成功后调用 `ImageStorageService.saveTempImageToMistakeFolder()`
+    - 返回 `SavedImageResult`
+  - 统一错误策略：
+    - 所有异常路径调用 `Logger.error`
+    - 不向页面抛出未捕获异常
+  - 新增 `src/services/index.ts` 统一导出 `ImageService / ImagePickerService / ImageStorageService / Logger`。
+- 验收结果：
+  - `npx eslint src/services/ImageService.ts src/services/index.ts` 通过。
+  - 全量 `npm run typecheck` 仍受已有 `.expo/types/router.d.ts` 历史解析错误影响（非本阶段新增）。
+- 遗留问题：
+  - 本阶段未接入 SQLite，不写入 `mistake_images` 表（按范围要求保留到后续阶段）。
+- 下一步：
+  - 进入阶段 4-F：新增 `/dev/images` 调试页，串联 `ImageService` 做真机拍照/选图/保存/删除端到端验证。
+
 ### 2026-05-08 - 第4步阶段4-D：ImagePickerService 相机/相册/权限
 
 - 任务目标：实现相机与相册选择能力和权限请求，返回临时图片信息，不做持久化保存、不接页面业务。
