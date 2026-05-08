@@ -993,7 +993,8 @@
     - `archived` -> `已归档`（禁用）
   - 根路由注册 `review/[id]` 页面。
 - 验收结果：
-  - 待执行：`npm run typecheck` / `npm run lint`。
+  - `npm run typecheck` 通过。
+  - `npm run lint` 通过。
 - 遗留问题：
   - 暂不接入“从相册选择”入口（本阶段可选项，已保留拍照主链路）。
 - 下一步：
@@ -1072,3 +1073,37 @@
 - 下一步：
   - 进入 9-D：基于真机回归日志做最小缺陷修复与最终收口。
 
+
+### 2026-05-08 - 第9步阶段9-B：增强现有 /dev/db 调试页
+
+- 任务目标：在不新增业务功能前提下，增强 `/dev/db` 对复做数据一致性的现场检查能力，辅助 Android 真机人工回归。
+- 修改文件：
+  - `app/dev/db.tsx`
+  - `docs/MANUAL_TEST_CHECKLIST.md`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 保留原有按钮能力：初始化数据库、健康检查、查询统计、插入示例错题、查询最近错题、清空开发数据。
+  - 最近 10 条错题展示字段扩展：`id/title/module/error_reason/difficulty/review_count/status/next_review_at/question_image_uri/answer_image_uri/created_at/updated_at`，并显示 question/answer URI 是否有值、文件是否存在。
+  - 每条错题新增三个调试入口：
+    - 打开详情页（`/mistake/[id]`）
+    - 打开复做页（`/review/[id]`）
+    - 检查该错题一致性
+  - 新增“单题一致性检查”模块：
+    - mistakes 当前状态（`id/review_count/status/next_review_at`）
+    - review_records 列表（`review_index/solution_image_uri/result/created_at`）
+    - mistake_images 列表（`type/uri/created_at`）
+    - 图片文件存在性（`exists/size`）
+  - 新增一致性规则结果（通过/失败/警告上屏显示）：
+    - `review_count` 与 `review_records` 数量一致
+    - `review_index` 连续性
+    - `mastered` 状态规则
+    - `active` 状态规则
+    - `review_records` 与 `mistake_images(type=review_solution)` 的映射完整性
+    - 数据库图片 URI 的本地文件存在性警告
+  - 更新人工测试清单，补充如何使用 `/dev/db` 做一致性检查与日志留证。
+- 验收结果：
+  - 待执行：`npm run typecheck` / `npm run lint`。
+- 遗留问题：
+  - `/dev/db` 仅用于开发调试，仍不能替代 Android 真实拍照/权限/生命周期场景的人工回归。
+- 下一步：
+  - 进入 9-D：基于 `/dev/db` 与真机日志完成最小缺陷修复并收口发布前检查。

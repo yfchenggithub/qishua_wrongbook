@@ -51,3 +51,22 @@
   - 页面错误提示
   - 日志片段
   - 是否可稳定复现
+
+## 6. 使用 /dev/db 做数据库一致性检查（第9-B）
+
+1. 进入 `/dev/db` 后，先点击“查询最近 10 条错题”。
+2. 在某条错题上点击“打开详情页”确认详情路由可用，再返回 `/dev/db`。
+3. 点击“打开复做页”确认复做路由可用（`mastered/archived` 也允许进入，由页面自行拦截）。
+4. 点击“检查该错题一致性”，重点看“单题一致性检查”模块：
+   - `review_count` 是否等于 `review_records` 数量
+   - `review_index` 是否从 `1` 连续到 `review_count`
+   - `mastered` 时是否 `review_count=7` 且 `next_review_at=null`
+   - 每条 `review_record.solution_image_uri` 是否能在 `mistake_images(type=review_solution)` 找到
+5. 查看“图片文件存在性”列表：
+   - 来源包含 `mistakes`、`review_records`、`mistake_images`
+   - 若 `exists=false`，表示数据库有 URI 但本地文件不存在，需要回归拍照保存流程。
+6. 如果规则出现“失败/警告”文案，记录：
+   - 错题 id
+   - 操作步骤
+   - 页面截图
+   - 终端 Logger 片段（必要时补 `adb logcat`）
