@@ -458,3 +458,37 @@
   - 尚未实现“离开页面自动清理未保存草稿目录”（按当前阶段范围保留）。
 - 下一步：
   - 进入 5-G：围绕保存链路补充开发调试验证（含 mistake_images 可视化核对）与回归验收清单收口。
+
+### 2026-05-08 - 第5步阶段5-G：录入错题联合验收调试增强
+
+- 任务目标：增强 `/dev/db` 调试能力，便于联合验证新增页保存后 `mistakes`、`mistake_images` 与本地图片文件一致性。
+- 修改文件：
+  - `app/dev/db.tsx`
+  - `docs/testing.md`
+  - `docs/dev_log.md`
+- 核心变化：
+  - `/dev/db` 新增“查询最近10条错题”能力，展示字段：
+    - `id`
+    - `title`
+    - `module`
+    - `error_reason`
+    - `difficulty`
+    - `question_image_uri`
+    - `answer_image_uri`
+    - `review_count`
+    - `status`
+    - `created_at`
+  - `/dev/db` 新增“查看该错题图片记录”按钮：
+    - 读取 `mistake_images` 指定 `mistake_id` 的所有记录
+    - 展示 `type`、`uri`、`created_at`
+  - `/dev/db` 新增图片文件存在性检查：
+    - 对每条 `uri` 调用 `ImageStorageService.getImageInfo(uri)`
+    - 展示 `exists` 与 `size`
+  - 重置数据库时同步清空最近错题列表、已选错题图片记录与图片检查结果，避免旧态残留。
+  - 更新 `docs/testing.md`：新增“第5步录入错题联合验收（5-G）”流程清单。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - `/dev/db` 目前只做开发调试展示，不承载正式业务页面。
+- 下一步：
+  - 进入 5-H：执行完整联合回归（新增页保存 -> /dev/db 核验 -> 重启持久化核验）并按问题清单收口体验细节。

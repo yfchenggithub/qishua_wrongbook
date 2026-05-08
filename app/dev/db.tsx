@@ -11,26 +11,42 @@ import {
 } from 'react-native';
 
 import { checkDatabaseHealth, initDatabase, resetDatabaseForDev } from '@/src/db';
-import { MistakeRepository } from '@/src/repositories';
 import type { DatabaseHealthReport } from '@/src/db/database';
+import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
 import type { MistakeStats } from '@/src/repositories';
+import { getImageInfo } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
 
 const PAGE_SCOPE = 'DevDbPage';
 
-type MistakeListItem = {
+type MistakeDebugItem = {
   id: string;
   title?: string | null;
   module: string;
+  error_reason?: string | null;
+  difficulty: number;
+  question_image_uri?: string | null;
+  answer_image_uri?: string | null;
   review_count: number;
   status: string;
+  created_at: string;
+};
+
+type MistakeImageDebugItem = {
+  id: string;
+  type: string;
+  uri: string;
+  created_at: string;
+  exists: boolean;
+  fileSize?: number | null;
 };
 
 type ActionType =
   | 'init'
   | 'health'
   | 'insert'
-  | 'list'
+  | 'list-recent'
+  | 'images'
   | 'stats'
   | 'reset'
   | null;
@@ -42,6 +58,13 @@ function formatError(error: unknown): string {
   return String(error);
 }
 
+function formatNullable(value: string | number | null | undefined): string {
+  if (value === null || value === undefined || value === '') {
+    return '(空)';
+  }
+  return String(value);
+}
+
 export default function DevDatabasePage() {
   const router = useRouter();
 
@@ -50,7 +73,9 @@ export default function DevDatabasePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [healthReport, setHealthReport] = useState<DatabaseHealthReport | null>(null);
   const [createdMistakeId, setCreatedMistakeId] = useState<string | null>(null);
-  const [mistakes, setMistakes] = useState<MistakeListItem[]>([]);
+  const [recentMistakes, setRecentMistakes] = useState<MistakeDebugItem[]>([]);
+  const [selectedMistakeId, setSelectedMistakeId] = useState<string | null>(null);
+  const [mistakeImages, setMistakeImages] = useState<MistakeImageDebugItem[]>([]);
   const [stats, setStats] = useState<MistakeStats | null>(null);
   const [pendingResetConfirm, setPendingResetConfirm] = useState(false);
 
@@ -64,8 +89,10 @@ export default function DevDatabasePage() {
         return '正在执行健康检查...';
       case 'insert':
         return '正在插入示例错题...';
-      case 'list':
-        return '正在查询错题列表...';
+      case 'list-recent':
+        return '正在查询最近错题...';
+      case 'images':
+        return '正在查询图片记录...';
       case 'stats':
         return '正在查询统计...';
       case 'reset':
@@ -127,22 +154,55 @@ export default function DevDatabasePage() {
     });
   }
 
-  async function handleListMistakes() {
-    await runAction('list', async () => {
+  async function handleListRecentMistakes() {
+    await runAction('list-recent', async () => {
       const rows = await MistakeRepository.listMistakes({
-        limit: 20,
+        limit: 10,
         offset: 0,
       });
-      setMistakes(
+
+      setRecentMistakes(
         rows.map((row) => ({
           id: row.id,
           title: row.title,
           module: row.module,
+          error_reason: row.error_reason,
+          difficulty: row.difficulty,
+          question_image_uri: row.question_image_uri,
+          answer_image_uri: row.answer_image_uri,
           review_count: row.review_count,
           status: row.status,
+          created_at: row.created_at,
         })),
       );
-      setStatusMessage(`已查询 ${rows.length} 条错题`);
+
+      setSelectedMistakeId(null);
+      setMistakeImages([]);
+      setStatusMessage(`已查询最近 ${rows.length} 条错题`);
+      resetPendingConfirmState();
+    });
+  }
+
+  async function handleLoadImagesByMistakeId(mistakeId: string) {
+    await runAction('images', async () => {
+      const rows = await MistakeImageRepository.listImagesByMistakeId(mistakeId);
+      const items = await Promise.all(
+        rows.map(async (row) => {
+          const info = await getImageInfo(row.uri);
+          return {
+            id: row.id,
+            type: row.type,
+            uri: row.uri,
+            created_at: row.created_at,
+            exists: info.exists,
+            fileSize: info.size ?? null,
+          };
+        }),
+      );
+
+      setSelectedMistakeId(mistakeId);
+      setMistakeImages(items);
+      setStatusMessage(`已查询 ${mistakeId} 的 ${items.length} 条图片记录`);
       resetPendingConfirmState();
     });
   }
@@ -169,7 +229,9 @@ export default function DevDatabasePage() {
 
       setHealthReport(null);
       setCreatedMistakeId(null);
-      setMistakes([]);
+      setRecentMistakes([]);
+      setSelectedMistakeId(null);
+      setMistakeImages([]);
       setStats(null);
       setPendingResetConfirm(false);
       setStatusMessage('数据库已清空并重新初始化');
@@ -212,8 +274,11 @@ export default function DevDatabasePage() {
             <Text style={styles.actionButtonText}>插入示例错题</Text>
           </Pressable>
 
-          <Pressable style={styles.actionButton} onPress={handleListMistakes} disabled={isBusy}>
-            <Text style={styles.actionButtonText}>查询错题列表（前20条）</Text>
+          <Pressable
+            style={styles.actionButton}
+            onPress={handleListRecentMistakes}
+            disabled={isBusy}>
+            <Text style={styles.actionButtonText}>查询最近10条错题</Text>
           </Pressable>
 
           <Pressable style={styles.actionButton} onPress={handleGetStats} disabled={isBusy}>
@@ -260,17 +325,56 @@ export default function DevDatabasePage() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>错题列表（前20条）</Text>
-          {mistakes.length === 0 ? (
+          <Text style={styles.sectionTitle}>最近错题（10条）</Text>
+          {recentMistakes.length === 0 ? (
             <Text style={styles.placeholderText}>暂无数据</Text>
           ) : (
-            mistakes.map((item) => (
+            recentMistakes.map((item) => (
               <View key={item.id} style={styles.listItem}>
                 <Text style={styles.monoText}>id: {item.id}</Text>
-                <Text style={styles.monoText}>title: {item.title ?? '(无标题)'}</Text>
-                <Text style={styles.monoText}>module: {item.module}</Text>
-                <Text style={styles.monoText}>review_count: {item.review_count}</Text>
-                <Text style={styles.monoText}>status: {item.status}</Text>
+                <Text style={styles.monoText}>title: {formatNullable(item.title)}</Text>
+                <Text style={styles.monoText}>module: {formatNullable(item.module)}</Text>
+                <Text style={styles.monoText}>error_reason: {formatNullable(item.error_reason)}</Text>
+                <Text style={styles.monoText}>difficulty: {formatNullable(item.difficulty)}</Text>
+                <Text style={styles.monoText}>
+                  question_image_uri: {formatNullable(item.question_image_uri)}
+                </Text>
+                <Text style={styles.monoText}>
+                  answer_image_uri: {formatNullable(item.answer_image_uri)}
+                </Text>
+                <Text style={styles.monoText}>review_count: {formatNullable(item.review_count)}</Text>
+                <Text style={styles.monoText}>status: {formatNullable(item.status)}</Text>
+                <Text style={styles.monoText}>created_at: {formatNullable(item.created_at)}</Text>
+
+                <Pressable
+                  style={styles.secondaryButton}
+                  onPress={() => {
+                    void handleLoadImagesByMistakeId(item.id);
+                  }}
+                  disabled={isBusy}>
+                  <Text style={styles.secondaryButtonText}>查看该错题图片记录</Text>
+                </Pressable>
+              </View>
+            ))
+          )}
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>
+            图片记录{selectedMistakeId ? `（mistake_id: ${selectedMistakeId}）` : ''}
+          </Text>
+          {!selectedMistakeId ? (
+            <Text style={styles.placeholderText}>请先在上方错题列表中点击“查看该错题图片记录”</Text>
+          ) : mistakeImages.length === 0 ? (
+            <Text style={styles.placeholderText}>该错题暂无图片记录</Text>
+          ) : (
+            mistakeImages.map((item) => (
+              <View key={item.id} style={styles.listItem}>
+                <Text style={styles.monoText}>type: {item.type}</Text>
+                <Text style={styles.monoText}>uri: {item.uri}</Text>
+                <Text style={styles.monoText}>created_at: {item.created_at}</Text>
+                <Text style={styles.monoText}>exists: {String(item.exists)}</Text>
+                <Text style={styles.monoText}>size: {item.fileSize ?? '(未知)'}</Text>
               </View>
             ))
           )}
@@ -396,5 +500,20 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     padding: 10,
     gap: 4,
+  },
+  secondaryButton: {
+    backgroundColor: '#f2f2f2',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: '#dcdcdc',
+    alignSelf: 'flex-start',
+    marginTop: 6,
+  },
+  secondaryButtonText: {
+    color: '#111111',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
