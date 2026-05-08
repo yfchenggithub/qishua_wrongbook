@@ -51,10 +51,14 @@ FROM mistakes
 `;
 
 export interface ListMistakesOptions {
-  status?: MistakeStatus;
-  module?: string;
+  status?: MistakeStatus | 'all';
+  module?: string | null;
+  keyword?: string | null;
+  dueOnly?: boolean;
   limit?: number;
   offset?: number;
+  sortBy?: 'created_at' | 'updated_at' | 'next_review_at' | 'review_count';
+  sortOrder?: 'asc' | 'desc';
 }
 
 export interface MistakeStats {
@@ -77,6 +81,23 @@ type MistakeStatsRow = {
   mastered: number | null;
   dueToday: number | null;
 };
+
+type CountRow = {
+  total: number | null;
+};
+
+type QueryConditions = {
+  whereSql: string;
+  bindParams: (string | number)[];
+};
+
+const DEFAULT_LIST_LIMIT = 50;
+const DEFAULT_LIST_OFFSET = 0;
+const DEFAULT_SORT_BY: NonNullable<ListMistakesOptions['sortBy']> = 'updated_at';
+const DEFAULT_SORT_ORDER: NonNullable<ListMistakesOptions['sortOrder']> = 'desc';
+const DEFAULT_RECENT_LIMIT = 10;
+const DEFAULT_ACTIVE_LIMIT = 50;
+const DEFAULT_MASTERED_LIMIT = 50;
 
 let databaseReady = false;
 let databaseInitPromise: Promise<void> | null = null;
@@ -160,6 +181,16 @@ function normalizeOffset(value?: number): number | undefined {
   return normalized;
 }
 
+function normalizeLimitOrDefault(value: number | undefined, defaultValue: number): number {
+  const normalized = normalizeLimit(value);
+  return normalized ?? defaultValue;
+}
+
+function normalizeOffsetOrDefault(value: number | undefined, defaultValue: number): number {
+  const normalized = normalizeOffset(value);
+  return normalized ?? defaultValue;
+}
+
 function normalizeDueCutoff(todayIsoDate?: string): string {
   if (!todayIsoDate || todayIsoDate.trim().length === 0) {
     return nowIso();
@@ -195,6 +226,113 @@ LIMIT 1;`,
   }
 
   return mapMistakeRow(row);
+}
+
+function normalizeKeyword(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeModuleFilter(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeStatusFilter(
+  value: ListMistakesOptions['status'] | undefined,
+): MistakeStatus | 'all' {
+  if (
+    value === REVIEW_STATUS.ACTIVE ||
+    value === REVIEW_STATUS.MASTERED ||
+    value === REVIEW_STATUS.ARCHIVED ||
+    value === 'all'
+  ) {
+    return value;
+  }
+  return 'all';
+}
+
+function normalizeSortBy(
+  value: ListMistakesOptions['sortBy'] | undefined,
+): NonNullable<ListMistakesOptions['sortBy']> {
+  if (
+    value === 'created_at' ||
+    value === 'updated_at' ||
+    value === 'next_review_at' ||
+    value === 'review_count'
+  ) {
+    return value;
+  }
+  return DEFAULT_SORT_BY;
+}
+
+function normalizeSortOrder(
+  value: ListMistakesOptions['sortOrder'] | undefined,
+): NonNullable<ListMistakesOptions['sortOrder']> {
+  if (value === 'asc' || value === 'desc') {
+    return value;
+  }
+  return DEFAULT_SORT_ORDER;
+}
+
+function buildOrderByClause(options?: ListMistakesOptions): string {
+  const sortBy = normalizeSortBy(options?.sortBy);
+  const sortOrder = normalizeSortOrder(options?.sortOrder);
+  const sortOrderSql = sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+  return `ORDER BY ${sortBy} ${sortOrderSql}`;
+}
+
+function buildListConditions(options?: ListMistakesOptions): QueryConditions {
+  const whereClauses: string[] = [];
+  const bindParams: (string | number)[] = [];
+  const dueOnly = options?.dueOnly === true;
+
+  if (dueOnly) {
+    const todayIsoDate = new Date().toISOString().slice(0, 10);
+    whereClauses.push('status = ?');
+    bindParams.push(REVIEW_STATUS.ACTIVE);
+    whereClauses.push('next_review_at IS NOT NULL');
+    whereClauses.push('next_review_at <= ?');
+    bindParams.push(normalizeDueCutoff(todayIsoDate));
+  } else {
+    const status = normalizeStatusFilter(options?.status);
+    if (status !== 'all') {
+      whereClauses.push('status = ?');
+      bindParams.push(status);
+    }
+  }
+
+  const moduleFilter = normalizeModuleFilter(options?.module);
+  if (moduleFilter) {
+    whereClauses.push('module = ?');
+    bindParams.push(moduleFilter);
+  }
+
+  const keyword = normalizeKeyword(options?.keyword);
+  if (keyword) {
+    const likeKeyword = `%${keyword}%`;
+    whereClauses.push('(title LIKE ? OR module LIKE ? OR error_reason LIKE ? OR note LIKE ?)');
+    bindParams.push(likeKeyword, likeKeyword, likeKeyword, likeKeyword);
+  }
+
+  if (whereClauses.length === 0) {
+    return {
+      whereSql: '',
+      bindParams,
+    };
+  }
+
+  return {
+    whereSql: `\nWHERE ${whereClauses.join('\n  AND ')}`,
+    bindParams,
+  };
 }
 
 export const MistakeRepository = {
@@ -267,45 +405,107 @@ export const MistakeRepository = {
       await ensureDatabaseReady();
       const db = await getDatabase();
 
-      const whereClauses: string[] = [];
-      const bindParams: (string | number)[] = [];
+      const conditions = buildListConditions(options);
+      const orderByClause = buildOrderByClause(options);
+      const limit = normalizeLimitOrDefault(options?.limit, DEFAULT_LIST_LIMIT);
+      const offset = normalizeOffsetOrDefault(options?.offset, DEFAULT_LIST_OFFSET);
 
-      if (options?.status) {
-        whereClauses.push('status = ?');
-        bindParams.push(options.status);
-      }
+      const rows = await db.getAllAsync<Mistake>(
+        `${SELECT_MISTAKE_FIELDS_SQL}${conditions.whereSql}
+${orderByClause}
+LIMIT ?
+OFFSET ?;`,
+        ...conditions.bindParams,
+        limit,
+        offset,
+      );
 
-      if (options?.module) {
-        whereClauses.push('module = ?');
-        bindParams.push(options.module);
-      }
-
-      let sql = SELECT_MISTAKE_FIELDS_SQL;
-      if (whereClauses.length > 0) {
-        sql += `\nWHERE ${whereClauses.join(' AND ')}`;
-      }
-
-      sql += '\nORDER BY created_at DESC';
-
-      const limit = normalizeLimit(options?.limit);
-      const offset = normalizeOffset(options?.offset);
-      if (limit !== undefined) {
-        sql += '\nLIMIT ?';
-        bindParams.push(limit);
-      }
-      if (offset !== undefined) {
-        if (limit === undefined) {
-          sql += '\nLIMIT -1';
-        }
-        sql += '\nOFFSET ?';
-        bindParams.push(offset);
-      }
-      sql += ';';
-
-      const rows = await db.getAllAsync<Mistake>(sql, ...bindParams);
       return rows.map(mapMistakeRow);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'listMistakes failed.', { options, error });
+      throw error;
+    }
+  },
+
+  async countMistakes(options?: ListMistakesOptions): Promise<number> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const conditions = buildListConditions(options);
+
+      const row = await db.getFirstAsync<CountRow>(
+        `SELECT COUNT(*) AS total
+FROM mistakes${conditions.whereSql};`,
+        ...conditions.bindParams,
+      );
+
+      return Number(row?.total ?? 0);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'countMistakes failed.', { options, error });
+      throw error;
+    }
+  },
+
+  async listRecentMistakes(limit?: number): Promise<Mistake[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedLimit = normalizeLimitOrDefault(limit, DEFAULT_RECENT_LIMIT);
+
+      const rows = await db.getAllAsync<Mistake>(
+        `${SELECT_MISTAKE_FIELDS_SQL}
+ORDER BY created_at DESC
+LIMIT ?;`,
+        normalizedLimit,
+      );
+
+      return rows.map(mapMistakeRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listRecentMistakes failed.', { limit, error });
+      throw error;
+    }
+  },
+
+  async listActiveMistakes(limit?: number): Promise<Mistake[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedLimit = normalizeLimitOrDefault(limit, DEFAULT_ACTIVE_LIMIT);
+
+      const rows = await db.getAllAsync<Mistake>(
+        `${SELECT_MISTAKE_FIELDS_SQL}
+WHERE status = ?
+ORDER BY next_review_at ASC, created_at ASC
+LIMIT ?;`,
+        REVIEW_STATUS.ACTIVE,
+        normalizedLimit,
+      );
+
+      return rows.map(mapMistakeRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listActiveMistakes failed.', { limit, error });
+      throw error;
+    }
+  },
+
+  async listMasteredMistakes(limit?: number): Promise<Mistake[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedLimit = normalizeLimitOrDefault(limit, DEFAULT_MASTERED_LIMIT);
+
+      const rows = await db.getAllAsync<Mistake>(
+        `${SELECT_MISTAKE_FIELDS_SQL}
+WHERE status = ?
+ORDER BY updated_at DESC
+LIMIT ?;`,
+        REVIEW_STATUS.MASTERED,
+        normalizedLimit,
+      );
+
+      return rows.map(mapMistakeRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listMasteredMistakes failed.', { limit, error });
       throw error;
     }
   },

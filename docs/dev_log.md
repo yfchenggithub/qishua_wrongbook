@@ -517,3 +517,43 @@
   - 本阶段未改业务逻辑与数据库结构，仅补充文档与验收说明。
 - 下一步建议：
   - 可结束第5步并进入第6步“错题列表真实读取”，优先先做 Repository -> Service -> 页面最小链路。
+
+### 2026-05-08 - 第6步阶段6-B：Repository 查询能力增强
+
+- 任务目标：增强 `MistakeRepository` 查询能力，支持题库页真实列表所需的筛选、搜索、排序与计数；本阶段不接页面、不改 UI、不改数据库结构。
+- 修改文件：
+  - `src/repositories/MistakeRepository.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 扩展 `ListMistakesOptions`：
+    - `status?: 'active' | 'mastered' | 'archived' | 'all'`
+    - `module?: string | null`
+    - `keyword?: string | null`
+    - `dueOnly?: boolean`
+    - `limit?: number`
+    - `offset?: number`
+    - `sortBy?: 'created_at' | 'updated_at' | 'next_review_at' | 'review_count'`
+    - `sortOrder?: 'asc' | 'desc'`
+  - 增强 `listMistakes(options?)`：
+    - 默认 `limit=50`、`offset=0`
+    - 默认排序 `updated_at desc`
+    - 支持 `status/module/keyword/dueOnly` 条件组合
+    - `status='all'` 时不加状态条件
+    - `dueOnly=true` 时强制筛选 `status=active AND next_review_at<=今天`
+    - `keyword` 在 `title/module/error_reason/note` 上执行 `LIKE` 搜索
+    - 所有用户输入均通过参数绑定
+    - `sortBy/sortOrder` 使用白名单归一化后再拼接固定 SQL 片段
+  - 新增 `countMistakes(options?)`：与 `listMistakes` 复用同一筛选条件构建逻辑，返回总数。
+  - 新增 `listRecentMistakes(limit?)`：按 `created_at DESC`，默认 10 条。
+  - 新增 `listActiveMistakes(limit?)`：`status=active`，按 `next_review_at ASC`，默认 50 条。
+  - 新增 `listMasteredMistakes(limit?)`：`status=mastered`，按 `updated_at DESC`，默认 50 条。
+  - 保持 `listDueMistakes(todayIsoDate?)` 语义不变：`status=active`、`next_review_at<=today`、`next_review_at ASC`。
+- 安全约束：
+  - 未引入 ORM。
+  - 未修改数据库 schema。
+  - 查询条件参数全部绑定，未拼接外部输入。
+  - 排序字段与顺序采用白名单归一化，防止注入。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 下一步建议：
+  - 进入 6-C：新增 `MistakeListService` / mapper（或 hook）承接列表 ViewModel 映射与分页编排，再接入题库页。
