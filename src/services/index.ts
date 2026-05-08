@@ -5,6 +5,7 @@ export * as ImageStorageService from "./ImageStorageService";
 export * as CreateMistakeService from "./CreateMistakeService";
 export * as MistakeListService from "./MistakeListService";
 export * as MistakeDetailService from "./MistakeDetailService";
+export * as ReviewFlowService from "./ReviewFlowService";
 export * as ReviewScheduleService from "./ReviewScheduleService";
 export * as CompleteReviewService from "./CompleteReviewService";
 export { Logger } from "./Logger";

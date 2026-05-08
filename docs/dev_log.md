@@ -969,3 +969,32 @@
   - 本阶段不含 UI 接入，下一阶段再接复做页与详情按钮。
 - 下一步：
   - 进入 8-C：复做页 UI 与提交流程接线。
+### 2026-05-08 - 第8步阶段8-C：复做页 UI 与提交交互
+
+- 任务目标：接入真实复做页，打通“详情页进入复做页 -> 拍复做照片 -> completeReview 提交 -> 返回详情页”的页面闭环，不改数据库结构。
+- 修改文件：
+  - `app/review/[id].tsx`
+  - `app/mistake/[id].tsx`
+  - `app/_layout.tsx`
+  - `src/services/ReviewFlowService.ts`
+  - `src/services/index.ts`
+  - `docs/testing.md`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增复做页路由 `app/review/[id].tsx`，支持真实 `id` 读取、loading/notFound/error 状态、返回详情入口。
+  - 新增 `ReviewFlowService.getReviewPageData(id)`，聚合详情数据与 `ReviewSession` 给复做页使用。
+  - 复做页仅展示题目图片（question），并处理“无图/文件缺失/加载失败”三类兜底文案。
+  - 新增“本次复做照片”交互：拍照保存、预览、重拍、删除；提交中禁止重复拍照/删除。
+  - 提交按钮接入 `CompleteReviewService.completeReview()`，严格校验“必须有复做照片”和 `canReview` 状态。
+  - 提交成功后根据 `newStatus` 提示并 `router.replace('/mistake/[id]')` 返回详情页；失败保留照片与页面状态。
+  - 详情页底部按钮改为真实入口：
+    - `active && reviewCount < 7` -> `开始第 N 刷`，点击跳转 `/review/[id]`
+    - `mastered` -> `已完成七刷`（禁用）
+    - `archived` -> `已归档`（禁用）
+  - 根路由注册 `review/[id]` 页面。
+- 验收结果：
+  - 待执行：`npm run typecheck` / `npm run lint`。
+- 遗留问题：
+  - 暂不接入“从相册选择”入口（本阶段可选项，已保留拍照主链路）。
+- 下一步：
+  - 进入 8-D：复做历史展示与详情页联动刷新体验收口（含 Android 真机回归清单）。

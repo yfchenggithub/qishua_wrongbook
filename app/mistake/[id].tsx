@@ -2,7 +2,6 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Pressable,
   StyleSheet,
   Text,
@@ -75,18 +74,23 @@ function buildCurrentReviewIndex(detail: MistakeDetailViewModel): number | undef
   return Math.min(detail.maxReviewCount, detail.reviewCount + 1);
 }
 
-function buildPlaceholderButtonTitle(detail: MistakeDetailViewModel): string {
-  if (detail.status === 'active') {
-    const nextReview = Math.min(detail.maxReviewCount, detail.reviewCount + 1);
-    if (detail.reviewCount <= 0) {
-      return `开始第 ${nextReview} 刷`;
-    }
-    return `标记第 ${nextReview} 刷完成`;
-  }
+function buildReviewButtonTitle(detail: MistakeDetailViewModel): string {
   if (detail.status === 'mastered') {
     return '已完成七刷';
   }
-  return '已归档';
+  if (detail.status === 'archived') {
+    return '已归档';
+  }
+
+  const nextReview = Math.min(detail.maxReviewCount, detail.reviewCount + 1);
+  return `开始第 ${nextReview} 刷`;
+}
+
+function isReviewButtonDisabled(detail: MistakeDetailViewModel): boolean {
+  if (detail.status !== 'active') {
+    return true;
+  }
+  return detail.reviewCount >= detail.maxReviewCount;
 }
 
 function StateCard({
@@ -139,6 +143,16 @@ export default function MistakeDetailScreen() {
       return;
     }
     router.replace('/(tabs)/library' as never);
+  }, [router]);
+
+  const handleStartReview = useCallback((detail: MistakeDetailViewModel) => {
+    if (detail.status !== 'active') {
+      return;
+    }
+    if (detail.reviewCount >= detail.maxReviewCount) {
+      return;
+    }
+    router.push(`/review/${detail.id}` as never);
   }, [router]);
 
   const loadDetail = useCallback(async (options?: { keepCurrent?: boolean }) => {
@@ -313,9 +327,9 @@ export default function MistakeDetailScreen() {
           </CardContainer>
 
           <PrimaryButton
-            title={buildPlaceholderButtonTitle(state.detail)}
-            disabled={state.detail.status !== 'active'}
-            onPress={() => Alert.alert('占位提示', '第 8 步接入复做流程')}
+            title={buildReviewButtonTitle(state.detail)}
+            disabled={isReviewButtonDisabled(state.detail)}
+            onPress={() => handleStartReview(state.detail)}
           />
         </>
       ) : null}
