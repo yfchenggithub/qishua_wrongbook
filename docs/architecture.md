@@ -102,3 +102,31 @@
 - 图片入口统一走 `ImageService`。
 - 保存业务编排集中在 `CreateMistakeService`。
 - 数据持久化细节集中在 Repository 层。
+
+## 8. 第6步错题列表数据流（6-B ~ 6-G）
+目标：将题库页与首页部分模块切换到 SQLite 真实数据，同时保持页面层不直接写 SQL。
+
+数据流分层：
+1. 页面层（`app/(tabs)/library.tsx`、`app/(tabs)/index.tsx`）只维护 UI 状态（loading/error/empty、筛选、搜索词、刷新）。
+2. Service 层（`src/services/MistakeListService.ts`）负责把页面过滤条件映射为 Repository 查询参数，并将 `Mistake` 映射为展示模型 `MistakeListItem`。
+3. Repository 层（`src/repositories/MistakeRepository.ts`）负责 SQL 查询与参数绑定（keyword/status/dueOnly/sort/limit/offset）。
+4. DB 层（`src/db/*`）负责数据库初始化与 schema。
+
+题库页（Library）查询链路：
+- segment: `all | due | mastered` + keyword -> `MistakeListService.getMistakeListItems(filter)`
+- service 根据 segment 映射查询：
+  - all -> `status: all`, `updated_at desc`
+  - due -> `dueOnly: true`, `next_review_at asc`
+  - mastered -> `status: mastered`, `updated_at desc`
+- repository 返回 `Mistake[]`，service 映射成 `MistakeListItem[]` 给页面渲染。
+
+首页（Today）轻量真实化链路：
+- 统计：`MistakeListService.getMistakeListStats()` -> `total/due/mastered`
+- 优先复做：`getMistakeListItems({ segment: 'due', keyword: '' })` 取第1条
+- 错题队列：`getMistakeListItems({ segment: 'all', keyword: '' })` 取前 2-3 条
+- 页面 focus 时刷新，确保新增页保存后返回首页可看到最新结果。
+
+约束：
+- 页面层不拼接 SQL，不直接访问 SQLite。
+- 查询条件中的用户输入均由 Repository 参数绑定。
+- 展示模型与数据库表解耦，避免页面直接依赖数据库字段。

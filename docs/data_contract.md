@@ -104,3 +104,11 @@
 - SQLite 仅保存图片 `uri`，不保存图片二进制。
 - 图片文件由 `ImageService` 落地到本地目录；数据库保存时不重复复制图片。
 - 运行时支持事务时优先使用事务；无事务封装时采用最小补偿回滚并记日志。
+
+## 6. 展示层模型说明（第6步补充）
+
+- `MistakeListItem`（`src/models/MistakeListItem.ts`）是展示层 ViewModel，不是数据库表。
+- `MistakeListItem` 由 `MistakeListService.mapMistakeToListItem()` 从数据库实体 `Mistake` 映射得到。
+- 页面应优先消费 `MistakeListItem`，不要在页面层直接依赖 `mistakes` 表字段拼装展示文案。
+- `MistakeListItem` 中如 `subtitle`、`statusLabel`、`displayStatus`、`maxReviewCount` 属于展示衍生字段，不落库。
+- 数据库结构仍以 `mistakes` / `mistake_images` / `review_records` 为准，本补充不涉及 schema 变更。

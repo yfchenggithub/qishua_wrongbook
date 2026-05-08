@@ -725,3 +725,27 @@
   - 本阶段代码已完成；`npm run typecheck` 当前被既有路由类型问题阻塞：`app/modal.tsx` 使用 `href="/"` 与当前 Expo Router 类型不匹配（非本阶段改动引入）。
 - 下一步：
   - 进入 6-H：首页与题库页联动收口（回归验证、文案一致性、边界场景验证清单）。
+### 2026-05-08 - 第6步阶段6-H：统一验收、文档更新、轻量清理
+
+- 任务目标：完成第6步收口检查与文档补充，不进入第7步详情页真实读取。
+- 修改文件：
+  - `app/modal.tsx`
+  - `docs/architecture.md`
+  - `docs/testing.md`
+  - `docs/data_contract.md`
+  - `docs/dev_log.md`
+- 核心检查结果：
+  - 关键文件存在并已实现：`MistakeListItem`、`MistakeListService`、`date.ts`、`library.tsx`、`index.tsx`。
+  - Repository 查询能力满足第6步需要：`listMistakes` 支持 `keyword/status/dueOnly/sort/limit/offset`，`countMistakes` 已实现并复用同筛选条件。
+  - 页面层未直接写 SQL，查询均经 Service/Repository。
+  - 题库页支持真实列表、搜索筛选、缩略图兜底、空态/错态/加载态、重试与下拉刷新。
+  - 首页支持真实统计、优先复做与错题队列轻量接入，并在 focus 时刷新。
+- 轻量清理：
+  - 修复 `app/modal.tsx` 路由类型错误：`href="/"` -> `href="/(tabs)/index"`，解除 typecheck 阻塞。
+- 命令结果：
+  - `npm run typecheck`：通过。
+  - `npm run lint`：通过。
+  - 按当前协作约束，本阶段未继续执行 `expo start` / `npm run android`（避免长时阻塞）。
+- 下一步：
+  - 可结束第6步，进入第7步前先明确详情页查询边界（仅读取 + 展示，不提前接入复做更新）。
+- 补充更正：`app/modal.tsx` 最终保留 `href="/"`，并已验证可通过 `npm run typecheck`。
