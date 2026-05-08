@@ -524,3 +524,31 @@
   - 暂未接入页面与真机联调入口（按阶段边界保留到下一阶段）。
 - 下一步：
   - 进入阶段 4-E：新增开发调试页（如 `/dev/images`）串联 `ImagePickerService + ImageStorageService`，完成拍照/选图到本地持久化的端到端验证。
+
+### 2026-05-08 - 第4步阶段4-F：图片压缩/缩放层（ImageOptimizeService）
+
+- 任务目标：在保存前增加可选图片标准化处理，控制体积并保持题目文字清晰；优化失败时自动回退原图。
+- 修改文件：
+  - `src/services/ImageOptimizeService.ts`
+  - `src/services/ImageService.ts`
+  - `src/services/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `optimizeImageForStorage(params)`：
+    - 输入临时 `uri`
+    - 超过 `IMAGE_MAX_WIDTH / IMAGE_MAX_HEIGHT` 时等比缩放
+    - 使用 `IMAGE_QUALITY` 作为默认压缩质量
+    - 输出新的优化后临时 `uri`（不覆盖原图）
+    - 返回 `ok/uri/width/height/fileSize/errorMessage`
+  - `ImageService.takePhotoAndSave / pickImageAndSave` 已接入优化流程：
+    - 先优化后保存
+    - 优化成功则保存优化图
+    - 优化失败则 `Logger.error` 记录并回退保存原临时图
+  - `src/services/index.ts` 增加 `ImageOptimizeService` 统一导出。
+- 验收结果：
+  - `npx eslint src/services/ImageOptimizeService.ts src/services/ImageService.ts src/services/index.ts` 通过。
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 本阶段仍未接入 SQLite，不写入 `mistake_images` 表（按范围控制）。
+- 下一步：
+  - 进入阶段 4-G：新增 `/dev/images` 调试页，真机验证“拍照/选图 -> 优化 -> 保存 -> 查看体积 -> 删除”完整链路。
