@@ -1,7 +1,16 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  FlatList,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import {
   BrandHeader,
@@ -11,8 +20,20 @@ import {
   SegmentControl,
   StatusPill,
 } from '@/src/components';
-import { libraryMock, type LibraryFilterValue, type LibraryMistakeMock } from '@/src/mocks/library';
+import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
+import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
+import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+
+function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success' {
+  if (status === 'mastered') {
+    return 'success';
+  }
+  if (status === 'due_today') {
+    return 'dark';
+  }
+  return 'light';
+}
 
 function ThumbnailPlaceholder() {
   return (
@@ -28,35 +49,47 @@ function MistakeLibraryCard({
   item,
   onPress,
 }: {
-  item: LibraryMistakeMock;
+  item: MistakeListItem;
   onPress: () => void;
 }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const showImage = !!item.thumbnailUri && !imageFailed;
+
   return (
     <Pressable onPress={onPress} style={styles.cardPressable}>
       <CardContainer padding={spacing.lg} style={styles.card}>
         <View style={styles.cardRow}>
-          <ThumbnailPlaceholder />
+          {showImage ? (
+            <Image
+              source={{ uri: item.thumbnailUri! }}
+              style={styles.thumbImage}
+              resizeMode="cover"
+              onError={() => setImageFailed(true)}
+            />
+          ) : (
+            <ThumbnailPlaceholder />
+          )}
 
           <View style={styles.cardMain}>
             <View style={styles.cardTopLine}>
-              <Text style={styles.cardMeta}>
-                {item.code} · {item.module}
-              </Text>
-              <Text style={styles.arrow}>›</Text>
+              <Text style={styles.cardMeta}>{item.module}</Text>
+              <Text style={styles.arrow}>{'>'}</Text>
             </View>
 
             <Text style={styles.cardTitle}>{item.title}</Text>
-            <Text style={styles.cardSource}>{item.source}</Text>
+            <Text style={styles.cardSource}>{item.subtitle}</Text>
 
-            <Text style={styles.progressLabel}>进度：{item.progressLabel}</Text>
+            <Text style={styles.progressLabel}>
+              进度：{item.reviewCount}/{item.maxReviewCount}
+            </Text>
 
             <View style={styles.progressRow}>
               <ProgressDots
-                total={item.progress.total}
-                current={item.progress.current}
-                completed={item.progress.completed}
+                total={item.maxReviewCount}
+                current={item.reviewCount}
+                completed={item.reviewCount}
               />
-              <StatusPill label={item.statusLabel} tone={item.statusTone} />
+              <StatusPill label={item.statusLabel} tone={mapStatusToTone(item.displayStatus)} />
             </View>
           </View>
         </View>
@@ -69,45 +102,109 @@ export default function LibraryScreen() {
   const router = useRouter();
   const [searchText, setSearchText] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<LibraryFilterValue>('all');
+  const [items, setItems] = useState<MistakeListItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const loadList = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage(null);
+
+    try {
+      const listItems = await MistakeListService.getMistakeListItems({
+        segment: 'all',
+        keyword: '',
+      });
+      setItems(listItems);
+    } catch (error) {
+      setItems([]);
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadList();
+  }, [loadList]);
+
+  const listEmpty = useMemo(() => {
+    if (isLoading) {
+      return (
+        <View style={styles.stateWrap}>
+          <ActivityIndicator size="small" color={colors.textPrimary} />
+          <Text style={styles.stateText}>正在加载题库...</Text>
+        </View>
+      );
+    }
+
+    if (errorMessage) {
+      return (
+        <View style={styles.stateWrap}>
+          <Text style={styles.stateErrorText}>题库读取失败：{errorMessage}</Text>
+          <Pressable onPress={() => void loadList()} style={styles.retryButton}>
+            <Text style={styles.retryText}>点击重试</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.stateWrap}>
+        <Text style={styles.stateText}>题库还没有错题，先去新增页录入一题。</Text>
+      </View>
+    );
+  }, [errorMessage, isLoading, loadList]);
 
   return (
-    <ScreenContainer scroll contentStyle={styles.screenContent}>
-      <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
+    <ScreenContainer withPadding={false}>
+      <FlatList<MistakeListItem>
+        data={items}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <MistakeLibraryCard item={item} onPress={() => router.push(`/mistake/${item.id}` as never)} />
+        )}
+        ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.listContent}
+        ListHeaderComponent={
+          <View style={styles.screenContent}>
+            <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
 
-      <View style={styles.searchWrap}>
-        <MaterialIcons size={24} name="search" color={colors.textMuted} />
-        <TextInput
-          value={searchText}
-          onChangeText={setSearchText}
-          placeholder={libraryMock.searchPlaceholder}
-          placeholderTextColor={colors.textMuted}
-          style={styles.searchInput}
-        />
-      </View>
+            <View style={styles.searchWrap}>
+              <MaterialIcons size={24} name="search" color={colors.textMuted} />
+              <TextInput
+                value={searchText}
+                onChangeText={setSearchText}
+                placeholder={libraryMock.searchPlaceholder}
+                placeholderTextColor={colors.textMuted}
+                style={styles.searchInput}
+              />
+            </View>
 
-      <SegmentControl
-        options={libraryMock.filters}
-        value={selectedFilter}
-        onChange={(next) => setSelectedFilter(next as LibraryFilterValue)}
+            <SegmentControl
+              options={libraryMock.filters}
+              value={selectedFilter}
+              onChange={(next) => setSelectedFilter(next as LibraryFilterValue)}
+            />
+
+            <Text style={styles.countText}>当前共 {items.length} 题</Text>
+          </View>
+        }
+        ListEmptyComponent={listEmpty}
       />
-
-      <View style={styles.listWrap}>
-        {libraryMock.mistakes.map((item) => (
-          <MistakeLibraryCard
-            key={item.id}
-            item={item}
-            onPress={() => router.push(`/mistake/${item.routeId}` as never)}
-          />
-        ))}
-      </View>
     </ScreenContainer>
   );
 }
 
 const styles = StyleSheet.create({
   screenContent: {
+    paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.lg,
-    gap: spacing.xl,
+    gap: spacing.lg,
+  },
+  listContent: {
+    paddingBottom: spacing.xl,
   },
   searchWrap: {
     flexDirection: 'row',
@@ -126,10 +223,53 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingVertical: spacing.sm,
   },
-  listWrap: {
-    gap: spacing.md,
+  countText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  listItemSeparator: {
+    height: spacing.md,
+  },
+  stateWrap: {
+    marginTop: spacing.lg,
+    marginHorizontal: spacing.screenPadding,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 132,
+  },
+  stateText: {
+    ...typography.body,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
+  stateErrorText: {
+    ...typography.body,
+    color: colors.danger,
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: spacing.xs,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  retryText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
   },
   cardPressable: {
+    marginHorizontal: spacing.screenPadding,
     borderRadius: radius.xl,
   },
   card: {
@@ -191,6 +331,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  thumbImage: {
+    width: 112,
+    height: 112,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+  },
   thumbAxisX: {
     position: 'absolute',
     width: 76,
@@ -212,4 +360,3 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '-18deg' }],
   },
 });
-

@@ -596,3 +596,36 @@
   - `npm run typecheck` 通过。
 - 下一步建议：
   - 进入 6-D：将 `library.tsx` 接入 `MistakeListService`，完成真实列表加载、segment/搜索联动、空态与错误态展示。
+
+### 2026-05-08 - 第6步阶段6-D：题库页接入 SQLite 真实列表
+
+- 任务目标：将题库页从静态 mock 切换为 SQLite 真实读取，完成基础展示与状态兜底；本阶段不接详情真实数据、不改新增页。
+- 修改文件：
+  - `app/(tabs)/library.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 数据读取：
+    - 页面加载时通过 `MistakeListService.getMistakeListItems({ segment: 'all', keyword: '' })` 拉取列表。
+    - 使用 `useCallback + useEffect` 组织加载流程。
+  - 列表容器：
+    - 使用 `FlatList` 渲染。
+    - `keyExtractor={(item) => item.id}`，不使用 index。
+  - 三态兜底：
+    - 加载态：显示 `ActivityIndicator + 正在加载题库...`
+    - 错误态：显示错误文案与“点击重试”按钮
+    - 空状态：显示“题库还没有错题，先去新增页录入一题。”
+  - 卡片展示：
+    - 展示 `thumbnailUri`（失败时回退占位图）
+    - 展示 `module`、`title`、`subtitle`
+    - `ProgressDots`：`total=maxReviewCount`、`current=reviewCount`、`completed=reviewCount`
+    - `StatusPill`：使用 `statusLabel`，并按 `displayStatus` 映射 tone
+  - 跳转：
+    - 点击卡片跳转 `/mistake/[id]`，实际路径 `/mistake/${item.id}`。
+  - 轻量统计：
+    - 顶部显示“当前共 X 题”，使用当前列表长度。
+  - 视觉保留：
+    - 保留品牌头、搜索框、分段筛选、白底圆角卡片风格。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 下一步建议：
+  - 进入 6-E：把搜索框与分段筛选真正映射到 Service filter（all/due/mastered + keyword + module），并补充下拉刷新与筛选联动测试。
