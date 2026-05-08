@@ -2,12 +2,16 @@ import type { LocalImageType, SavedImageResult } from '@/src/models/LocalImage';
 import { optimizeImageForStorage } from '@/src/services/ImageOptimizeService';
 import {
   pickImageFromLibrary,
+  requestCameraPermission,
+  requestMediaLibraryPermission,
   takePhoto,
 } from '@/src/services/ImagePickerService';
+import type { PermissionRequestResult } from '@/src/services/ImagePickerService';
 import {
   deleteLocalImage as deleteLocalImageFile,
   deleteMistakeImageFolder,
   getImageInfo,
+  listMistakeImageFiles,
   saveTempImageToMistakeFolder,
 } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
@@ -19,6 +23,8 @@ export interface SaveImageParams {
   type: LocalImageType;
   index?: number;
 }
+
+export type ImagePermissionResult = PermissionRequestResult;
 
 interface PreparedImagePayload {
   uri: string;
@@ -119,6 +125,30 @@ export async function takePhotoAndSave(
   }
 }
 
+export async function checkCameraPermission(): Promise<ImagePermissionResult> {
+  try {
+    return await requestCameraPermission();
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Unexpected error in checkCameraPermission.', error);
+    return {
+      granted: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function checkMediaLibraryPermission(): Promise<ImagePermissionResult> {
+  try {
+    return await requestMediaLibraryPermission();
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Unexpected error in checkMediaLibraryPermission.', error);
+    return {
+      granted: false,
+      message: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function pickImageAndSave(
   params: SaveImageParams,
 ): Promise<SavedImageResult> {
@@ -180,6 +210,18 @@ export async function getLocalImageInfo(
       error,
     });
     return { exists: false, size: null };
+  }
+}
+
+export async function listLocalImagesByMistakeId(mistakeId: string): Promise<string[]> {
+  try {
+    return await listMistakeImageFiles(mistakeId);
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Unexpected error in listLocalImagesByMistakeId.', {
+      mistakeId,
+      error,
+    });
+    return [];
   }
 }
 

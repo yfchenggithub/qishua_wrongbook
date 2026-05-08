@@ -13,10 +13,8 @@ import {
 } from 'react-native';
 
 import type { LocalImageType } from '@/src/models/LocalImage';
-import type { PermissionRequestResult } from '@/src/services/ImagePickerService';
-import { requestCameraPermission, requestMediaLibraryPermission } from '@/src/services/ImagePickerService';
-import { deleteLocalImage, deleteMistakeImages, getLocalImageInfo, pickImageAndSave, takePhotoAndSave } from '@/src/services/ImageService';
-import { listMistakeImageFiles } from '@/src/services/ImageStorageService';
+import type { ImagePermissionResult } from '@/src/services/ImageService';
+import { checkCameraPermission, checkMediaLibraryPermission, deleteLocalImage, deleteMistakeImages, getLocalImageInfo, listLocalImagesByMistakeId, pickImageAndSave, takePhotoAndSave } from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 
 const PAGE_SCOPE = 'DevImagesPage';
@@ -75,8 +73,8 @@ export default function DevImagesPage() {
   const [activeAction, setActiveAction] = useState<ActionType>(null);
   const [statusMessage, setStatusMessage] = useState('等待操作');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [cameraPermission, setCameraPermission] = useState<PermissionRequestResult | null>(null);
-  const [libraryPermission, setLibraryPermission] = useState<PermissionRequestResult | null>(null);
+  const [cameraPermission, setCameraPermission] = useState<ImagePermissionResult | null>(null);
+  const [libraryPermission, setLibraryPermission] = useState<ImagePermissionResult | null>(null);
   const [images, setImages] = useState<DevImageItem[]>([]);
 
   const isBusy = activeAction !== null;
@@ -119,7 +117,7 @@ export default function DevImagesPage() {
 
   const refreshImageList = useCallback(async () => {
     await runAction('refresh-list', async () => {
-      const uris = await listMistakeImageFiles(DEV_MISTAKE_ID);
+      const uris = await listLocalImagesByMistakeId(DEV_MISTAKE_ID);
       const items = await Promise.all(
         uris.map(async (uri) => {
           const info = await getLocalImageInfo(uri);
@@ -144,7 +142,7 @@ export default function DevImagesPage() {
 
   async function handleCheckCameraPermission() {
     await runAction('check-camera', async () => {
-      const result = await requestCameraPermission();
+      const result = await checkCameraPermission();
       setCameraPermission(result);
       setStatusMessage(`相机权限检查完成: granted=${String(result.granted)}`);
     });
@@ -152,7 +150,7 @@ export default function DevImagesPage() {
 
   async function handleCheckLibraryPermission() {
     await runAction('check-library', async () => {
-      const result = await requestMediaLibraryPermission();
+      const result = await checkMediaLibraryPermission();
       setLibraryPermission(result);
       setStatusMessage(`相册权限检查完成: granted=${String(result.granted)}`);
     });

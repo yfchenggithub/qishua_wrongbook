@@ -267,7 +267,7 @@ export const MistakeRepository = {
       const db = await getDatabase();
 
       const whereClauses: string[] = [];
-      const bindParams: Array<string | number> = [];
+      const bindParams: (string | number)[] = [];
 
       if (options?.status) {
         whereClauses.push('status = ?');
@@ -369,8 +369,8 @@ FROM mistakes;`,
       const db = await getDatabase();
 
       const setClauses: string[] = [];
-      const bindParams: Array<string | number | null> = [];
-      const updatableFields: Array<keyof UpdateMistakeInput> = [
+      const bindParams: (string | number | null)[] = [];
+      const updatableFields: (keyof UpdateMistakeInput)[] = [
         'subject',
         'module',
         'title',

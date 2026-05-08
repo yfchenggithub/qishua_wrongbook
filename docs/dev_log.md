@@ -275,3 +275,29 @@
   - Step 4-H: lightweight acceptance and cleanup for image capability (Android device focused), then prepare integration into formal Add page flow.
 
 
+
+### 2026-05-08 - Step 4-H: 图片能力统一验收、文档更新与轻量清理
+
+- 任务目标：完成第4步统一验收，补齐文档说明，做轻量分层清理，不进入第5步业务开发。
+- 修改文件：
+  - `app/dev/images.tsx`
+  - `src/services/ImageService.ts`
+  - `docs/architecture.md`
+  - `docs/data_contract.md`
+  - `docs/testing.md`
+  - `docs/dev_log.md`
+- 核心检查与清理：
+  - 核对第4步核心文件完整性（LocalImage、image constants、Path/Picker/Storage/ImageService、dev/images）。
+  - `/dev/images` 改为仅依赖 `ImageService`，不再直接调用 `ImagePickerService`、`ImageStorageService`。
+  - `ImageService` 新增轻量封装：
+    - `checkCameraPermission()`
+    - `checkMediaLibraryPermission()`
+    - `listLocalImagesByMistakeId()`
+  - 继续保持：不接 SQLite、不写 `MistakeRepository`、不改正式页面拍照业务。
+- 命令检查：
+  - `npm run typecheck` 通过。
+  - `npm run lint` 通过（无 error / warning）。
+  - `npx expo start --offline --port 8087` 已尝试（命令被中断，未完成长期运行验证）。
+  - `npm run android` 失败：`spawn EPERM`（本机进程/权限环境问题）。
+- 下一步：
+  - 进入第5步前，先在可用 Android 真机环境按 `docs/testing.md` 完整跑通第4步验收清单。
