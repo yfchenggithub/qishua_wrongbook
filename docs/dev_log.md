@@ -557,3 +557,42 @@
   - `npm run typecheck` 通过。
 - 下一步建议：
   - 进入 6-C：新增 `MistakeListService` / mapper（或 hook）承接列表 ViewModel 映射与分页编排，再接入题库页。
+
+### 2026-05-08 - 第6步阶段6-C：错题列表 ViewModel / Service
+
+- 任务目标：新增错题列表专用 ViewModel 与 Service，将 Repository 数据转换为页面可直接展示的数据；本阶段不接 UI、不改数据库结构。
+- 修改文件：
+  - `src/models/MistakeListItem.ts`
+  - `src/services/MistakeListService.ts`
+  - `src/utils/date.ts`
+  - `src/services/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `MistakeListItem` 模型：
+    - `MistakeListStatus`: `due_today | upcoming | mastered | archived`
+    - `MistakeListItem`：封装列表展示所需字段（title/subtitle/thumbnail/statusLabel/displayStatus 等）
+    - `MistakeListFilter`：`segment | keyword | module`
+  - 新增 `MistakeListService`：
+    - `getMistakeListItems(filter)`：按 segment 映射 Repository 查询并返回 `MistakeListItem[]`
+    - `mapMistakeToListItem(mistake)`：统一映射 DB 字段 -> 展示字段
+    - `getMistakeListStats()`：返回 `{ total, due, mastered }`
+  - 新增最小日期工具 `src/utils/date.ts`：
+    - `toDateOnlyString(date)`
+    - `formatDateShort(iso)`
+    - `isDueTodayOrBefore(iso)`
+  - `segment` 到 Repository 的映射：
+    - `all` -> `status: 'all'`
+    - `due` -> `dueOnly: true, sortBy: 'next_review_at', sortOrder: 'asc'`
+    - `mastered` -> `status: 'mastered'`
+  - `statusLabel` 规则：
+    - `mastered` -> `已七刷`
+    - `archived` -> `已归档`
+    - `active` 且 `next_review_at <= 今天` -> `今天第 N+1 刷`
+    - 其他 active -> `待复做`
+- 分层说明：
+  - Repository 继续只负责数据查询。
+  - Service 负责展示字段转换，页面后续仅消费 `MistakeListItem`。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 下一步建议：
+  - 进入 6-D：将 `library.tsx` 接入 `MistakeListService`，完成真实列表加载、segment/搜索联动、空态与错误态展示。
