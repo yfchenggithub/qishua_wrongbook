@@ -783,3 +783,40 @@
   - `npm run typecheck` 通过。
 - 下一步：
   - 进入 7-C：在不改业务边界的前提下，将 `app/mistake/[id].tsx` 接入 `getMistakeDetail`，补 `loading/error/notFound` 三态并移除 mock 依赖。
+
+### 2026-05-08 - 第7步阶段7-C：详情页读取真实 id 与真实数据
+
+- 任务目标：将 `app/mistake/[id].tsx` 从静态 mock 切换为按路由 id 读取 SQLite 真实详情数据，补齐 `loading/error/notFound` 状态；不接复做写入逻辑。
+- 修改文件：
+  - `app/mistake/[id].tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 路由 id 读取：
+    - 使用 `useLocalSearchParams<{ id?: string | string[] }>()` 获取路由参数。
+    - 新增 `normalizeRouteId`，统一处理 `string | string[] | undefined`，并对空字符串做无效拦截。
+    - `id` 无效时进入错误态，提示“错题 id 无效，请返回重试”。
+  - 详情数据加载：
+    - 页面通过 `MistakeDetailService.getMistakeDetail(routeId)` 读取真实详情。
+    - 使用 `useEffect` 在进入页面和 `id` 变化时触发重载。
+    - 增加 `requestIdRef`，避免异步请求返回顺序反转导致旧数据覆盖新数据。
+  - 状态兜底：
+    - `loading`：显示 `ActivityIndicator + 正在读取错题详情...`
+    - `notFound`：显示“未找到错题”状态卡，支持返回与重试
+    - `error`：显示“加载失败”状态卡，支持返回与重试
+  - 摘要卡接入真实字段：
+    - 展示 `module/title/subtitle/reviewCount/maxReviewCount/statusLabel/difficulty`。
+    - `errorReason`、`note` 按有值才展示。
+    - 复用 `ProgressDots` 和 `StatusPill`，并按 `status` 映射 tone。
+  - 图片区接入 `imageSlots`：
+    - 展示题目/我的做法/答案三类图片（过滤 `review_solution`）。
+    - `uri && exists=true` 时展示图片。
+    - `uri` 存在但文件缺失或加载失败时展示“图片文件不存在”。
+    - `uri` 不存在时展示 `emptyText`。
+    - 增加“刷新”按钮支持手动重拉详情。
+  - 底部复做按钮：
+    - 保留按钮 UI 与文案占位，点击仅 `Alert('第 8 步接入复做流程')`。
+    - 本阶段不更新 `review_count`，不写入 `review_records`。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 下一步：
+  - 进入 7-D：统一首页/题库页到详情页的跳转入口校验（确保传入真实 SQLite id），补充 Android 真机回归清单与边界场景验证。

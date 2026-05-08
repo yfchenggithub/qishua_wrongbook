@@ -1,5 +1,14 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import {
   BrandHeader,
@@ -10,29 +19,115 @@ import {
   SectionTitle,
   StatusPill,
 } from '@/src/components';
-import { getMistakeDetailMock, mistakeDetailBrandMock, type DetailPreviewMock } from '@/src/mocks/mistakeDetail';
+import type { DetailImageSlot, MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
+import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
-function DiagramPlaceholder() {
+const BRAND = {
+  title: '七刷错题本',
+  subtitle: '详情来自本地 SQLite',
+} as const;
+
+type DetailPageState =
+  | { kind: 'loading' }
+  | { kind: 'success'; detail: MistakeDetailViewModel }
+  | { kind: 'notFound'; message: string }
+  | { kind: 'error'; message: string };
+
+function normalizeRouteId(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function mapStatusToTone(status: MistakeDetailViewModel['status']): 'dark' | 'light' | 'success' {
+  if (status === 'mastered') {
+    return 'success';
+  }
+  if (status === 'archived') {
+    return 'light';
+  }
+  return 'dark';
+}
+
+function buildCurrentReviewIndex(detail: MistakeDetailViewModel): number | undefined {
+  if (detail.reviewCount >= detail.maxReviewCount) {
+    return undefined;
+  }
+  return Math.min(detail.maxReviewCount, detail.reviewCount + 1);
+}
+
+function buildPlaceholderButtonTitle(detail: MistakeDetailViewModel): string {
+  if (detail.status === 'active') {
+    return `标记第 ${Math.min(detail.maxReviewCount, detail.reviewCount + 1)} 刷完成`;
+  }
+  return '标记本次复做完成';
+}
+
+function ImageSlotCard({ slot }: { slot: DetailImageSlot }) {
+  const [imageFailed, setImageFailed] = useState(false);
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [slot.uri]);
+
+  const hasRenderableImage = !!slot.uri && slot.exists === true && !imageFailed;
+
   return (
-    <View style={styles.diagramWrap}>
-      <View style={styles.diagramAxisX} />
-      <View style={styles.diagramAxisY} />
-      <View style={styles.diagramCurve} />
-    </View>
+    <CardContainer style={styles.slotCard} padding={spacing.md}>
+      <Text style={styles.slotTitle}>{slot.title}</Text>
+
+      <View style={styles.slotBody}>
+        {hasRenderableImage ? (
+          <Image
+            source={{ uri: slot.uri! }}
+            style={styles.slotImage}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
+        ) : slot.uri ? (
+          <Text style={styles.slotMissingText}>图片文件不存在</Text>
+        ) : (
+          <Text style={styles.slotEmptyText}>{slot.emptyText}</Text>
+        )}
+      </View>
+
+      {slot.fileSize !== undefined && slot.fileSize !== null ? (
+        <Text style={styles.slotInfoText}>大小：{Math.round(slot.fileSize / 1024)} KB</Text>
+      ) : null}
+    </CardContainer>
   );
 }
 
-function ContentPreviewCard({ preview }: { preview: DetailPreviewMock }) {
+function StateCard({
+  title,
+  message,
+  onBack,
+  onRetry,
+}: {
+  title: string;
+  message: string;
+  onBack: () => void;
+  onRetry?: () => void;
+}) {
   return (
-    <CardContainer style={styles.previewCard} padding={spacing.md}>
-      <Text style={styles.previewTitle}>{preview.title}</Text>
-      <View style={styles.previewInner}>
-        {preview.type === 'diagram' ? (
-          <DiagramPlaceholder />
-        ) : (
-          <Text style={styles.previewText}>{preview.content}</Text>
-        )}
+    <CardContainer style={styles.stateCard} padding={spacing.lg}>
+      <Text style={styles.stateTitle}>{title}</Text>
+      <Text style={styles.stateMessage}>{message}</Text>
+
+      <View style={styles.stateActions}>
+        <Pressable style={styles.stateSecondaryButton} onPress={onBack}>
+          <Text style={styles.stateSecondaryButtonText}>返回</Text>
+        </Pressable>
+        {onRetry ? (
+          <Pressable style={styles.statePrimaryButton} onPress={onRetry}>
+            <Text style={styles.statePrimaryButtonText}>重试</Text>
+          </Pressable>
+        ) : null}
       </View>
     </CardContainer>
   );
@@ -41,10 +136,54 @@ function ContentPreviewCard({ preview }: { preview: DetailPreviewMock }) {
 export default function MistakeDetailScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id?: string | string[] }>();
+  const routeId = useMemo(() => normalizeRouteId(id), [id]);
 
-  const routeId = Array.isArray(id) ? id[0] : id ?? 'demo-1';
-  const detail = getMistakeDetailMock(routeId);
-  const summaryPillTone = detail.progressLabel === '已七刷' ? 'light' : 'dark';
+  const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
+  const requestIdRef = useRef(0);
+
+  const loadDetail = useCallback(async () => {
+    if (!routeId) {
+      setState({
+        kind: 'error',
+        message: '错题 id 无效，请返回重试。',
+      });
+      return;
+    }
+
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setState({ kind: 'loading' });
+
+    const result = await MistakeDetailService.getMistakeDetail(routeId);
+    if (requestId !== requestIdRef.current) {
+      return;
+    }
+
+    if (result.ok && result.detail) {
+      setState({
+        kind: 'success',
+        detail: result.detail,
+      });
+      return;
+    }
+
+    if (result.notFound) {
+      setState({
+        kind: 'notFound',
+        message: result.errorMessage ?? '未找到对应错题。',
+      });
+      return;
+    }
+
+    setState({
+      kind: 'error',
+      message: result.errorMessage ?? '读取错题详情失败，请稍后重试。',
+    });
+  }, [routeId]);
+
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
 
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
@@ -52,59 +191,88 @@ export default function MistakeDetailScreen() {
         <Text style={styles.backText}>← 返回今日任务</Text>
       </Pressable>
 
-      <BrandHeader title={mistakeDetailBrandMock.title} subtitle={mistakeDetailBrandMock.subtitle} />
+      <BrandHeader title={BRAND.title} subtitle={BRAND.subtitle} />
 
-      <CardContainer style={styles.summaryCard} padding={spacing.xl}>
-        <Text style={styles.summaryMeta}>
-          {detail.code} · {detail.module}
-        </Text>
-        <Text style={styles.summaryTitle}>{detail.title}</Text>
+      {state.kind === 'loading' ? (
+        <CardContainer style={styles.loadingCard} padding={spacing.lg}>
+          <ActivityIndicator size="small" color={colors.textPrimary} />
+          <Text style={styles.loadingText}>正在读取错题详情...</Text>
+        </CardContainer>
+      ) : null}
 
-        <View style={styles.summaryBottomRow}>
-          <View style={styles.progressLabelWrap}>
-            <Text style={styles.progressNumber}>7</Text>
-            <Text style={styles.progressText}>刷进度</Text>
-          </View>
+      {state.kind === 'error' ? (
+        <StateCard
+          title="加载失败"
+          message={state.message}
+          onBack={() => router.back()}
+          onRetry={routeId ? () => void loadDetail() : undefined}
+        />
+      ) : null}
 
-          <ProgressDots
-            total={detail.progress.total}
-            current={detail.progress.current}
-            completed={detail.progress.completed}
-            style={styles.summaryDots}
-          />
+      {state.kind === 'notFound' ? (
+        <StateCard
+          title="未找到错题"
+          message={state.message}
+          onBack={() => router.back()}
+          onRetry={routeId ? () => void loadDetail() : undefined}
+        />
+      ) : null}
 
-          <StatusPill label={detail.progressLabel} tone={summaryPillTone} />
-        </View>
-      </CardContainer>
+      {state.kind === 'success' ? (
+        <>
+          <CardContainer style={styles.summaryCard} padding={spacing.xl}>
+            <Text style={styles.summaryMeta}>{state.detail.module}</Text>
+            <Text style={styles.summaryTitle}>{state.detail.title}</Text>
+            <Text style={styles.summarySubtitle}>{state.detail.subtitle}</Text>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.previewRow}>
-        {detail.previews.map((preview) => (
-          <ContentPreviewCard key={preview.id} preview={preview} />
-        ))}
-      </ScrollView>
+            <View style={styles.summaryBottomRow}>
+              <View style={styles.progressLabelWrap}>
+                <Text style={styles.progressNumber}>{state.detail.reviewCount}</Text>
+                <Text style={styles.progressText}>/{state.detail.maxReviewCount}</Text>
+              </View>
 
-      <CardContainer style={styles.captureCard} padding={spacing.lg}>
-        <SectionTitle title="本次复做记录" />
+              <ProgressDots
+                total={state.detail.maxReviewCount}
+                current={buildCurrentReviewIndex(state.detail)}
+                completed={state.detail.reviewCount}
+                style={styles.summaryDots}
+              />
 
-        <View style={styles.capturePlaceholder}>
-          <View style={styles.cameraCircle}>
-            <View style={styles.cameraBody}>
-              <View style={styles.cameraLens} />
+              <StatusPill label={state.detail.statusLabel} tone={mapStatusToTone(state.detail.status)} />
             </View>
-          </View>
 
-          <Text style={styles.captureTitle}>{detail.capture.title}</Text>
-          <Text style={styles.captureSubtitle}>{detail.capture.subtitle}</Text>
-        </View>
-      </CardContainer>
+            <View style={styles.summaryInfoList}>
+              <Text style={styles.summaryInfoText}>难度：{state.detail.difficulty}</Text>
+              {state.detail.errorReason ? (
+                <Text style={styles.summaryInfoText}>错因：{state.detail.errorReason}</Text>
+              ) : null}
+              {state.detail.note ? <Text style={styles.summaryInfoText}>备注：{state.detail.note}</Text> : null}
+            </View>
+          </CardContainer>
 
-      <PrimaryButton
-        title={detail.completeButtonText}
-        onPress={() => Alert.alert('占位提示', '当前为 UI 占位，后续接入复做逻辑')}
-      />
+          <CardContainer style={styles.imagesSectionCard} padding={spacing.lg}>
+            <View style={styles.imagesHeaderRow}>
+              <SectionTitle title="题目 / 做法 / 答案" />
+              <Pressable onPress={() => void loadDetail()} style={styles.refreshButton}>
+                <Text style={styles.refreshButtonText}>刷新</Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.slotList}>
+              {state.detail.imageSlots
+                .filter((slot) => slot.type !== 'review_solution')
+                .map((slot) => (
+                  <ImageSlotCard key={slot.type} slot={slot} />
+                ))}
+            </View>
+          </CardContainer>
+
+          <PrimaryButton
+            title={buildPlaceholderButtonTitle(state.detail)}
+            onPress={() => Alert.alert('占位提示', '第 8 步接入复做流程')}
+          />
+        </>
+      ) : null}
     </ScreenContainer>
   );
 }
@@ -123,18 +291,75 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '600',
   },
+  loadingCard: {
+    borderRadius: radius.xl,
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  loadingText: {
+    ...typography.body,
+    color: colors.textSecondary,
+  },
+  stateCard: {
+    borderRadius: radius.xl,
+    gap: spacing.sm,
+  },
+  stateTitle: {
+    ...typography.sectionTitle,
+    fontSize: 22,
+    lineHeight: 30,
+  },
+  stateMessage: {
+    ...typography.body,
+    color: colors.textSecondary,
+  },
+  stateActions: {
+    marginTop: spacing.sm,
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  statePrimaryButton: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  statePrimaryButtonText: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '700',
+  },
+  stateSecondaryButton: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  stateSecondaryButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
   summaryCard: {
     borderRadius: radius.xl,
   },
   summaryMeta: {
-    ...typography.titleMedium,
-    fontSize: 20,
-    lineHeight: 28,
+    ...typography.body,
     color: colors.textSecondary,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   summaryTitle: {
     ...typography.titleMedium,
+    marginTop: spacing.xs,
+    fontSize: 32,
+    lineHeight: 40,
+  },
+  summarySubtitle: {
+    ...typography.body,
     marginTop: spacing.sm,
   },
   summaryBottomRow: {
@@ -151,121 +376,90 @@ const styles = StyleSheet.create({
   },
   progressNumber: {
     ...typography.titleMedium,
-    fontSize: 44,
-    lineHeight: 48,
+    fontSize: 42,
+    lineHeight: 46,
   },
   progressText: {
     ...typography.body,
     color: colors.textSecondary,
-    fontSize: 22,
-    lineHeight: 28,
+    fontSize: 18,
+    lineHeight: 24,
   },
   summaryDots: {
     flex: 1,
     justifyContent: 'center',
   },
-  previewRow: {
-    gap: spacing.md,
-    paddingRight: spacing.xs,
-  },
-  previewCard: {
-    width: 220,
-    borderRadius: radius.lg,
-  },
-  previewTitle: {
-    ...typography.sectionTitle,
-    textAlign: 'center',
-    fontSize: 18,
-    lineHeight: 24,
-  },
-  previewInner: {
+  summaryInfoList: {
     marginTop: spacing.md,
-    minHeight: 246,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.white,
-    padding: spacing.md,
+    gap: spacing.xs,
   },
-  diagramWrap: {
-    flex: 1,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
+  summaryInfoText: {
+    ...typography.body,
+    color: colors.textSecondary,
   },
-  diagramAxisX: {
-    position: 'absolute',
-    width: 136,
-    height: 1.5,
-    backgroundColor: '#8E949D',
-  },
-  diagramAxisY: {
-    position: 'absolute',
-    width: 1.5,
-    height: 136,
-    backgroundColor: '#8E949D',
-  },
-  diagramCurve: {
-    width: 98,
-    height: 68,
-    borderWidth: 1.5,
-    borderColor: '#8E949D',
-    borderRadius: radius.pill,
-    transform: [{ rotate: '-16deg' }],
-  },
-  previewText: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    lineHeight: 24,
-  },
-  captureCard: {
+  imagesSectionCard: {
     borderRadius: radius.xl,
     gap: spacing.md,
   },
-  capturePlaceholder: {
-    borderWidth: 2,
-    borderStyle: 'dashed',
-    borderColor: '#C4C8CE',
+  imagesHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  refreshButton: {
     borderRadius: radius.lg,
-    minHeight: 250,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    paddingHorizontal: spacing.lg,
-  },
-  cameraCircle: {
-    width: 88,
-    height: 88,
-    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
   },
-  cameraBody: {
-    width: 40,
-    height: 28,
-    borderRadius: radius.sm,
-    borderWidth: 2,
-    borderColor: colors.black,
-    alignItems: 'center',
-    justifyContent: 'center',
+  refreshButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
   },
-  cameraLens: {
-    width: 14,
-    height: 14,
-    borderRadius: radius.pill,
-    borderWidth: 2,
-    borderColor: colors.black,
+  slotList: {
+    gap: spacing.sm,
   },
-  captureTitle: {
+  slotCard: {
+    borderRadius: radius.lg,
+  },
+  slotTitle: {
     ...typography.sectionTitle,
-    fontSize: 32,
-    lineHeight: 40,
+    fontSize: 18,
+    lineHeight: 24,
   },
-  captureSubtitle: {
+  slotBody: {
+    marginTop: spacing.sm,
+    minHeight: 180,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceMuted,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.md,
+  },
+  slotImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: radius.md,
+  },
+  slotMissingText: {
+    ...typography.body,
+    color: colors.danger,
+    textAlign: 'center',
+  },
+  slotEmptyText: {
     ...typography.body,
     color: colors.textMuted,
     textAlign: 'center',
+  },
+  slotInfoText: {
+    marginTop: spacing.xs,
+    ...typography.caption,
+    color: colors.textMuted,
   },
 });
