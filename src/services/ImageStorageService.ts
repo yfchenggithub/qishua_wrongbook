@@ -23,6 +23,18 @@ type SaveTempImageParams = {
   index?: number;
 };
 
+function toShortUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+
+  const trimmed = uri.trim();
+  if (trimmed.length <= 64) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 28)}...${trimmed.slice(-20)}`;
+}
+
 function splitRelativePath(relativePath: string): string[] {
   return relativePath.split('/').filter(Boolean);
 }
@@ -101,6 +113,11 @@ export async function saveTempImageToMistakeFolder(
     const sourceFile = new File(params.tempUri);
 
     if (!sourceFile.exists) {
+      Logger.warn(SERVICE_SCOPE, 'Save image failed because temp image does not exist.', {
+        mistakeId: params.mistakeId,
+        type: normalizedType,
+        tempUriShort: toShortUri(params.tempUri),
+      });
       return {
         ok: false,
         errorMessage: 'Temporary image does not exist.',
@@ -115,6 +132,13 @@ export async function saveTempImageToMistakeFolder(
       normalizeStartIndex(params.index),
     );
 
+    Logger.info(SERVICE_SCOPE, 'Start copying image into local mistake folder.', {
+      mistakeId: params.mistakeId,
+      type: normalizedType,
+      tempUriShort: toShortUri(params.tempUri),
+      targetFileName: fileName,
+      targetDirShort: toShortUri(mistakeDir.uri),
+    });
     sourceFile.copy(targetFile);
 
     const fileInfo = targetFile.info();
@@ -132,13 +156,24 @@ export async function saveTempImageToMistakeFolder(
         params.fileSize ?? (typeof fileInfo.size === 'number' ? fileInfo.size : null),
     };
 
+    Logger.info(SERVICE_SCOPE, 'Saved image file into local mistake folder.', {
+      mistakeId: params.mistakeId,
+      type: normalizedType,
+      targetUriShort: toShortUri(image.uri),
+      fileName: image.fileName,
+      fileSize: image.fileSize ?? null,
+    });
+
     return {
       ok: true,
       image,
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to persist temporary image.', {
-      params,
+      mistakeId: params.mistakeId,
+      type: params.type,
+      index: params.index,
+      tempUriShort: toShortUri(params.tempUri),
       error,
     });
     return {
@@ -190,13 +225,22 @@ export async function deleteLocalImage(uri: string): Promise<boolean> {
   try {
     const file = new File(uri);
     if (!file.exists) {
+      Logger.warn(SERVICE_SCOPE, 'Delete local image failed because file does not exist.', {
+        uriShort: toShortUri(uri),
+      });
       return false;
     }
 
     file.delete();
+    Logger.info(SERVICE_SCOPE, 'Deleted local image successfully.', {
+      uriShort: toShortUri(uri),
+    });
     return true;
   } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'Failed to delete local image.', { uri, error });
+    Logger.error(SERVICE_SCOPE, 'Failed to delete local image.', {
+      uriShort: toShortUri(uri),
+      error,
+    });
     return false;
   }
 }
@@ -205,10 +249,17 @@ export async function deleteMistakeImageFolder(mistakeId: string): Promise<boole
   try {
     const mistakeDir = getMistakeDirectory(mistakeId);
     if (!mistakeDir.exists) {
+      Logger.warn(SERVICE_SCOPE, 'Delete mistake image folder skipped because folder does not exist.', {
+        mistakeId,
+      });
       return false;
     }
 
     mistakeDir.delete();
+    Logger.info(SERVICE_SCOPE, 'Deleted mistake image folder successfully.', {
+      mistakeId,
+      directoryShort: toShortUri(mistakeDir.uri),
+    });
     return true;
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to delete mistake image folder.', {

@@ -24,6 +24,12 @@ type MistakeImageInput = {
   uri: string;
 };
 
+type DraftImagePresence = {
+  hasQuestionImage: boolean;
+  hasMySolutionImage: boolean;
+  hasAnswerImage: boolean;
+};
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -37,6 +43,26 @@ function normalizeOptionalText(value: string | null | undefined): string | undef
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function toShortUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+
+  const trimmed = uri.trim();
+  if (trimmed.length <= 64) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 28)}...${trimmed.slice(-20)}`;
+}
+
+function getDraftImagePresence(draft: AddMistakeDraft): DraftImagePresence {
+  return {
+    hasQuestionImage: !!draft.questionImage?.uri?.trim(),
+    hasMySolutionImage: !!draft.mySolutionImage?.uri?.trim(),
+    hasAnswerImage: !!draft.answerImage?.uri?.trim(),
+  };
 }
 
 function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
@@ -73,7 +99,7 @@ async function persistDraft(
   draft: AddMistakeDraft,
   mistakeId: string,
   onMistakeCreated?: () => void,
-): Promise<void> {
+): Promise<number> {
   const moduleName = draft.module?.trim();
   if (!moduleName) {
     throw new Error('模块不能为空。');
@@ -85,6 +111,16 @@ async function persistDraft(
   }
 
   const answerImageUri = normalizeOptionalText(draft.answerImage?.uri) ?? null;
+  const imagePresence = getDraftImagePresence(draft);
+
+  Logger.info(SERVICE_SCOPE, 'Start persisting mistake draft.', {
+    draftId: draft.draftId,
+    mistakeId,
+    module: moduleName,
+    imagePresence,
+    questionImageUriShort: toShortUri(questionImageUri),
+    answerImageUriShort: toShortUri(answerImageUri),
+  });
 
   await MistakeRepository.createMistake({
     id: mistakeId,
@@ -99,6 +135,10 @@ async function persistDraft(
     next_review_at: new Date().toISOString(),
   });
   onMistakeCreated?.();
+  Logger.info(SERVICE_SCOPE, 'Created mistakes row successfully.', {
+    draftId: draft.draftId,
+    mistakeId,
+  });
 
   const imageInputs = collectImageInputs(draft);
   for (const image of imageInputs) {
@@ -108,13 +148,32 @@ async function persistDraft(
       uri: image.uri,
     });
   }
+
+  Logger.info(SERVICE_SCOPE, 'Created mistake_images rows successfully.', {
+    draftId: draft.draftId,
+    mistakeId,
+    mistakeImageCount: imageInputs.length,
+  });
+
+  return imageInputs.length;
 }
 
 export async function createMistakeFromDraft(
   draft: AddMistakeDraft,
 ): Promise<CreateMistakeFromDraftResult> {
+  const imagePresence = getDraftImagePresence(draft);
+  Logger.info(SERVICE_SCOPE, 'Start saving mistake draft.', {
+    draftId: draft.draftId,
+    imagePresence,
+  });
+
   const validation = validateAddMistakeDraft(draft);
   if (!validation.ok) {
+    Logger.warn(SERVICE_SCOPE, 'Draft validation failed before save.', {
+      draftId: draft.draftId,
+      errors: validation.errors,
+      imagePresence,
+    });
     return {
       ok: false,
       errorMessage: validation.errors.join('\n'),
@@ -123,6 +182,9 @@ export async function createMistakeFromDraft(
 
   const mistakeId = typeof draft.draftId === 'string' ? draft.draftId.trim() : '';
   if (!mistakeId) {
+    Logger.warn(SERVICE_SCOPE, 'Draft save aborted because draftId is empty.', {
+      draftId: draft.draftId,
+    });
     return {
       ok: false,
       errorMessage: 'draftId 不能为空。',
@@ -130,11 +192,12 @@ export async function createMistakeFromDraft(
   }
 
   let mistakeCreated = false;
+  let mistakeImageCount = 0;
 
   try {
     const db = (await getDatabase()) as TransactionCapableDatabase;
     const runPersistFlow = async () => {
-      await persistDraft(draft, mistakeId, () => {
+      mistakeImageCount = await persistDraft(draft, mistakeId, () => {
         mistakeCreated = true;
       });
     };
@@ -147,26 +210,39 @@ export async function createMistakeFromDraft(
       await runPersistFlow();
     }
 
+    Logger.info(SERVICE_SCOPE, 'Saved mistake draft successfully.', {
+      draftId: draft.draftId,
+      mistakeId,
+      mistakeImageCount,
+    });
+
     return {
       ok: true,
       mistakeId,
     };
   } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'createMistakeFromDraft failed.', {
-      mistakeId,
-      error,
-    });
-
     if (mistakeCreated) {
       try {
         await MistakeRepository.deleteMistake(mistakeId);
+        Logger.warn(SERVICE_SCOPE, 'Compensating rollback succeeded for created mistake.', {
+          draftId: draft.draftId,
+          mistakeId,
+        });
       } catch (rollbackError) {
         Logger.error(SERVICE_SCOPE, 'Compensating rollback failed.', {
+          draftId: draft.draftId,
           mistakeId,
           rollbackError,
         });
       }
     }
+
+    Logger.error(SERVICE_SCOPE, 'Failed to save mistake draft.', {
+      draftId: draft.draftId,
+      mistakeId,
+      imagePresence,
+      error,
+    });
 
     return {
       ok: false,

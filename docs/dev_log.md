@@ -1045,3 +1045,30 @@
   - Android 真机完整回归仍需按清单执行（相机权限、重启持久化、7/7连续操作）。
 - 下一步：
   - 进入最终回归执行阶段（真机全链路跑通并记录阻断问题）。
+### 2026-05-08 - 第9步阶段9-C：补关键日志与错误提示
+
+- 任务目标：增强 Android 人工测试可观测性，在不新增业务功能前提下补齐关键服务日志与页面错误定位能力。
+- 修改文件：
+  - `src/services/CreateMistakeService.ts`
+  - `src/services/CompleteReviewService.ts`
+  - `src/services/ImageService.ts`
+  - `src/services/ImageStorageService.ts`
+  - `src/services/MistakeListService.ts`
+  - `src/services/MistakeDetailService.ts`
+  - `app/(tabs)/library.tsx`
+  - `docs/MANUAL_TEST_CHECKLIST.md`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 录入链路补日志：开始保存、draftId/mistakeId、图片存在性、mistakes 写入成功、mistake_images 数量、保存成功/失败。
+  - 复做链路补日志：开始提交、current/expected reviewIndex、newReviewCount/newStatus/nextReviewAt、事务内每步成功、事务成功/失败、孤儿图片清理尝试与结果。
+  - 图片链路补日志：开始拍照、用户取消、拍照成功、开始复制、保存成功/失败、删除成功/失败。
+  - 新增短 URI 输出策略，日志中仅打印短版本 URI，避免超长路径噪声。
+  - 题库页补充加载失败 Logger.error，页面错误文案保持可见。
+  - 新增 `docs/MANUAL_TEST_CHECKLIST.md`，补充 Expo 终端、adb logcat、截图与步骤记录建议。
+- 验收结果：
+  - 待执行：`npm run typecheck` / `npm run lint`。
+- 遗留问题：
+  - 可观测性增强为本地日志，不包含任何远程上报能力。
+- 下一步：
+  - 进入 9-D：基于真机回归日志做最小缺陷修复与最终收口。
+

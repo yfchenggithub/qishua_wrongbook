@@ -215,6 +215,7 @@ function mapMistakeToDetailViewModelWithRecords(
 export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResult> {
   const mistakeId = normalizeMistakeId(id);
   if (!mistakeId) {
+    Logger.warn(SERVICE_SCOPE, 'Skip loading mistake detail because mistake id is empty.');
     return {
       ok: false,
       errorMessage: '错题 id 不能为空。',
@@ -222,8 +223,14 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
   }
 
   try {
+    Logger.info(SERVICE_SCOPE, 'Start loading mistake detail.', {
+      mistakeId,
+    });
     const mistake = await MistakeRepository.getMistakeById(mistakeId);
     if (!mistake) {
+      Logger.warn(SERVICE_SCOPE, 'Mistake detail not found.', {
+        mistakeId,
+      });
       return {
         ok: false,
         notFound: true,
@@ -236,6 +243,14 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
     const mistakeReviewRecords = await ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId);
     const reviewRecords = mapReviewRecords(mistakeReviewRecords);
     const detail = mapMistakeToDetailViewModelWithRecords(mistake, imageSlots, reviewRecords);
+
+    Logger.info(SERVICE_SCOPE, 'Loaded mistake detail successfully.', {
+      mistakeId,
+      reviewCount: detail.reviewCount,
+      status: detail.status,
+      imageSlotCount: detail.imageSlots.length,
+      reviewRecordCount: detail.reviewRecords.length,
+    });
 
     return {
       ok: true,

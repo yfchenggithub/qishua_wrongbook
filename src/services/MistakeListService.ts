@@ -11,6 +11,14 @@ import { formatDateShort, isDueTodayOrBefore } from '@/src/utils/date';
 
 const SERVICE_SCOPE = 'MistakeListService';
 
+function toKeywordPreview(keyword: string): string {
+  const trimmed = keyword.trim();
+  if (trimmed.length <= 32) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 20)}...${trimmed.slice(-8)}`;
+}
+
 function normalizeKeyword(keyword: string): string | null {
   const trimmed = keyword.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -138,9 +146,21 @@ export function mapMistakeToListItem(mistake: Mistake): MistakeListItem {
 
 export async function getMistakeListItems(filter: MistakeListFilter): Promise<MistakeListItem[]> {
   try {
+    Logger.info(SERVICE_SCOPE, 'Start loading mistake list items.', {
+      segment: filter.segment,
+      keywordPreview: toKeywordPreview(filter.keyword),
+      module: filter.module ?? null,
+    });
     const options = buildListQueryOptions(filter);
     const mistakes = await MistakeRepository.listMistakes(options);
-    return mistakes.map(mapMistakeToListItem);
+    const listItems = mistakes.map(mapMistakeToListItem);
+    Logger.info(SERVICE_SCOPE, 'Loaded mistake list items successfully.', {
+      segment: filter.segment,
+      keywordPreview: toKeywordPreview(filter.keyword),
+      module: filter.module ?? null,
+      count: listItems.length,
+    });
+    return listItems;
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getMistakeListItems failed.', { filter, error });
     throw error;
@@ -153,12 +173,15 @@ export async function getMistakeListStats(): Promise<{
   mastered: number;
 }> {
   try {
+    Logger.info(SERVICE_SCOPE, 'Start loading mistake list stats.');
     const stats = await MistakeRepository.getMistakeStats();
-    return {
+    const mappedStats = {
       total: stats.total,
       due: stats.dueToday,
       mastered: stats.mastered,
     };
+    Logger.info(SERVICE_SCOPE, 'Loaded mistake list stats successfully.', mappedStats);
+    return mappedStats;
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getMistakeListStats failed.', error);
     throw error;

@@ -159,6 +159,11 @@ export default function LibraryScreen() {
         if (requestId !== requestIdRef.current) {
           return;
         }
+        Logger.error(PAGE_SCOPE, 'Failed to load library list.', {
+          filter,
+          mode,
+          error,
+        });
         setItems([]);
         setErrorMessage(error instanceof Error ? error.message : String(error));
       } finally {

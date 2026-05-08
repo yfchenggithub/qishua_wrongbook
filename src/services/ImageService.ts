@@ -33,6 +33,18 @@ interface PreparedImagePayload {
   fileSize?: number | null;
 }
 
+function toShortUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+
+  const trimmed = uri.trim();
+  if (trimmed.length <= 64) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 28)}...${trimmed.slice(-20)}`;
+}
+
 function canceledResult(errorMessage: string): SavedImageResult {
   return {
     ok: false,
@@ -78,9 +90,21 @@ async function prepareImageForStorage(
 export async function takePhotoAndSave(
   params: SaveImageParams,
 ): Promise<SavedImageResult> {
+  Logger.info(SERVICE_SCOPE, 'Start taking photo and saving image.', {
+    mistakeId: params.mistakeId,
+    type: params.type,
+    index: params.index,
+  });
+
   try {
     const picked = await takePhoto();
     if (picked.canceled) {
+      Logger.warn(SERVICE_SCOPE, 'User canceled taking photo.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        index: params.index,
+        reason: picked.errorMessage ?? null,
+      });
       return canceledResult(picked.errorMessage ?? 'User canceled taking photo.');
     }
 
@@ -91,6 +115,16 @@ export async function takePhotoAndSave(
       });
       return canceledResult('Invalid photo result. Please try again.');
     }
+
+    Logger.info(SERVICE_SCOPE, 'Photo captured successfully.', {
+      mistakeId: params.mistakeId,
+      type: params.type,
+      index: params.index,
+      tempUriShort: toShortUri(picked.tempUri),
+      width: picked.width,
+      height: picked.height,
+      fileSize: picked.fileSize ?? null,
+    });
 
     const preparedImage = await prepareImageForStorage(picked.tempUri, {
       width: picked.width,
@@ -112,6 +146,13 @@ export async function takePhotoAndSave(
       Logger.error(SERVICE_SCOPE, 'Failed to save taken photo to local folder.', {
         params,
         savedResult,
+      });
+    } else {
+      Logger.info(SERVICE_SCOPE, 'Saved taken photo to local folder successfully.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        index: params.index,
+        savedUriShort: toShortUri(savedResult.image?.uri),
       });
     }
 
@@ -152,9 +193,21 @@ export async function checkMediaLibraryPermission(): Promise<ImagePermissionResu
 export async function pickImageAndSave(
   params: SaveImageParams,
 ): Promise<SavedImageResult> {
+  Logger.info(SERVICE_SCOPE, 'Start picking image and saving.', {
+    mistakeId: params.mistakeId,
+    type: params.type,
+    index: params.index,
+  });
+
   try {
     const picked = await pickImageFromLibrary();
     if (picked.canceled) {
+      Logger.warn(SERVICE_SCOPE, 'User canceled picking image from library.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        index: params.index,
+        reason: picked.errorMessage ?? null,
+      });
       return canceledResult(picked.errorMessage ?? 'User canceled image selection.');
     }
 
@@ -165,6 +218,16 @@ export async function pickImageAndSave(
       });
       return canceledResult('Invalid image result. Please try again.');
     }
+
+    Logger.info(SERVICE_SCOPE, 'Picked image successfully.', {
+      mistakeId: params.mistakeId,
+      type: params.type,
+      index: params.index,
+      tempUriShort: toShortUri(picked.tempUri),
+      width: picked.width,
+      height: picked.height,
+      fileSize: picked.fileSize ?? null,
+    });
 
     const preparedImage = await prepareImageForStorage(picked.tempUri, {
       width: picked.width,
@@ -186,6 +249,13 @@ export async function pickImageAndSave(
       Logger.error(SERVICE_SCOPE, 'Failed to save picked image to local folder.', {
         params,
         savedResult,
+      });
+    } else {
+      Logger.info(SERVICE_SCOPE, 'Saved picked image to local folder successfully.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        index: params.index,
+        savedUriShort: toShortUri(savedResult.image?.uri),
       });
     }
 
@@ -226,11 +296,25 @@ export async function listLocalImagesByMistakeId(mistakeId: string): Promise<str
 }
 
 export async function deleteLocalImage(uri: string): Promise<boolean> {
+  Logger.info(SERVICE_SCOPE, 'Start deleting local image.', {
+    uriShort: toShortUri(uri),
+  });
+
   try {
-    return await deleteLocalImageFile(uri);
+    const deleted = await deleteLocalImageFile(uri);
+    if (deleted) {
+      Logger.info(SERVICE_SCOPE, 'Deleted local image successfully.', {
+        uriShort: toShortUri(uri),
+      });
+    } else {
+      Logger.warn(SERVICE_SCOPE, 'Delete local image failed.', {
+        uriShort: toShortUri(uri),
+      });
+    }
+    return deleted;
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Unexpected error in deleteLocalImage.', {
-      uri,
+      uriShort: toShortUri(uri),
       error,
     });
     return false;

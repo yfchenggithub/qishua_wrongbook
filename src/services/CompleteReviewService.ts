@@ -25,6 +25,18 @@ interface NormalizedCompleteReviewInput {
   cleanupImageOnFailure: boolean;
 }
 
+function toShortUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+
+  const trimmed = uri.trim();
+  if (trimmed.length <= 64) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 28)}...${trimmed.slice(-20)}`;
+}
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     const message = error.message.trim();
@@ -111,8 +123,20 @@ function buildCannotReviewMessage(reason?: string): string {
 }
 
 export async function completeReview(input: CompleteReviewInput): Promise<CompleteReviewResult> {
+  Logger.info(SERVICE_SCOPE, 'Start completeReview.', {
+    mistakeId: input.mistakeId,
+    reviewIndex: input.reviewIndex,
+    cleanupImageOnFailure: input.cleanupImageOnFailure !== false,
+    solutionImageUriShort: toShortUri(input.solutionImageUri),
+  });
+
   const normalizedInputResult = normalizeCompleteReviewInput(input);
   if (!normalizedInputResult.ok) {
+    Logger.warn(SERVICE_SCOPE, 'completeReview input validation failed.', {
+      mistakeId: input.mistakeId,
+      reviewIndex: input.reviewIndex,
+      errorMessage: normalizedInputResult.errorMessage,
+    });
     return {
       ok: false,
       errorMessage: normalizedInputResult.errorMessage,
@@ -124,17 +148,35 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
   try {
     const mistake = await MistakeRepository.getMistakeById(normalizedInput.mistakeId);
     if (!mistake) {
+      Logger.warn(SERVICE_SCOPE, 'completeReview aborted because mistake does not exist.', {
+        mistakeId: normalizedInput.mistakeId,
+        reviewIndex: normalizedInput.reviewIndex,
+      });
       return {
         ok: false,
         errorMessage: '错题不存在',
       };
     }
 
+    Logger.info(SERVICE_SCOPE, 'Loaded mistake for completeReview.', {
+      mistakeId: normalizedInput.mistakeId,
+      reviewIndex: normalizedInput.reviewIndex,
+      currentReviewCount: mistake.review_count,
+      currentStatus: mistake.status,
+    });
+
     const canReviewResult = canStartReview({
       status: mistake.status,
       reviewCount: mistake.review_count,
     });
     if (!canReviewResult.canReview) {
+      Logger.warn(SERVICE_SCOPE, 'completeReview rejected by canStartReview guard.', {
+        mistakeId: normalizedInput.mistakeId,
+        reviewIndex: normalizedInput.reviewIndex,
+        currentReviewCount: mistake.review_count,
+        currentStatus: mistake.status,
+        reason: canReviewResult.reason ?? null,
+      });
       return {
         ok: false,
         errorMessage: buildCannotReviewMessage(canReviewResult.reason),
@@ -142,7 +184,19 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     }
 
     const expectedReviewIndex = getNextReviewIndex(mistake.review_count);
+    Logger.info(SERVICE_SCOPE, 'Calculated expected review index for completeReview.', {
+      mistakeId: normalizedInput.mistakeId,
+      currentReviewCount: mistake.review_count,
+      expectedReviewIndex,
+      inputReviewIndex: normalizedInput.reviewIndex,
+    });
     if (normalizedInput.reviewIndex !== expectedReviewIndex) {
+      Logger.warn(SERVICE_SCOPE, 'completeReview rejected because reviewIndex mismatched expected value.', {
+        mistakeId: normalizedInput.mistakeId,
+        currentReviewCount: mistake.review_count,
+        expectedReviewIndex,
+        inputReviewIndex: normalizedInput.reviewIndex,
+      });
       return {
         ok: false,
         errorMessage: REVIEW_STATE_CHANGED_MESSAGE,
@@ -153,6 +207,14 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     const newStatus = getReviewStatusAfterComplete(newReviewCount);
     const nextReviewAt = calculateNextReviewAt(newReviewCount);
     const nowIso = new Date().toISOString();
+    Logger.info(SERVICE_SCOPE, 'Calculated review progress update in completeReview.', {
+      mistakeId: normalizedInput.mistakeId,
+      reviewIndex: normalizedInput.reviewIndex,
+      currentReviewCount: mistake.review_count,
+      newReviewCount,
+      newStatus,
+      nextReviewAt,
+    });
 
     try {
       await withDatabaseTransaction(async (db) => {
@@ -163,12 +225,21 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           result: normalizedInput.result,
           createdAt: nowIso,
         });
+        Logger.info(SERVICE_SCOPE, 'Created review_record successfully in transaction.', {
+          mistakeId: normalizedInput.mistakeId,
+          reviewIndex: normalizedInput.reviewIndex,
+        });
 
         await MistakeImageRepository.createMistakeImageInTransaction(db, {
           mistake_id: normalizedInput.mistakeId,
           type: 'review_solution',
           uri: normalizedInput.solutionImageUri,
           createdAt: nowIso,
+        });
+        Logger.info(SERVICE_SCOPE, 'Created review_solution mistake_images row successfully in transaction.', {
+          mistakeId: normalizedInput.mistakeId,
+          reviewIndex: normalizedInput.reviewIndex,
+          solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
         });
 
         const affectedRows = await MistakeRepository.updateReviewProgressInTransaction(db, {
@@ -183,28 +254,64 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
         if (affectedRows <= 0) {
           throw new Error(REVIEW_STATE_CHANGED_MESSAGE);
         }
+
+        Logger.info(SERVICE_SCOPE, 'Updated mistakes review progress successfully in transaction.', {
+          mistakeId: normalizedInput.mistakeId,
+          reviewIndex: normalizedInput.reviewIndex,
+          affectedRows,
+          oldReviewCount: mistake.review_count,
+          newReviewCount,
+          newStatus,
+          nextReviewAt,
+        });
+      });
+      Logger.info(SERVICE_SCOPE, 'completeReview transaction committed successfully.', {
+        mistakeId: normalizedInput.mistakeId,
+        reviewIndex: normalizedInput.reviewIndex,
+        newReviewCount,
+        newStatus,
+        nextReviewAt,
       });
     } catch (error) {
       if (normalizedInput.cleanupImageOnFailure) {
+        Logger.warn(SERVICE_SCOPE, 'Attempting to cleanup orphan review image after transaction failure.', {
+          mistakeId: normalizedInput.mistakeId,
+          reviewIndex: normalizedInput.reviewIndex,
+          solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
+        });
         try {
           const cleaned = await ImageService.deleteLocalImage(normalizedInput.solutionImageUri);
           if (!cleaned) {
             Logger.warn(SERVICE_SCOPE, 'Failed to cleanup orphan review image after transaction failure.', {
               mistakeId: normalizedInput.mistakeId,
-              solutionImageUri: normalizedInput.solutionImageUri,
+              reviewIndex: normalizedInput.reviewIndex,
+              solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
+            });
+          } else {
+            Logger.info(SERVICE_SCOPE, 'Cleaned orphan review image after transaction failure.', {
+              mistakeId: normalizedInput.mistakeId,
+              reviewIndex: normalizedInput.reviewIndex,
+              solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
             });
           }
         } catch (cleanupError) {
           Logger.warn(SERVICE_SCOPE, 'Cleanup orphan review image threw an exception.', {
             mistakeId: normalizedInput.mistakeId,
-            solutionImageUri: normalizedInput.solutionImageUri,
+            reviewIndex: normalizedInput.reviewIndex,
+            solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
             cleanupError,
           });
         }
       }
 
       Logger.error(SERVICE_SCOPE, 'completeReview transaction failed.', {
-        input: normalizedInput,
+        mistakeId: normalizedInput.mistakeId,
+        reviewIndex: normalizedInput.reviewIndex,
+        currentReviewCount: mistake.review_count,
+        newReviewCount,
+        newStatus,
+        nextReviewAt,
+        solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
         error,
       });
       return {
@@ -212,6 +319,14 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
         errorMessage: toErrorMessage(error),
       };
     }
+
+    Logger.info(SERVICE_SCOPE, 'completeReview finished successfully.', {
+      mistakeId: normalizedInput.mistakeId,
+      reviewIndex: normalizedInput.reviewIndex,
+      newReviewCount,
+      newStatus,
+      nextReviewAt: newStatus === REVIEW_STATUS.MASTERED ? null : nextReviewAt,
+    });
 
     return {
       ok: true,
@@ -223,7 +338,9 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'completeReview failed unexpectedly.', {
-      input: normalizedInput,
+      mistakeId: normalizedInput.mistakeId,
+      reviewIndex: normalizedInput.reviewIndex,
+      solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
       error,
     });
     return {
