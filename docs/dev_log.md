@@ -846,3 +846,38 @@
   - `npm run typecheck` 当前被 `.expo/types/router.d.ts` 语法损坏阻塞（非本阶段业务代码逻辑报错）。
 - 下一步：
   - 进入 7-E：详情页交互与状态文案收口（含 notFound/error 的体验一致性、图片区提示文案统一、Android 真机回归清单补齐）。
+
+### 2026-05-08 - 第7步阶段7-E：详情页 loading / error / not found / 图片缺失状态完善
+
+- 任务目标：不新增业务能力，完善详情页异常状态可用性与可验收性，确保图片异常不影响整页可读性。
+- 修改文件：
+  - `app/mistake/[id].tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - Loading 状态：
+    - 首次进入显示 `正在加载错题...`，保留页面骨架避免白屏。
+    - 手动刷新支持 `keepCurrent` 模式：保留当前详情内容，仅显示“刷新中...”，减少闪烁。
+  - Not Found 状态：
+    - 统一标题/文案为“没有找到这道错题”。
+    - 展示 `错题 ID` 辅助定位。
+    - 提供“返回”与“刷新”按钮。
+  - Error 状态：
+    - 标题改为“读取错题失败”。
+    - 错误文案通过 `toBriefErrorMessage` 压缩为简短版本。
+    - 提供“重试”与“返回”按钮。
+    - 页面层增加 `Logger.error` 记录（无效 id、读取失败、异常抛错）。
+  - 返回行为：
+    - 优先 `router.back()`；若不可返回，回退到 `router.replace('/(tabs)/library')`。
+  - 复做按钮占位文案：
+    - `active`：`开始第 N 刷`（首刷）或 `标记第 N 刷完成`（后续刷次）。
+    - `mastered`：`已完成七刷`。
+    - `archived`：`已归档`。
+    - 非 `active` 状态按钮禁用；`active` 点击仅提示“第 8 步接入复做流程”。
+  - 图片异常策略：
+    - 继续复用 `DetailImageCard`：空 uri 显示 `emptyText`、文件缺失显示“图片文件不存在”、加载失败显示“图片加载失败”。
+    - 单张图片异常不影响页面其他内容与状态。
+- 验收结果：
+  - `npx eslint "app/mistake/[id].tsx" --no-cache` 通过。
+  - `npm run typecheck` 仍被 `.expo/types/router.d.ts` 语法损坏阻塞（非本阶段业务改动引入）。
+- 下一步：
+  - 进入 7-F：详情页交互验收收口（Android 真机回归路径、边界场景脚本化清单、状态文案与按钮策略最终统一）。
