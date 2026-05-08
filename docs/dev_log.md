@@ -909,3 +909,31 @@
 - 下一步：
   - 建议进入 7-G：详情页入口到回退链路的 Android 真机回归（首页/题库/空状态/异常状态联测）并收口测试清单。
 
+
+### 2026-05-08 - 第7步阶段7-G：/dev/db 调试能力增强（详情页可达性核验）
+
+- 任务目标：增强 `/dev/db` 最近错题调试列表，支持快速判断某条错题能否进入真实详情页，不改正式业务页面。
+- 修改文件：
+  - `app/dev/db.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 最近错题列表新增字段：
+    - `id`
+    - `title`
+    - `module`
+    - `question_image_uri_has_value`（题目图 uri 是否有值）
+    - `question_image_exists`（题目图文件是否存在；无题目图时显示 `(无题目图)`）
+    - `review_count`
+    - `status`
+  - 最近错题列表新增“打开详情页”按钮：
+    - 点击执行 `router.push(`/mistake/${mistake.id}`)`。
+    - 增加 `id` 兜底校验，空 id 时仅 `Logger.warn`，不跳转。
+  - 轻量实现方式：
+    - 复用已有 `MistakeRepository.listMistakes`。
+    - 复用已有 `ImageStorageService.getImageInfo` 检查题目图文件存在性。
+    - 保留原有“查看该错题图片记录”按钮与结构，不大改开发页。
+- 验收结果：
+  - `npx eslint "app/dev/db.tsx" --no-cache` 通过。
+  - `npm run typecheck` 仍被 `.expo/types/router.d.ts` 语法损坏阻塞（非本阶段改动引入）。
+- 下一步：
+  - 可进入 7-H：详情页与调试页联动回归（从 `/dev/db` 一键打开详情，覆盖存在图/缺图/无图场景）。

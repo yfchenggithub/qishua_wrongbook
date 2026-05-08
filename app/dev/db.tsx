@@ -23,6 +23,8 @@ type MistakeDebugItem = {
   id: string;
   title?: string | null;
   module: string;
+  question_image_has_value: boolean;
+  question_image_exists: boolean | null;
   error_reason?: string | null;
   difficulty: number;
   question_image_uri?: string | null;
@@ -63,6 +65,15 @@ function formatNullable(value: string | number | null | undefined): string {
     return '(空)';
   }
   return String(value);
+}
+
+function hasNonEmptyText(value: string | null | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeMistakeId(id: string): string | null {
+  const normalized = typeof id === 'string' ? id.trim() : '';
+  return normalized.length > 0 ? normalized : null;
 }
 
 export default function DevDatabasePage() {
@@ -161,11 +172,19 @@ export default function DevDatabasePage() {
         offset: 0,
       });
 
-      setRecentMistakes(
-        rows.map((row) => ({
+      const items = await Promise.all(
+        rows.map(async (row) => {
+          const questionImageHasValue = hasNonEmptyText(row.question_image_uri);
+          const questionImageExists = questionImageHasValue
+            ? (await getImageInfo(row.question_image_uri!)).exists
+            : null;
+
+          return {
           id: row.id,
           title: row.title,
           module: row.module,
+          question_image_has_value: questionImageHasValue,
+          question_image_exists: questionImageExists,
           error_reason: row.error_reason,
           difficulty: row.difficulty,
           question_image_uri: row.question_image_uri,
@@ -173,14 +192,26 @@ export default function DevDatabasePage() {
           review_count: row.review_count,
           status: row.status,
           created_at: row.created_at,
-        })),
+          };
+        }),
       );
+      setRecentMistakes(items);
 
       setSelectedMistakeId(null);
       setMistakeImages([]);
       setStatusMessage(`已查询最近 ${rows.length} 条错题`);
       resetPendingConfirmState();
     });
+  }
+
+  function handleOpenMistakeDetail(mistakeId: string) {
+    const routeId = normalizeMistakeId(mistakeId);
+    if (!routeId) {
+      Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { mistakeId });
+      return;
+    }
+
+    router.push(`/mistake/${routeId}` as never);
   }
 
   async function handleLoadImagesByMistakeId(mistakeId: string) {
@@ -334,6 +365,12 @@ export default function DevDatabasePage() {
                 <Text style={styles.monoText}>id: {item.id}</Text>
                 <Text style={styles.monoText}>title: {formatNullable(item.title)}</Text>
                 <Text style={styles.monoText}>module: {formatNullable(item.module)}</Text>
+                <Text style={styles.monoText}>
+                  question_image_uri_has_value: {String(item.question_image_has_value)}
+                </Text>
+                <Text style={styles.monoText}>
+                  question_image_exists: {item.question_image_exists === null ? '(无题目图)' : String(item.question_image_exists)}
+                </Text>
                 <Text style={styles.monoText}>error_reason: {formatNullable(item.error_reason)}</Text>
                 <Text style={styles.monoText}>difficulty: {formatNullable(item.difficulty)}</Text>
                 <Text style={styles.monoText}>
@@ -345,6 +382,13 @@ export default function DevDatabasePage() {
                 <Text style={styles.monoText}>review_count: {formatNullable(item.review_count)}</Text>
                 <Text style={styles.monoText}>status: {formatNullable(item.status)}</Text>
                 <Text style={styles.monoText}>created_at: {formatNullable(item.created_at)}</Text>
+
+                <Pressable
+                  style={styles.secondaryButton}
+                  onPress={() => handleOpenMistakeDetail(item.id)}
+                  disabled={isBusy}>
+                  <Text style={styles.secondaryButtonText}>打开详情页</Text>
+                </Pressable>
 
                 <Pressable
                   style={styles.secondaryButton}
