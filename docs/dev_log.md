@@ -694,3 +694,34 @@
   - `npm run typecheck` 通过。
 - 下一步：
   - 进入 6-G：题库列表交互与可读性收口（如卡片信息层级微调、长文案截断策略、回归测试清单补齐）。
+### 2026-05-08 - 第6步阶段6-G：首页“错题队列 / 今日待复做”轻量接入真实数据
+
+- 任务目标：保持首页原有视觉结构不变，将首页关键数据从 mock 切换为 SQLite 真实数据，并补齐 loading/error/empty 兜底。
+- 修改文件：
+  - `app/(tabs)/index.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 今日任务统计改为真实数据：
+    - 调用 `MistakeListService.getMistakeListStats()` 读取 `total/due/mastered`
+    - 首页大卡展示：今日待复做、总错题、已七刷、完成率
+    - `total = 0` 时完成率显示 `0%`
+  - 优先复做改为真实数据：
+    - 调用 `MistakeListService.getMistakeListItems({ segment: 'due', keyword: '' })`
+    - 取第 1 条作为“优先复做”卡片
+    - 无待复做时显示空状态“今天没有待复做错题”，并提供“去新增错题”按钮
+  - 错题队列改为真实数据：
+    - 调用 `MistakeListService.getMistakeListItems({ segment: 'all', keyword: '' })`
+    - 展示前 3 条真实错题
+    - 卡片点击跳转 `/mistake/[id]`
+  - 去掉首页假错题兜底：
+    - 数据库为空时不再展示 mock 错题，改为空状态文案
+  - 状态处理补齐：
+    - `loading`：首次进入显示“正在加载今日待复做... / 正在加载错题队列...”
+    - `error`：读取失败显示错误文案并提供“重试”按钮
+    - `empty`：无数据时显示对应空状态与“去新增错题”入口
+  - 页面返回刷新：
+    - 使用 `useFocusEffect` 在页面 focus 时自动重新读取首页数据
+- 验收结果：
+  - 本阶段代码已完成；`npm run typecheck` 当前被既有路由类型问题阻塞：`app/modal.tsx` 使用 `href="/"` 与当前 Expo Router 类型不匹配（非本阶段改动引入）。
+- 下一步：
+  - 进入 6-H：首页与题库页联动收口（回归验证、文案一致性、边界场景验证清单）。
