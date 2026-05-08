@@ -1023,3 +1023,25 @@
   - 本阶段未新增全局事件总线；依赖 focus 刷新策略，符合 MVP 简化约束。
 - 下一步：
   - 可进入最终验收阶段，执行 Android 真机全链路回归并收口问题清单。
+### 2026-05-08 - 第8步阶段8-E：最终验收与轻量清理
+
+- 任务目标：完成第8步闭环最终审计，确认“录入 -> 题库 -> 详情 -> 复做 -> 提交 -> 七刷 mastered”链路成立，并收口文档。
+- 修改文件：
+  - `docs/testing.md`
+  - `docs/architecture.md`
+  - `docs/data_contract.md`
+  - `docs/dev_log.md`
+- 核心检查：
+  - 录入链路：Add 页面校验与保存写库路径清晰，`question_image_uri/review_count/status/next_review_at`口径符合约定。
+  - 题库链路：真实列表、筛选搜索、卡片跳转详情、空态与缩略图失败兜底已覆盖。
+  - 详情链路：真实 id 读取、图片槽位展示、复做记录展示、状态按钮文案与禁用策略已覆盖。
+  - 复做链路：复做页拍照必填、提交流程仅走 `CompleteReviewService`、防重复点击与失败保留照片已覆盖。
+  - 一致性链路：`CompleteReviewService` 统一事务写入 `review_records + mistake_images + mistakes`，并覆盖 7/7 与防重提规则。
+  - 刷新链路：详情/题库/首页均采用 focus 刷新策略保持跨页一致。
+- 验收结果：
+  - `npm run typecheck` 通过。
+  - `npm run lint` 通过。
+- 遗留风险：
+  - Android 真机完整回归仍需按清单执行（相机权限、重启持久化、7/7连续操作）。
+- 下一步：
+  - 进入最终回归执行阶段（真机全链路跑通并记录阻断问题）。

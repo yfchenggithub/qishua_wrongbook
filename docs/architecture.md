@@ -151,3 +151,12 @@
   - 不引入全局状态库或事件总线。
   - 页面只通过 Service 拉取最新数据。
   - `CompleteReviewService.completeReview` 仍是唯一复做提交入口。
+## 11. 第8步最终数据流（8-E）
+
+- Add 页面：`AddMistakeDraft` -> `AddMistakeValidationService` -> `CreateMistakeService.createMistakeFromDraft`。
+- 落库：`CreateMistakeService` 调用 `MistakeRepository` / `MistakeImageRepository` 写入 `mistakes` 与 `mistake_images`。
+- 题库页：`MistakeListService.getMistakeListItems` -> `MistakeListItem` -> `app/(tabs)/library.tsx`。
+- 详情页：`MistakeDetailService.getMistakeDetail` -> `MistakeDetailViewModel` -> `app/mistake/[id].tsx`。
+- 复做页：`ReviewFlowService.getReviewPageData` 负责复做会话展示数据；提交仅调用 `CompleteReviewService.completeReview`。
+- 复做提交：`CompleteReviewService` 在统一事务内写入 `review_records`、`mistake_images(review_solution)` 并更新 `mistakes.review_count/status/next_review_at`。
+- 刷新策略：详情页、题库页、首页在 focus 时刷新，保证复做后跨页状态一致。

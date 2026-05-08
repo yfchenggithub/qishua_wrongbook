@@ -129,3 +129,16 @@
 - 复做详情展示可同时使用：
   - `review_records.solution_image_uri`（本次复做记录）
   - `mistake_images(type=review_solution)`（图片资产追踪）
+## 9. 第8步模型关系说明（8-E）
+
+- `AddMistakeDraft`：新增页临时草稿模型，保存前仅存在于页面态。
+- `CreateMistakeService`：把 `AddMistakeDraft` 映射到：
+  - `mistakes`（主记录）
+  - `mistake_images`（question/my_solution/answer 图片记录）
+- `MistakeListService`：把 `mistakes` 映射为 `MistakeListItem` 供题库页/首页列表展示。
+- `MistakeDetailService`：聚合 `mistakes + mistake_images + review_records`，映射为 `MistakeDetailViewModel` 供详情页展示。
+- `ReviewFlowService`：基于 `MistakeDetailViewModel` 计算 `ReviewSession`，供复做页展示当前刷次与可复做状态。
+- `CompleteReviewService`：消费 `ReviewFlow.CompleteReviewInput`，统一提交一次复做并返回 `CompleteReviewResult`。
+- `review_records`：记录每次复做历史（第几刷、结果、时间、solution_image_uri）。
+- `mistake_images(type=review_solution)`：记录每次复做照片的图片资产轨迹。
+- `mistakes`：保存当前进度状态（`review_count/status/next_review_at`），当 `status=mastered` 时 `next_review_at=null`。
