@@ -40,6 +40,13 @@
           }
         }
       ],
+      [
+        "expo-image-picker",
+        {
+          "cameraPermission": "Allow camera access to capture mistake photos.",
+          "photosPermission": "Allow photo library access to pick mistake photos."
+        }
+      ],
       "expo-sqlite"
     ],
     "experiments": {

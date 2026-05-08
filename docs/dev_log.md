@@ -454,3 +454,37 @@
   - 当前仅完成文件系统层，不含拍照/选图入口；需下一阶段接入调试页联调。
 - 下一步：
   - 进入阶段 4-D：新增 `/dev/images` 调试页，串联图片选择（后续）+ `ImageStorageService` 保存/列表/删除能力。
+
+### 2026-05-08 - 第4步阶段4-D：ImagePickerService 相机/相册/权限
+
+- 任务目标：实现相机与相册选择能力和权限请求，返回临时图片信息，不做持久化保存、不接页面业务。
+- 修改文件：
+  - `src/services/ImagePickerService.ts`
+  - `app.json`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `ImagePickerService`，导出：
+    - `requestCameraPermission()`
+    - `requestMediaLibraryPermission()`
+    - `takePhoto()`
+    - `pickImageFromLibrary()`
+    - `openPermissionHelp()`
+  - `takePhoto()` 与 `pickImageFromLibrary()` 统一返回 `PickedImageResult`：
+    - 成功：`{ canceled: false, tempUri, width, height, fileSize }`
+    - 用户取消：`{ canceled: true }`
+    - 权限不足/异常：`{ canceled: true, errorMessage }`
+  - 选择器调用使用当前 API 约定：
+    - 不使用已废弃的 `MediaTypeOptions`
+    - 使用 `mediaTypes: ['images']`
+    - 不使用 `result.uri`，统一读取 `result.assets[0]`
+    - 不使用旧字段 `result.cancelled`，统一使用 `result.canceled`
+  - 补充 `app.json` 最小权限文案（`expo-image-picker` plugin）：
+    - `cameraPermission`
+    - `photosPermission`
+- 验收结果：
+  - `app.json` 语法校验通过。
+  - 全仓 `npm run typecheck` 当前被已有 `.expo/types/router.d.ts` 解析错误阻塞（历史环境问题，非本阶段 ImagePickerService 引入）。
+- 遗留问题：
+  - 暂未接入页面与真机联调入口（按阶段边界保留到下一阶段）。
+- 下一步：
+  - 进入阶段 4-E：新增开发调试页（如 `/dev/images`）串联 `ImagePickerService + ImageStorageService`，完成拍照/选图到本地持久化的端到端验证。
