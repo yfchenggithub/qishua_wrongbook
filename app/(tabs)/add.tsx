@@ -29,6 +29,7 @@ import {
   createEmptyAddMistakeDraft,
   validateAddMistakeDraft,
 } from '@/src/services/AddMistakeValidationService';
+import { createMistakeFromDraft } from '@/src/services/CreateMistakeService';
 import {
   deleteLocalImage,
   pickImageAndSave,
@@ -193,8 +194,10 @@ export default function AddScreen() {
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const isImageBusy = activeImageAction !== null;
+  const isBusy = isImageBusy || isSaving;
 
   function updateDraft<K extends keyof AddMistakeDraft>(field: K, value: AddMistakeDraft[K]) {
     setDraft((prev) => ({ ...prev, [field]: value }));
@@ -205,7 +208,7 @@ export default function AddScreen() {
   }
 
   async function runImageAction(actionKey: string, handler: () => Promise<void>) {
-    if (isImageBusy) {
+    if (isBusy) {
       return;
     }
 
@@ -279,17 +282,49 @@ export default function AddScreen() {
     ]);
   }
 
-  function handleValidateDraft() {
-    const result = validateAddMistakeDraft(draft);
-
-    if (result.ok) {
-      setValidationErrors([]);
-      Alert.alert('校验通过', '草稿校验通过，下一阶段接入保存。');
+  async function handleSaveDraft() {
+    if (isBusy) {
       return;
     }
 
-    setValidationErrors(result.errors);
-    Alert.alert('校验未通过', result.errors.join('\n'));
+    const result = validateAddMistakeDraft(draft);
+
+    if (!result.ok) {
+      setValidationErrors(result.errors);
+      Alert.alert('校验未通过', result.errors.join('\n'));
+      return;
+    }
+
+    setValidationErrors([]);
+    setIsSaving(true);
+
+    try {
+      const saveResult = await createMistakeFromDraft(draft);
+      if (!saveResult.ok) {
+        const message = saveResult.errorMessage ?? '保存失败，请稍后重试。';
+        Logger.error(PAGE_SCOPE, 'Failed to save draft.', {
+          draftId: draft.draftId,
+          message,
+        });
+        Alert.alert('保存失败', message);
+        return;
+      }
+
+      Alert.alert(
+        '保存成功',
+        `错题已加入 7 刷计划。\nID: ${saveResult.mistakeId ?? draft.draftId}`,
+      );
+      setDraft(createEmptyAddMistakeDraft());
+      setValidationErrors([]);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Unexpected error while saving draft.', {
+        draftId: draft.draftId,
+        error,
+      });
+      Alert.alert('保存失败', error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSaving(false);
+    }
   }
 
   return (
@@ -318,7 +353,7 @@ export default function AddScreen() {
                 key={config.key}
                 config={config}
                 image={image}
-                busy={isImageBusy}
+                busy={isBusy}
                 onTakePhoto={() => {
                   void handleTakePhoto(config);
                 }}
@@ -414,9 +449,11 @@ export default function AddScreen() {
       ) : null}
 
       <PrimaryButton
-        title={isImageBusy ? '处理中...' : addMistakeMock.submitText}
-        disabled={isImageBusy}
-        onPress={handleValidateDraft}
+        title={isSaving ? '保存中...' : isImageBusy ? '处理中...' : addMistakeMock.submitText}
+        disabled={isBusy}
+        onPress={() => {
+          void handleSaveDraft();
+        }}
       />
     </ScreenContainer>
   );
