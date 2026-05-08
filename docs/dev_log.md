@@ -301,3 +301,31 @@
   - `npm run android` ʧ�ܣ�`spawn EPERM`����������/Ȩ�޻������⣩��
 - ��һ����
   - �����5��ǰ�����ڿ��� Android ��������� `docs/testing.md` ������ͨ��4�������嵥��
+
+### 2026-05-08 - 第5步阶段5-B：表单类型、选项常量、校验规则
+
+- 任务目标：仅定义录入错题草稿类型、选项常量、ID 规则与草稿校验函数；不接页面、不写数据库、不调用相机。
+- 修改文件：
+  - `src/models/AddMistakeDraft.ts`
+  - `src/constants/mistakeOptions.ts`
+  - `src/utils/id.ts`
+  - `src/services/AddMistakeValidationService.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `AddMistakeDraft`、`AddMistakeValidationResult`、`CreateMistakeFromDraftInput` 类型定义。
+  - 新增错题录入选项常量：`SUBJECT_OPTIONS`、`MODULE_OPTIONS`、`ERROR_REASON_OPTIONS`、`DIFFICULTY_OPTIONS`。
+  - 新增通用 ID 工具：`createMistakeId()`、`createRecordId(prefix)`，格式为前缀 + `yyyyMMddHHmmss` + 随机短串，不依赖第三方库。
+  - 新增 `AddMistakeValidationService`：
+    - `createEmptyAddMistakeDraft()`：初始化草稿并提前生成 `draftId`。
+    - `validateAddMistakeDraft()`：实现题目照片必填、模块必填、难度范围校验（1-5）。
+  - 设计约束落实：草稿阶段即生成 `draftId`，后续用于图片目录和 `mistakes.id` 对齐，保证 ID 一致性。
+- 验收结果：
+  - 待执行 `npm run typecheck`。
+- 遗留问题：
+  - 当前仅完成建模与校验，尚未接入新增页状态管理与图片预览交互（按阶段边界保留）。
+- 下一步：
+  - 进入 5-C：把草稿状态与校验接入新增页（不落库），完成拍照入口、预览、错误提示与保存前校验联动。
+
+### 2026-05-08 - 第5步阶段5-B（补充验收）
+
+- 验收结果补充：`npm run typecheck` 通过。
