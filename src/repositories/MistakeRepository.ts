@@ -204,8 +204,9 @@ export const MistakeRepository = {
       const db = await getDatabase();
 
       const createdAt = nowIso();
+      const inputId = input.id?.trim();
       const record: Mistake = {
-        id: buildMistakeId(),
+        id: inputId && inputId.length > 0 ? inputId : buildMistakeId(),
         subject: input.subject?.trim() || DEFAULT_SUBJECT,
         module: input.module,
         title: input.title ?? null,

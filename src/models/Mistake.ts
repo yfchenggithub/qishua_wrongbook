@@ -22,6 +22,7 @@ export interface Mistake {
 }
 
 export interface CreateMistakeInput {
+  id?: string;
   module: string;
   title?: string;
   error_reason?: string;

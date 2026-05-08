@@ -329,3 +329,33 @@
 ### 2026-05-08 - 第5步阶段5-B（补充验收）
 
 - 验收结果补充：`npm run typecheck` 通过。
+
+### 2026-05-08 - 第5步阶段5-C：CreateMistakeService 保存错题业务用例
+
+- 任务目标：封装“AddMistakeDraft -> mistakes + mistake_images”保存流程，不接页面、不调相机、不改数据库结构。
+- 修改文件：
+  - `src/services/CreateMistakeService.ts`
+  - `src/models/Mistake.ts`
+  - `src/repositories/MistakeRepository.ts`
+  - `src/services/index.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `createMistakeFromDraft(draft)`，返回 `{ ok, mistakeId?, errorMessage? }`。
+  - 先调用 `validateAddMistakeDraft`；校验失败直接返回 `ok: false`，并合并错误信息。
+  - 保存时强制使用 `draft.draftId` 作为 `mistakeId`，保持图片目录与数据库主键一致。
+  - 新增错题保存映射：
+    - 写入 `mistakes`：subject/module/title/error_reason/difficulty/question_image_uri/answer_image_uri/note/next_review_at。
+    - 写入 `mistake_images`：按存在情况分别写入 `question`、`my_solution`、`answer`。
+  - `MistakeRepository.createMistake` 支持外部 `id`：
+    - `CreateMistakeInput` 新增 `id?: string`。
+    - 传 `id` 则使用传入值；不传仍沿用原自动生成逻辑，保持 `/dev/db` 兼容。
+  - 一致性策略：
+    - 优先尝试 `withTransactionAsync`（若运行环境提供）。
+    - 无事务封装时启用最小安全补偿：若主记录已创建且后续失败，尝试删除已创建的 mistake 记录。
+  - 错误处理：所有异常 `Logger.error`，服务内部吞掉异常并返回 `ok: false`，不向页面抛出未捕获错误。
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前事务能力依赖运行时 `withTransactionAsync` 可用性；后续可在 db 层统一封装事务 API，减少服务层分支判断。
+- 下一步：
+  - 进入 5-D：在新增页接入草稿状态与保存调用（含按钮 loading、防重复点击、错误提示、成功后跳转/重置草稿）。
