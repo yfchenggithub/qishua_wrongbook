@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Pressable,
   StyleSheet,
   Text,
@@ -13,13 +12,14 @@ import {
 import {
   BrandHeader,
   CardContainer,
+  DetailImageCard,
   PrimaryButton,
   ProgressDots,
   ScreenContainer,
   SectionTitle,
   StatusPill,
 } from '@/src/components';
-import type { DetailImageSlot, MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
+import type { MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
@@ -66,41 +66,6 @@ function buildPlaceholderButtonTitle(detail: MistakeDetailViewModel): string {
     return `标记第 ${Math.min(detail.maxReviewCount, detail.reviewCount + 1)} 刷完成`;
   }
   return '标记本次复做完成';
-}
-
-function ImageSlotCard({ slot }: { slot: DetailImageSlot }) {
-  const [imageFailed, setImageFailed] = useState(false);
-
-  useEffect(() => {
-    setImageFailed(false);
-  }, [slot.uri]);
-
-  const hasRenderableImage = !!slot.uri && slot.exists === true && !imageFailed;
-
-  return (
-    <CardContainer style={styles.slotCard} padding={spacing.md}>
-      <Text style={styles.slotTitle}>{slot.title}</Text>
-
-      <View style={styles.slotBody}>
-        {hasRenderableImage ? (
-          <Image
-            source={{ uri: slot.uri! }}
-            style={styles.slotImage}
-            resizeMode="cover"
-            onError={() => setImageFailed(true)}
-          />
-        ) : slot.uri ? (
-          <Text style={styles.slotMissingText}>图片文件不存在</Text>
-        ) : (
-          <Text style={styles.slotEmptyText}>{slot.emptyText}</Text>
-        )}
-      </View>
-
-      {slot.fileSize !== undefined && slot.fileSize !== null ? (
-        <Text style={styles.slotInfoText}>大小：{Math.round(slot.fileSize / 1024)} KB</Text>
-      ) : null}
-    </CardContainer>
-  );
 }
 
 function StateCard({
@@ -262,7 +227,14 @@ export default function MistakeDetailScreen() {
               {state.detail.imageSlots
                 .filter((slot) => slot.type !== 'review_solution')
                 .map((slot) => (
-                  <ImageSlotCard key={slot.type} slot={slot} />
+                  <DetailImageCard
+                    key={slot.type}
+                    title={slot.title}
+                    uri={slot.uri}
+                    exists={slot.exists}
+                    fileSize={slot.fileSize}
+                    emptyText={slot.emptyText}
+                  />
                 ))}
             </View>
           </CardContainer>
@@ -422,44 +394,5 @@ const styles = StyleSheet.create({
   },
   slotList: {
     gap: spacing.sm,
-  },
-  slotCard: {
-    borderRadius: radius.lg,
-  },
-  slotTitle: {
-    ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
-  },
-  slotBody: {
-    marginTop: spacing.sm,
-    minHeight: 180,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.md,
-    backgroundColor: colors.surfaceMuted,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.md,
-  },
-  slotImage: {
-    width: '100%',
-    height: 220,
-    borderRadius: radius.md,
-  },
-  slotMissingText: {
-    ...typography.body,
-    color: colors.danger,
-    textAlign: 'center',
-  },
-  slotEmptyText: {
-    ...typography.body,
-    color: colors.textMuted,
-    textAlign: 'center',
-  },
-  slotInfoText: {
-    marginTop: spacing.xs,
-    ...typography.caption,
-    color: colors.textMuted,
   },
 });

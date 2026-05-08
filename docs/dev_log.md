@@ -820,3 +820,29 @@
   - `npm run typecheck` 通过。
 - 下一步：
   - 进入 7-D：统一首页/题库页到详情页的跳转入口校验（确保传入真实 SQLite id），补充 Android 真机回归清单与边界场景验证。
+
+### 2026-05-08 - 第7步阶段7-D：详情页图片预览组件完善
+
+- 任务目标：将详情页题目/我的做法/答案图片展示抽离为可复用组件，完善图片存在、缺失、空数据与加载失败状态，不接全屏预览与重拍。
+- 修改文件：
+  - `src/components/wrongbook/DetailImageCard.tsx`
+  - `src/components/wrongbook/index.ts`
+  - `app/mistake/[id].tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 新增 `DetailImageCard` 组件：
+    - Props：`title/uri/exists/fileSize/emptyText/height`。
+    - 默认纵向卡片布局，适配窄屏阅读。
+    - 图片展示使用 `Image` + `resizeMode="contain"`，降低裁剪风险。
+  - 组件状态完善：
+    - `uri` 存在且 `exists=true`：显示图片，并可显示文件大小。
+    - `uri` 存在但 `exists=false`：显示“图片文件不存在”与短 uri，不红屏。
+    - `uri` 为空：显示 `emptyText`，并使用虚线浅灰占位框。
+    - 图片加载失败：`onError` 进入“图片加载失败”状态，并 `console.warn` 记录。
+  - 详情页接入：
+    - `app/mistake/[id].tsx` 移除内联 `ImageSlotCard`，改为复用 `DetailImageCard`。
+    - 保持原有三块图槽（题目/做法/答案）和刷新逻辑不变。
+- 验收结果：
+  - `npm run typecheck` 当前被 `.expo/types/router.d.ts` 语法损坏阻塞（非本阶段业务代码逻辑报错）。
+- 下一步：
+  - 进入 7-E：详情页交互与状态文案收口（含 notFound/error 的体验一致性、图片区提示文案统一、Android 真机回归清单补齐）。
