@@ -23,10 +23,12 @@ import {
 } from '@/src/components';
 import type { MistakeListFilter, MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
 import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
+import { Logger } from '@/src/services/Logger';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const SEARCH_DEBOUNCE_MS = 350;
+const PAGE_SCOPE = 'LibraryScreen';
 
 function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success' {
   if (status === 'mastered') {
@@ -46,6 +48,11 @@ function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListF
     return 'mastered';
   }
   return 'all';
+}
+
+function normalizeMistakeId(id: string): string | null {
+  const normalized = typeof id === 'string' ? id.trim() : '';
+  return normalized.length > 0 ? normalized : null;
 }
 
 function ThumbnailPlaceholder() {
@@ -200,6 +207,18 @@ export default function LibraryScreen() {
     router.push('/add' as never);
   }, [router]);
 
+  const handleOpenDetail = useCallback(
+    (id: string) => {
+      const routeId = normalizeMistakeId(id);
+      if (!routeId) {
+        Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
+        return;
+      }
+      router.push(`/mistake/${routeId}` as never);
+    },
+    [router]
+  );
+
   const emptyConfig = useMemo(() => {
     if (debouncedKeyword.length > 0) {
       return {
@@ -267,7 +286,7 @@ export default function LibraryScreen() {
         data={items}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <MistakeLibraryCard item={item} onPress={() => router.push(`/mistake/${item.id}` as never)} />
+          <MistakeLibraryCard item={item} onPress={() => handleOpenDetail(item.id)} />
         )}
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
         showsVerticalScrollIndicator={false}

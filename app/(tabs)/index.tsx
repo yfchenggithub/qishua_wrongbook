@@ -19,6 +19,11 @@ import { colors, radius, shadows, spacing, typography } from '@/src/styles/token
 const PAGE_SCOPE = 'TodayScreen';
 const QUEUE_LIMIT = 3;
 
+function normalizeMistakeId(id: string): string | null {
+  const normalized = typeof id === 'string' ? id.trim() : '';
+  return normalized.length > 0 ? normalized : null;
+}
+
 type HomeStats = {
   total: number;
   due: number;
@@ -210,6 +215,18 @@ export default function TodayScreen() {
     [completionRate, stats.mastered, stats.total]
   );
 
+  const handleOpenDetail = useCallback(
+    (id: string) => {
+      const routeId = normalizeMistakeId(id);
+      if (!routeId) {
+        Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
+        return;
+      }
+      router.push(`/mistake/${routeId}` as never);
+    },
+    [router]
+  );
+
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
       <BrandHeader title={todayMock.brand.title} subtitle={todayMock.brand.subtitle} />
@@ -247,7 +264,7 @@ export default function TodayScreen() {
           {priorityItem ? (
             <MistakeCard
               item={priorityItem}
-              pressable={() => router.push(`/mistake/${priorityItem.id}` as never)}
+              pressable={() => handleOpenDetail(priorityItem.id)}
             />
           ) : errorMessage && !isLoading ? (
             <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
@@ -269,7 +286,7 @@ export default function TodayScreen() {
               <MistakeCard
                 key={item.id}
                 item={item}
-                pressable={() => router.push(`/mistake/${item.id}` as never)}
+                pressable={() => handleOpenDetail(item.id)}
               />
             ))
           ) : errorMessage && !isLoading ? (
