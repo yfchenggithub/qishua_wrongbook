@@ -1,6 +1,6 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -20,10 +20,12 @@ import {
   SegmentControl,
   StatusPill,
 } from '@/src/components';
-import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
+import type { MistakeListFilter, MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
 import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+
+const SEARCH_DEBOUNCE_MS = 350;
 
 function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success' {
   if (status === 'mastered') {
@@ -33,6 +35,16 @@ function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success
     return 'dark';
   }
   return 'light';
+}
+
+function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListFilter['segment'] {
+  if (value === 'pending') {
+    return 'due';
+  }
+  if (value === 'mastered') {
+    return 'mastered';
+  }
+  return 'all';
 }
 
 function ThumbnailPlaceholder() {
@@ -101,32 +113,82 @@ function MistakeLibraryCard({
 export default function LibraryScreen() {
   const router = useRouter();
   const [searchText, setSearchText] = useState('');
+  const [debouncedKeyword, setDebouncedKeyword] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<LibraryFilterValue>('all');
   const [items, setItems] = useState<MistakeListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const loadList = useCallback(async () => {
-    setIsLoading(true);
-    setErrorMessage(null);
+  const hasLoadedRef = useRef(false);
+  const requestIdRef = useRef(0);
 
-    try {
-      const listItems = await MistakeListService.getMistakeListItems({
-        segment: 'all',
-        keyword: '',
-      });
-      setItems(listItems);
-    } catch (error) {
-      setItems([]);
-      setErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const loadList = useCallback(
+    async (filter: MistakeListFilter, mode: 'initial' | 'refresh') => {
+      const requestId = requestIdRef.current + 1;
+      requestIdRef.current = requestId;
+
+      if (mode === 'initial') {
+        setIsLoading(true);
+      } else {
+        setIsRefreshing(true);
+      }
+      setErrorMessage(null);
+
+      try {
+        const listItems = await MistakeListService.getMistakeListItems(filter);
+        if (requestId !== requestIdRef.current) {
+          return;
+        }
+        setItems(listItems);
+      } catch (error) {
+        if (requestId !== requestIdRef.current) {
+          return;
+        }
+        setItems([]);
+        setErrorMessage(error instanceof Error ? error.message : String(error));
+      } finally {
+        if (requestId !== requestIdRef.current) {
+          return;
+        }
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    void loadList();
-  }, [loadList]);
+    const timer = setTimeout(() => {
+      setDebouncedKeyword(searchText.trim());
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searchText]);
+
+  useEffect(() => {
+    const filter: MistakeListFilter = {
+      segment: mapSegmentValueToFilterSegment(selectedFilter),
+      keyword: debouncedKeyword,
+    };
+
+    const mode: 'initial' | 'refresh' = hasLoadedRef.current ? 'refresh' : 'initial';
+    hasLoadedRef.current = true;
+    void loadList(filter, mode);
+  }, [debouncedKeyword, loadList, selectedFilter]);
+
+  const handleClearSearch = useCallback(() => {
+    setSearchText('');
+    setDebouncedKeyword('');
+  }, []);
+
+  const handleRetry = useCallback(() => {
+    const filter: MistakeListFilter = {
+      segment: mapSegmentValueToFilterSegment(selectedFilter),
+      keyword: debouncedKeyword,
+    };
+    void loadList(filter, 'refresh');
+  }, [debouncedKeyword, loadList, selectedFilter]);
 
   const listEmpty = useMemo(() => {
     if (isLoading) {
@@ -142,9 +204,17 @@ export default function LibraryScreen() {
       return (
         <View style={styles.stateWrap}>
           <Text style={styles.stateErrorText}>题库读取失败：{errorMessage}</Text>
-          <Pressable onPress={() => void loadList()} style={styles.retryButton}>
+          <Pressable onPress={handleRetry} style={styles.retryButton}>
             <Text style={styles.retryText}>点击重试</Text>
           </Pressable>
+        </View>
+      );
+    }
+
+    if (debouncedKeyword.length > 0) {
+      return (
+        <View style={styles.stateWrap}>
+          <Text style={styles.stateText}>没有找到相关错题</Text>
         </View>
       );
     }
@@ -154,7 +224,7 @@ export default function LibraryScreen() {
         <Text style={styles.stateText}>题库还没有错题，先去新增页录入一题。</Text>
       </View>
     );
-  }, [errorMessage, isLoading, loadList]);
+  }, [debouncedKeyword.length, errorMessage, handleRetry, isLoading]);
 
   return (
     <ScreenContainer withPadding={false}>
@@ -167,6 +237,8 @@ export default function LibraryScreen() {
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
+        refreshing={isRefreshing}
+        onRefresh={handleRetry}
         ListHeaderComponent={
           <View style={styles.screenContent}>
             <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
@@ -179,7 +251,18 @@ export default function LibraryScreen() {
                 placeholder={libraryMock.searchPlaceholder}
                 placeholderTextColor={colors.textMuted}
                 style={styles.searchInput}
+                returnKeyType="search"
+                onSubmitEditing={() => setDebouncedKeyword(searchText.trim())}
               />
+              {searchText.length > 0 ? (
+                <Pressable
+                  style={styles.searchClearButton}
+                  onPress={handleClearSearch}
+                  accessibilityRole="button"
+                  accessibilityLabel="清空搜索">
+                  <MaterialIcons size={20} name="close" color={colors.textMuted} />
+                </Pressable>
+              ) : null}
             </View>
 
             <SegmentControl
@@ -188,7 +271,10 @@ export default function LibraryScreen() {
               onChange={(next) => setSelectedFilter(next as LibraryFilterValue)}
             />
 
-            <Text style={styles.countText}>当前共 {items.length} 题</Text>
+            <View style={styles.metaRow}>
+              <Text style={styles.countText}>当前共 {items.length} 题</Text>
+              {isRefreshing ? <Text style={styles.refreshText}>刷新中...</Text> : null}
+            </View>
           </View>
         }
         ListEmptyComponent={listEmpty}
@@ -223,10 +309,27 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     paddingVertical: spacing.sm,
   },
+  searchClearButton: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surfaceMuted,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
   countText: {
     ...typography.caption,
     color: colors.textSecondary,
     fontWeight: '600',
+  },
+  refreshText: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   listItemSeparator: {
     height: spacing.md,

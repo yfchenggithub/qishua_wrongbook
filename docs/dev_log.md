@@ -629,3 +629,38 @@
   - `npm run typecheck` 通过。
 - 下一步建议：
   - 进入 6-E：把搜索框与分段筛选真正映射到 Service filter（all/due/mastered + keyword + module），并补充下拉刷新与筛选联动测试。
+### 2026-05-08 - 第6步阶段6-E：题库页接入搜索、筛选、排序联动
+
+- 任务目标：让题库页搜索框与分段筛选真正驱动 SQLite 列表查询，补齐刷新、空结果、错误提示等交互兜底；不改数据库结构、不做高级筛选。
+- 修改文件：
+  - `app/(tabs)/library.tsx`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 分段筛选映射：
+    - `all -> segment: all`
+    - `pending -> segment: due`
+    - `mastered -> segment: mastered`
+  - 搜索接入：
+    - 新增 `searchText` 与 `debouncedKeyword` 双状态
+    - 使用 `setTimeout + clearTimeout`（350ms）实现 debounce
+    - 关键词传入 `MistakeListService.getMistakeListItems({ segment, keyword })`
+  - 列表刷新机制：
+    - 首次加载显示主 loading
+    - 筛选/搜索变更走轻量刷新 `isRefreshing`
+    - 支持下拉刷新与错误重试
+  - 空态区分：
+    - 搜索关键词非空且无结果：`没有找到相关错题`
+    - 无关键词且无数据：`题库还没有错题，先去新增页录入一题。`
+  - 错误态兜底：
+    - 显示错误文案 + `点击重试`
+  - 搜索清空：
+    - 输入框右侧新增清空按钮，清空后立即回到当前 segment 的全量结果
+  - 列表稳定性：
+    - 继续使用 `keyExtractor={(item) => item.id}`
+    - 保留卡片风格、进度点、状态胶囊、点击跳转 `/mistake/[id]`
+- 验收结果：
+  - `npm run typecheck` 通过。
+- 遗留问题：
+  - 当前仍未实现模块下拉筛选与排序菜单（按阶段边界保留到后续）。
+- 下一步：
+  - 进入 6-F：题库页交互打磨与性能/体验收口（例如更细粒度错误提示、列表刷新体验、手工回归清单）。
