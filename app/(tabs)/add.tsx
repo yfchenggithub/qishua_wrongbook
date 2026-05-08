@@ -39,6 +39,7 @@ import { Logger } from '@/src/services/Logger';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'AddScreen';
+const MAX_DRAFT_RETRY = 5;
 
 type DraftImageField = 'questionImage' | 'mySolutionImage' | 'answerImage';
 
@@ -95,6 +96,36 @@ function CapturePlaceholder() {
     </View>
   );
 }
+
+function normalizeValidationErrors(errors: string[]): string[] {
+  return errors.map((error) => {
+    if (error.includes('题目照片')) {
+      return '请先拍题目照片';
+    }
+    if (error.includes('模块')) {
+      return '请选择模块';
+    }
+    if (error.includes('难度')) {
+      return '难度不合法';
+    }
+    return error;
+  });
+}
+
+function createNextDraft(previousDraftId: string): AddMistakeDraft {
+  let nextDraft = createEmptyAddMistakeDraft();
+  let retryCount = 0;
+
+  while (nextDraft.draftId === previousDraftId && retryCount < MAX_DRAFT_RETRY) {
+    nextDraft = createEmptyAddMistakeDraft();
+    retryCount += 1;
+  }
+
+  return nextDraft;
+}
+
+// TODO(5-G): Unused draft images may remain in local storage when user leaves without saving.
+// Consider adding an explicit "放弃草稿" action to cleanup draftId image folder safely.
 
 function setDraftImageByField(
   draft: AddMistakeDraft,
@@ -193,6 +224,7 @@ function CaptureEntryCard({
 export default function AddScreen() {
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -237,6 +269,7 @@ export default function AddScreen() {
 
       updateDraftImage(config.key, result.image);
       setValidationErrors([]);
+      setSaveErrorMessage(null);
     });
   }
 
@@ -254,6 +287,7 @@ export default function AddScreen() {
 
       updateDraftImage(config.key, result.image);
       setValidationErrors([]);
+      setSaveErrorMessage(null);
     });
   }
 
@@ -271,11 +305,20 @@ export default function AddScreen() {
         onPress: () => {
           void runImageAction(`delete-${config.key}`, async () => {
             const removed = await deleteLocalImage(image.uri);
-            updateDraftImage(config.key, null);
 
             if (!removed) {
-              Alert.alert('删除失败', '图片文件删除失败，但已从草稿中移除。');
+              Logger.error(PAGE_SCOPE, 'Failed to delete selected image.', {
+                draftId: draft.draftId,
+                imageType: config.type,
+                uri: image.uri,
+              });
+              Alert.alert('删除失败', '图片文件删除失败，请稍后重试。');
+              return;
             }
+
+            updateDraftImage(config.key, null);
+            setValidationErrors([]);
+            setSaveErrorMessage(null);
           });
         },
       },
@@ -290,12 +333,15 @@ export default function AddScreen() {
     const result = validateAddMistakeDraft(draft);
 
     if (!result.ok) {
-      setValidationErrors(result.errors);
-      Alert.alert('校验未通过', result.errors.join('\n'));
+      const normalizedErrors = normalizeValidationErrors(result.errors);
+      setValidationErrors(normalizedErrors);
+      setSaveErrorMessage(null);
+      Alert.alert('校验未通过', normalizedErrors.join('\n'));
       return;
     }
 
     setValidationErrors([]);
+    setSaveErrorMessage(null);
     setIsSaving(true);
 
     try {
@@ -306,22 +352,27 @@ export default function AddScreen() {
           draftId: draft.draftId,
           message,
         });
+        setSaveErrorMessage(message);
         Alert.alert('保存失败', message);
         return;
       }
 
+      const previousDraftId = draft.draftId;
       Alert.alert(
         '保存成功',
         `错题已加入 7 刷计划。\nID: ${saveResult.mistakeId ?? draft.draftId}`,
       );
-      setDraft(createEmptyAddMistakeDraft());
+      setDraft(createNextDraft(previousDraftId));
       setValidationErrors([]);
+      setSaveErrorMessage(null);
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Unexpected error while saving draft.', {
         draftId: draft.draftId,
         error,
       });
-      Alert.alert('保存失败', error instanceof Error ? error.message : String(error));
+      const message = error instanceof Error ? error.message : String(error);
+      setSaveErrorMessage(message);
+      Alert.alert('保存失败', message);
     } finally {
       setIsSaving(false);
     }
@@ -445,6 +496,13 @@ export default function AddScreen() {
               - {error}
             </Text>
           ))}
+        </CardContainer>
+      ) : null}
+
+      {saveErrorMessage ? (
+        <CardContainer style={styles.errorCard} padding={spacing.lg}>
+          <Text style={styles.errorTitle}>保存失败</Text>
+          <Text style={styles.errorItemText}>- {saveErrorMessage}</Text>
         </CardContainer>
       ) : null}
 
