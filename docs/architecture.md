@@ -82,3 +82,23 @@
 - ��ʽҳ�治ֱ�ӵ��� `expo-image-picker`��
 - ҳ�治ֱ�ӵ��� `expo-file-system`��
 - ������ʽҳ��ͳһ���� `ImageService`��
+
+## 7. 第5步录入错题数据流（阶段 5-B ~ 5-G）
+
+目标：把“新增页草稿”稳定落库到 `mistakes` 与 `mistake_images`，并保持图片目录与数据库主键一致。
+
+数据流：
+1. 新增页初始化调用 `createEmptyAddMistakeDraft()`，提前生成 `draftId`。
+2. 用户拍照/选图时，页面仅调用 `ImageService.takePhotoAndSave / pickImageAndSave`，并传入 `mistakeId = draftId`。
+3. 图片文件持久化到本地目录（按 `mistakeId` 分目录），页面仅保存返回的 `LocalImage`（含 `uri`）。
+4. 用户点击保存时，页面先调用 `validateAddMistakeDraft(draft)` 做表单校验。
+5. 校验通过后，页面调用 `CreateMistakeService.createMistakeFromDraft(draft)`。
+6. `CreateMistakeService` 复用 `draftId` 作为 `mistakes.id`，写入主表，再按图片类型写入 `mistake_images`。
+7. 若运行时支持事务（`withTransactionAsync`），保存流程在事务中执行；否则执行最小回滚策略并记录日志。
+8. 保存成功后页面重置为新草稿（新 `draftId`）；保存失败时保留原草稿供用户重试。
+
+分层约束（第5步继续生效）：
+- 页面层不直接写 SQL，不直接操作 FileSystem。
+- 图片入口统一走 `ImageService`。
+- 保存业务编排集中在 `CreateMistakeService`。
+- 数据持久化细节集中在 Repository 层。

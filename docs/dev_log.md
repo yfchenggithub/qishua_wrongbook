@@ -492,3 +492,28 @@
   - `/dev/db` 目前只做开发调试展示，不承载正式业务页面。
 - 下一步：
   - 进入 5-H：执行完整联合回归（新增页保存 -> /dev/db 核验 -> 重启持久化核验）并按问题清单收口体验细节。
+
+### 2026-05-08 - 第5步阶段5-H：统一验收、文档更新、轻量清理
+
+- 任务目标：在不进入第6步的前提下，完成第5步统一体检、文档补充与轻量清理。
+- 修改文件：
+  - `docs/architecture.md`
+  - `docs/data_contract.md`
+  - `docs/testing.md`
+  - `docs/dev_log.md`
+- 本阶段检查结论（代码层）：
+  - 第5步核心文件齐全：`AddMistakeDraft`、`mistakeOptions`、`id`、`AddMistakeValidationService`、`CreateMistakeService`、`add.tsx`。
+  - 新增页已具备：模块/错因/难度选择、拍照/选图、预览、删除、保存前校验、保存中防重复、成功后重置、失败后保留草稿。
+  - 保存链路已打通：`CreateMistakeService` 使用 `draftId` 作为 `mistake.id`，并写入 `mistake_images`。
+  - `/dev/db` 已支持最近10条错题、按错题查询图片记录、图片 `exists/size` 检查。
+- 文档补充：
+  - `architecture.md`：追加第5步录入错题数据流与分层约束。
+  - `data_contract.md`：追加 `AddMistakeDraft -> mistakes/mistake_images` 字段映射与一致性约束。
+  - `testing.md`：追加第5步统一验收清单（交互、保存链路、/dev/db、重启持久化、已知风险）。
+- 命令结果：
+  - `npm run typecheck`：通过。
+  - `npm run lint`：通过。
+- 轻量清理说明：
+  - 本阶段未改业务逻辑与数据库结构，仅补充文档与验收说明。
+- 下一步建议：
+  - 可结束第5步并进入第6步“错题列表真实读取”，优先先做 Repository -> Service -> 页面最小链路。

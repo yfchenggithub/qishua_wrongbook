@@ -65,3 +65,42 @@
 - ͼƬ�ļ��� `ImageService` ���Ų��־û��� App ����Ŀ¼��
 - ����Ŀ¼��`qishua_wrongbook/mistakes/{mistakeId}/`��
 - ɾ������ʱӦͬ��������Ӧ����ͼƬĿ¼������ҵ��׶ν��룩��
+
+## 5. AddMistakeDraft 与落库映射（第5步补充）
+
+### 5.1 Draft 结构（页面态）
+- `AddMistakeDraft.draftId`：草稿主键，保存前即生成。
+- `questionImage/mySolutionImage/answerImage`：本地图片对象，核心字段为 `uri`。
+
+### 5.2 mistakes 表映射
+| AddMistakeDraft 字段 | mistakes 字段 | 规则 |
+| --- | --- | --- |
+| `draftId` | `id` | 直接复用，保证图片目录与数据库主键一致 |
+| `subject` | `subject` | 空值回退为 `math` |
+| `module` | `module` | 必填 |
+| `title` | `title` | 可空 |
+| `errorReason` | `error_reason` | 可空 |
+| `difficulty` | `difficulty` | 必须在 `1-5` |
+| `questionImage.uri` | `question_image_uri` | 必填 |
+| `answerImage?.uri` | `answer_image_uri` | 可空 |
+| `note` | `note` | 可空 |
+| （系统字段） | `review_count` | 默认 `0` |
+| （系统字段） | `status` | 默认 `active` |
+| （系统字段） | `next_review_at` | 保存时写入当前时间（ISO 字符串） |
+
+### 5.3 mistake_images 表映射
+| Draft 图片字段 | mistake_images.type | 是否必填 |
+| --- | --- | --- |
+| `questionImage` | `question` | 必填 |
+| `mySolutionImage` | `my_solution` | 可选 |
+| `answerImage` | `answer` | 可选 |
+
+写入规则：
+- `mistake_id = draftId`。
+- `uri` 保存本地持久化路径。
+- 每张存在的图片各写一条记录。
+
+### 5.4 一致性约束
+- SQLite 仅保存图片 `uri`，不保存图片二进制。
+- 图片文件由 `ImageService` 落地到本地目录；数据库保存时不重复复制图片。
+- 运行时支持事务时优先使用事务；无事务封装时采用最小补偿回滚并记日志。
