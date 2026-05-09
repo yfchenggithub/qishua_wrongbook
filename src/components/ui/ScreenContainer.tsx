@@ -6,7 +6,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 
 import { colors, spacing } from '@/src/styles/tokens';
 
@@ -14,6 +14,7 @@ export interface ScreenContainerProps {
   children: ReactNode;
   scroll?: boolean;
   withPadding?: boolean;
+  safeAreaEdges?: readonly Edge[];
   style?: StyleProp<ViewStyle>;
   contentStyle?: StyleProp<ViewStyle>;
   showsVerticalScrollIndicator?: boolean;
@@ -23,12 +24,13 @@ export function ScreenContainer({
   children,
   scroll = false,
   withPadding = true,
+  safeAreaEdges = ['top', 'bottom'],
   style,
   contentStyle,
   showsVerticalScrollIndicator = false,
 }: ScreenContainerProps) {
   return (
-    <SafeAreaView style={[styles.safeArea, style]}>
+    <SafeAreaView edges={safeAreaEdges} style={[styles.safeArea, style]}>
       {scroll ? (
         <ScrollView
           style={styles.flex}
@@ -61,4 +63,3 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xl,
   },
 });
-

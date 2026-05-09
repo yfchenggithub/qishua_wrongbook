@@ -157,7 +157,7 @@ export default function SettingsScreen() {
   }, [loadDataOverview]);
 
   return (
-    <ScreenContainer scroll contentStyle={styles.screenContent}>
+    <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
       <BrandHeader title="设置" subtitle="离线运行，本地保存错题和复做记录" offlineLabel="• 离线" />
 
       <View style={styles.sectionBlock}>

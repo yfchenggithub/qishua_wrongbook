@@ -317,7 +317,7 @@ export default function LibraryScreen() {
   }, [emptyConfig, errorMessage, handleGoAddMistake, handleRetry, isLoading]);
 
   return (
-    <ScreenContainer withPadding={false}>
+    <ScreenContainer withPadding={false} safeAreaEdges={['top']}>
       <FlatList<MistakeListItem>
         data={items}
         keyExtractor={(item) => item.id}

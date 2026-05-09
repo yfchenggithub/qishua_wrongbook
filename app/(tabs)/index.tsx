@@ -240,7 +240,7 @@ export default function TodayScreen() {
   );
 
   return (
-    <ScreenContainer scroll contentStyle={styles.screenContent}>
+    <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
       <BrandHeader title={todayMock.brand.title} subtitle={todayMock.brand.subtitle} />
 
       <CardContainer style={styles.taskSummaryCard} padding={spacing.lg}>

@@ -383,7 +383,7 @@ export default function AddScreen() {
   }
 
   return (
-    <ScreenContainer scroll contentStyle={styles.screenContent}>
+    <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
       <BrandHeader title={addMistakeMock.brand.title} subtitle={addMistakeMock.brand.subtitle} />
 
       <View style={styles.sectionBlock}>
