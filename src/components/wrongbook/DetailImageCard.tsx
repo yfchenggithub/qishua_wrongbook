@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CardContainer } from '@/src/components/ui';
@@ -19,7 +19,10 @@ export interface DetailImageCardProps {
   onEmptyActionPress?: () => void;
   isEmptyActionLoading?: boolean;
   emptyActionDisabled?: boolean;
+  onPreview?: () => void;
 }
+
+const DOUBLE_TAP_DELAY = 300;
 
 function shortenUri(uri: string): string {
   if (uri.length <= 52) {
@@ -53,8 +56,10 @@ export function DetailImageCard({
   onEmptyActionPress,
   isEmptyActionLoading = false,
   emptyActionDisabled = false,
+  onPreview,
 }: DetailImageCardProps) {
   const [imageFailed, setImageFailed] = useState(false);
+  const lastTapRef = useRef(0);
 
   const normalizedUri = useMemo(() => {
     if (typeof uri !== 'string') {
@@ -74,6 +79,7 @@ export function DetailImageCard({
   const isLoadFailed = hasUri && exists === true && imageFailed;
   const hasEmptyAction = !!emptyActionText && typeof onEmptyActionPress === 'function';
   const isCompactEmptyState = !hasUri && compactEmpty;
+  const canPreview = canShowImage && typeof onPreview === 'function';
   const boxStyles = [
     styles.previewBox,
     !isCompactEmptyState ? { height } : undefined,
@@ -81,64 +87,96 @@ export function DetailImageCard({
     isCompactEmptyState ? styles.previewBoxCompact : undefined,
   ];
 
+  const handleImagePress = useCallback(() => {
+    if (!canPreview || !onPreview) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+      onPreview();
+      lastTapRef.current = 0;
+      return;
+    }
+
+    lastTapRef.current = now;
+  }, [canPreview, onPreview]);
+
   return (
     <CardContainer style={styles.card} padding={spacing.md}>
       <Text style={styles.title}>{title}</Text>
 
-      <View style={boxStyles}>
-        {canShowImage ? (
+      {canPreview ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${title}，双击查看大图`}
+          onPress={handleImagePress}
+          style={({ pressed }) => [boxStyles, pressed && styles.previewBoxPressed]}>
           <Image
             source={{ uri: normalizedUri! }}
             style={styles.image}
             resizeMode="contain"
             onError={() => {
-              console.warn('[DetailImageCard] Failed to load image.', normalizedUri);
               setImageFailed(true);
             }}
           />
-        ) : null}
+          <Text style={styles.previewHint}>双击查看大图</Text>
+        </Pressable>
+      ) : (
+        <View style={boxStyles}>
+          {canShowImage ? (
+            <Image
+              source={{ uri: normalizedUri! }}
+              style={styles.image}
+              resizeMode="contain"
+              onError={() => {
+                setImageFailed(true);
+              }}
+            />
+          ) : null}
 
-        {isFileMissing ? (
-          <View style={styles.messageWrap}>
-            <Text style={styles.errorText}>图片文件不存在</Text>
-            <Text style={styles.uriText}>{shortenUri(normalizedUri!)}</Text>
-          </View>
-        ) : null}
+          {isFileMissing ? (
+            <View style={styles.messageWrap}>
+              <Text style={styles.errorText}>图片文件不存在</Text>
+              <Text style={styles.uriText}>{shortenUri(normalizedUri!)}</Text>
+            </View>
+          ) : null}
 
-        {isLoadFailed ? (
-          <View style={styles.messageWrap}>
-            <Text style={styles.errorText}>{loadErrorText}</Text>
-            <Text style={styles.uriText}>{shortenUri(normalizedUri!)}</Text>
-          </View>
-        ) : null}
+          {isLoadFailed ? (
+            <View style={styles.messageWrap}>
+              <Text style={styles.errorText}>{loadErrorText}</Text>
+              <Text style={styles.uriText}>{shortenUri(normalizedUri!)}</Text>
+            </View>
+          ) : null}
 
-        {!hasUri && !isCompactEmptyState ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
+          {!hasUri && !isCompactEmptyState ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
 
-        {isCompactEmptyState ? (
-          <View style={styles.compactEmptyContent}>
-            <View style={styles.compactEmptyTextWrap}>
-              <Text style={styles.compactEmptyTitle}>{emptyTitle ?? emptyText}</Text>
-              {emptyDescription ? (
-                <Text style={styles.compactEmptyDescription}>{emptyDescription}</Text>
+          {isCompactEmptyState ? (
+            <View style={styles.compactEmptyContent}>
+              <View style={styles.compactEmptyTextWrap}>
+                <Text style={styles.compactEmptyTitle}>{emptyTitle ?? emptyText}</Text>
+                {emptyDescription ? (
+                  <Text style={styles.compactEmptyDescription}>{emptyDescription}</Text>
+                ) : null}
+              </View>
+
+              {hasEmptyAction ? (
+                <Pressable
+                  style={[
+                    styles.compactEmptyAction,
+                    (isEmptyActionLoading || emptyActionDisabled) && styles.compactEmptyActionDisabled,
+                  ]}
+                  onPress={onEmptyActionPress}
+                  disabled={isEmptyActionLoading || emptyActionDisabled}>
+                  <Text style={styles.compactEmptyActionText}>
+                    {isEmptyActionLoading ? '保存中...' : emptyActionText}
+                  </Text>
+                </Pressable>
               ) : null}
             </View>
-
-            {hasEmptyAction ? (
-              <Pressable
-                style={[
-                  styles.compactEmptyAction,
-                  (isEmptyActionLoading || emptyActionDisabled) && styles.compactEmptyActionDisabled,
-                ]}
-                onPress={onEmptyActionPress}
-                disabled={isEmptyActionLoading || emptyActionDisabled}>
-                <Text style={styles.compactEmptyActionText}>
-                  {isEmptyActionLoading ? '保存中...' : emptyActionText}
-                </Text>
-              </Pressable>
-            ) : null}
-          </View>
-        ) : null}
-      </View>
+          ) : null}
+        </View>
+      )}
 
       {canShowImage && fileSize !== undefined && fileSize !== null ? (
         <Text style={styles.fileSize}>大小：{formatFileSize(fileSize)}</Text>
@@ -175,9 +213,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     paddingVertical: spacing.sm,
   },
+  previewBoxPressed: {
+    opacity: 0.88,
+  },
   image: {
     width: '100%',
     height: '100%',
+  },
+  previewHint: {
+    position: 'absolute',
+    right: spacing.sm,
+    bottom: spacing.xs,
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 1,
+    borderRadius: radius.pill,
   },
   compactEmptyContent: {
     width: '100%',
@@ -241,4 +295,3 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
 });
-

@@ -14,6 +14,7 @@ import {
   BrandHeader,
   CardContainer,
   DetailImageCard,
+  ImagePreviewModal,
   PrimaryButton,
   ProgressDots,
   ScreenContainer,
@@ -40,6 +41,12 @@ type DetailPageState =
 
 type SupplementTarget = 'my_solution' | 'answer';
 type SupplementSource = 'camera' | 'library';
+type PreviewImageState = {
+  uri: string;
+  title: string;
+};
+
+const DOUBLE_TAP_DELAY = 300;
 
 function toBriefErrorMessage(message?: string): string {
   const fallback = '读取错题失败，请稍后重试。';
@@ -158,10 +165,60 @@ function getEmptyActionText(target: SupplementTarget): string {
   return target === 'my_solution' ? '补充做法' : '补充答案';
 }
 
-function ReviewRecordCard({ record }: { record: DetailReviewRecordItem }) {
+function normalizePreviewUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+
+  const trimmed = uri.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getSlotPreviewTitle(type: DetailImageSlotType): string {
+  if (type === 'question') {
+    return '题目图片';
+  }
+  if (type === 'my_solution') {
+    return '我的做法';
+  }
+  if (type === 'answer') {
+    return '答案解析';
+  }
+  return '图片预览';
+}
+
+function ReviewRecordCard({
+  record,
+  onPreview,
+}: {
+  record: DetailReviewRecordItem;
+  onPreview?: (uri: string, title: string) => void;
+}) {
   const [imageFailed, setImageFailed] = useState(false);
-  const hasImage = !!record.solutionImageUri;
+  const lastTapRef = useRef(0);
+  const normalizedUri = normalizePreviewUri(record.solutionImageUri);
+  const hasImage = !!normalizedUri;
   const canShowImage = hasImage && !imageFailed;
+
+  const previewTitle =
+    Number.isFinite(record.reviewIndex) && record.reviewIndex > 0
+      ? `第 ${record.reviewIndex} 刷记录`
+      : '复做记录';
+
+  const handleImagePress = useCallback(() => {
+    if (!canShowImage || !normalizedUri || !onPreview) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+      onPreview(normalizedUri, previewTitle);
+      lastTapRef.current = 0;
+      return;
+    }
+
+    lastTapRef.current = now;
+  }, [canShowImage, normalizedUri, onPreview, previewTitle]);
 
   return (
     <View style={styles.reviewRecordRow}>
@@ -172,12 +229,18 @@ function ReviewRecordCard({ record }: { record: DetailReviewRecordItem }) {
       </View>
 
       {canShowImage ? (
-        <Image
-          source={{ uri: record.solutionImageUri! }}
-          style={styles.reviewRecordImage}
-          resizeMode="cover"
-          onError={() => setImageFailed(true)}
-        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${previewTitle}，双击查看大图`}
+          onPress={handleImagePress}
+          style={({ pressed }) => [styles.reviewRecordImageWrap, pressed && styles.previewTapPressed]}>
+          <Image
+            source={{ uri: normalizedUri }}
+            style={styles.reviewRecordImage}
+            resizeMode="cover"
+            onError={() => setImageFailed(true)}
+          />
+        </Pressable>
       ) : hasImage ? (
         <View style={styles.reviewRecordBadge}>
           <Text style={styles.reviewRecordBadgeText}>已保存照片</Text>
@@ -227,6 +290,7 @@ export default function MistakeDetailScreen() {
   const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [supplementingType, setSupplementingType] = useState<SupplementTarget | null>(null);
+  const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
 
@@ -247,6 +311,22 @@ export default function MistakeDetailScreen() {
     }
     router.push(`/review/${detail.id}` as never);
   }, [router]);
+
+  const handleClosePreview = useCallback(() => {
+    setPreviewImage(null);
+  }, []);
+
+  const handleOpenPreview = useCallback((uri: string | null | undefined, title: string) => {
+    const normalizedUri = normalizePreviewUri(uri);
+    if (!normalizedUri) {
+      return;
+    }
+
+    setPreviewImage({
+      uri: normalizedUri,
+      title,
+    });
+  }, []);
 
   const loadDetail = useCallback(async (options?: { keepCurrent?: boolean }) => {
     const keepCurrent = options?.keepCurrent ?? false;
@@ -526,6 +606,7 @@ export default function MistakeDetailScreen() {
                         && supplementingType !== null
                         && supplementingType !== supplementTarget
                       }
+                      onPreview={() => handleOpenPreview(slot.uri, getSlotPreviewTitle(slot.type))}
                     />
                   );
                 })}
@@ -539,7 +620,11 @@ export default function MistakeDetailScreen() {
             ) : (
               <View style={styles.reviewRecordsList}>
                 {state.detail.reviewRecords.map((record) => (
-                  <ReviewRecordCard key={record.id} record={record} />
+                  <ReviewRecordCard
+                    key={record.id}
+                    record={record}
+                    onPreview={(uri, title) => handleOpenPreview(uri, title)}
+                  />
                 ))}
               </View>
             )}
@@ -552,6 +637,13 @@ export default function MistakeDetailScreen() {
           />
         </>
       ) : null}
+
+      <ImagePreviewModal
+        visible={previewImage !== null}
+        uri={previewImage?.uri ?? null}
+        title={previewImage?.title ?? ''}
+        onClose={handleClosePreview}
+      />
     </ScreenContainer>
   );
 }
@@ -741,6 +833,10 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
   },
+  reviewRecordImageWrap: {
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
   reviewRecordImage: {
     width: 72,
     height: 72,
@@ -748,6 +844,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+  },
+  previewTapPressed: {
+    opacity: 0.84,
   },
   reviewRecordBadge: {
     borderRadius: radius.pill,
