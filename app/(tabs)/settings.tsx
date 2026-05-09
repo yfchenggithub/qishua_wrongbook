@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -7,6 +8,14 @@ import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 type InfoRow = {
   label: string;
   value: string;
+};
+
+type DevRoute = '/dev/db' | '/dev/images';
+
+type DevEntry = {
+  title: string;
+  description: string;
+  href: DevRoute;
 };
 
 const DEV_UNLOCK_TAP_TARGET = 7;
@@ -37,7 +46,23 @@ const LOCAL_DATA_ITEMS = [
 
 const ROADMAP_ITEMS = ['数据备份与恢复', '本地通知提醒', '学习统计', 'OCR / AI 识别'];
 
+const DEV_ENTRIES: DevEntry[] = [
+  {
+    title: '数据库调试',
+    description: '查看 SQLite 状态、最近错题、复做记录和数据一致性。',
+    href: '/dev/db',
+  },
+  {
+    title: '图片调试',
+    description: '测试拍照、图片持久化、图片删除和文件存在性。',
+    href: '/dev/images',
+  },
+];
+
 export default function SettingsScreen() {
+  const router = useRouter();
+  const canUseDevUnlock = __DEV__;
+
   const [devTapCount, setDevTapCount] = useState(0);
   const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(false);
   const [devHintMessage, setDevHintMessage] = useState<string | null>(null);
@@ -46,8 +71,7 @@ export default function SettingsScreen() {
   const tapCountRef = useRef(0);
 
   const handleVersionTap = useCallback(() => {
-    if (!__DEV__) {
-      setDevHintMessage('当前为正式构建，开发调试入口不可用');
+    if (!canUseDevUnlock) {
       return;
     }
 
@@ -79,7 +103,7 @@ export default function SettingsScreen() {
     }
 
     setDevHintMessage(null);
-  }, [devTapCount, isDevModeUnlocked]);
+  }, [canUseDevUnlock, devTapCount, isDevModeUnlocked]);
 
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
@@ -92,8 +116,9 @@ export default function SettingsScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="版本号"
+            accessibilityState={{ disabled: !canUseDevUnlock }}
             hitSlop={8}
-            onPress={handleVersionTap}
+            onPress={canUseDevUnlock ? handleVersionTap : undefined}
             style={styles.versionRowPressable}>
             <Text style={styles.infoLabel}>{VERSION_LABEL}</Text>
             <Text style={styles.infoValue}>{VERSION_VALUE}</Text>
@@ -104,7 +129,9 @@ export default function SettingsScreen() {
               <Text style={styles.infoValue}>{row.value}</Text>
             </View>
           ))}
-          {devHintMessage ? <Text style={styles.devHintText}>{devHintMessage}</Text> : null}
+          {canUseDevUnlock && devHintMessage ? (
+            <Text style={styles.devHintText}>{devHintMessage}</Text>
+          ) : null}
         </CardContainer>
       </View>
 
@@ -141,12 +168,27 @@ export default function SettingsScreen() {
         </CardContainer>
       </View>
 
-      {isDevModeUnlocked ? (
+      {canUseDevUnlock && isDevModeUnlocked ? (
         <View style={styles.sectionBlock}>
           <SectionTitle title="开发调试" />
-          <CardContainer style={styles.card} padding={spacing.lg}>
-            <Text style={styles.listText}>
-              已开启开发调试入口，下一阶段接入数据库调试和图片调试。
+          <CardContainer style={[styles.card, styles.devCard]} padding={spacing.lg}>
+            <Text style={styles.devNoticeText}>仅开发阶段使用，正式发布前会隐藏。</Text>
+
+            {DEV_ENTRIES.map((entry) => (
+              <View key={entry.href} style={styles.devEntryBlock}>
+                <Text style={styles.devEntryTitle}>{entry.title}</Text>
+                <Text style={styles.devEntryDescription}>{entry.description}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => router.push(entry.href as never)}
+                  style={styles.devEntryButton}>
+                  <Text style={styles.devEntryButtonText}>{entry.title}</Text>
+                </Pressable>
+              </View>
+            ))}
+
+            <Text style={styles.devHintText}>
+              已开启开发调试入口
             </Text>
           </CardContainer>
         </View>
@@ -202,6 +244,48 @@ const styles = StyleSheet.create({
   devHintText: {
     ...typography.caption,
     color: colors.success,
+    fontWeight: '700',
+  },
+  devCard: {
+    borderColor: '#f2dec0',
+    backgroundColor: '#fffdf8',
+  },
+  devNoticeText: {
+    ...typography.caption,
+    color: '#8a5a22',
+    fontWeight: '700',
+  },
+  devEntryBlock: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#eddac0',
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  devEntryTitle: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  devEntryDescription: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+  },
+  devEntryButton: {
+    minHeight: 44,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#c48f4d',
+    backgroundColor: '#fff6e8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  devEntryButtonText: {
+    ...typography.caption,
+    color: '#8a5a22',
     fontWeight: '700',
   },
   listText: {
