@@ -1,8 +1,10 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BrandHeader, CardContainer, ScreenContainer, SectionTitle } from '@/src/components';
+import { MistakeImageRepository, ReviewRecordRepository } from '@/src/repositories';
+import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 type InfoRow = {
@@ -18,11 +20,26 @@ type DevEntry = {
   href: DevRoute;
 };
 
+type DataOverviewStats = {
+  totalMistakes: number;
+  dueMistakes: number;
+  masteredMistakes: number;
+  reviewRecordCount: number;
+  imageRecordCount: number;
+};
+
 const DEV_UNLOCK_TAP_TARGET = 7;
 const DEV_TAP_HINT_START = 3;
 const DEV_TAP_WINDOW_MS = 3000;
 const VERSION_LABEL = '版本';
 const VERSION_VALUE = '0.1.0 MVP';
+const DEFAULT_DATA_OVERVIEW_STATS: DataOverviewStats = {
+  totalMistakes: 0,
+  dueMistakes: 0,
+  masteredMistakes: 0,
+  reviewRecordCount: 0,
+  imageRecordCount: 0,
+};
 
 const APP_INFO_ROWS: InfoRow[] = [
   { label: '模式', value: '离线本地版' },
@@ -66,6 +83,10 @@ export default function SettingsScreen() {
   const [devTapCount, setDevTapCount] = useState(0);
   const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(false);
   const [devHintMessage, setDevHintMessage] = useState<string | null>(null);
+  const [dataOverview, setDataOverview] = useState<DataOverviewStats>(DEFAULT_DATA_OVERVIEW_STATS);
+  const [isOverviewLoading, setIsOverviewLoading] = useState(true);
+  const [isOverviewRefreshing, setIsOverviewRefreshing] = useState(false);
+  const [overviewErrorMessage, setOverviewErrorMessage] = useState<string | null>(null);
 
   const lastTapAtRef = useRef<number | null>(null);
   const tapCountRef = useRef(0);
@@ -105,6 +126,41 @@ export default function SettingsScreen() {
     setDevHintMessage(null);
   }, [canUseDevUnlock, devTapCount, isDevModeUnlocked]);
 
+  const loadDataOverview = useCallback(async (mode: 'initial' | 'refresh') => {
+    if (mode === 'initial') {
+      setIsOverviewLoading(true);
+    } else {
+      setIsOverviewRefreshing(true);
+    }
+
+    try {
+      const [mistakeStats, reviewRecordCount, imageRecordCount] = await Promise.all([
+        MistakeListService.getMistakeListStats(),
+        ReviewRecordRepository.countReviewRecords(),
+        MistakeImageRepository.countMistakeImages(),
+      ]);
+
+      setDataOverview({
+        totalMistakes: mistakeStats.total,
+        dueMistakes: mistakeStats.due,
+        masteredMistakes: mistakeStats.mastered,
+        reviewRecordCount,
+        imageRecordCount,
+      });
+      setOverviewErrorMessage(null);
+    } catch {
+      setDataOverview(DEFAULT_DATA_OVERVIEW_STATS);
+      setOverviewErrorMessage('本地数据概况读取失败');
+    } finally {
+      setIsOverviewLoading(false);
+      setIsOverviewRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDataOverview('initial');
+  }, [loadDataOverview]);
+
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
       <BrandHeader title="设置" subtitle="离线运行，本地保存错题和复做记录" offlineLabel="• 离线" />
@@ -132,6 +188,69 @@ export default function SettingsScreen() {
           {canUseDevUnlock && devHintMessage ? (
             <Text style={styles.devHintText}>{devHintMessage}</Text>
           ) : null}
+        </CardContainer>
+      </View>
+
+      <View style={styles.sectionBlock}>
+        <SectionTitle title="数据概况" />
+        <CardContainer style={styles.card} padding={spacing.lg}>
+          <View style={styles.dataRow}>
+            <Text style={styles.infoLabel}>总错题数</Text>
+            <Text style={styles.infoValue}>{dataOverview.totalMistakes}</Text>
+          </View>
+          <View style={styles.dataRow}>
+            <Text style={styles.infoLabel}>待复做数</Text>
+            <Text style={styles.infoValue}>{dataOverview.dueMistakes}</Text>
+          </View>
+          <View style={styles.dataRow}>
+            <Text style={styles.infoLabel}>已七刷数</Text>
+            <Text style={styles.infoValue}>{dataOverview.masteredMistakes}</Text>
+          </View>
+          <View style={styles.dataRow}>
+            <Text style={styles.infoLabel}>复做记录数</Text>
+            <Text style={styles.infoValue}>{dataOverview.reviewRecordCount}</Text>
+          </View>
+          <View style={styles.dataRow}>
+            <Text style={styles.infoLabel}>图片记录数</Text>
+            <Text style={styles.infoValue}>{dataOverview.imageRecordCount}</Text>
+          </View>
+
+          {isOverviewLoading ? (
+            <Text style={styles.dataHintText}>正在读取本地数据...</Text>
+          ) : isOverviewRefreshing ? (
+            <Text style={styles.dataHintText}>正在读取本地数据...</Text>
+          ) : null}
+
+          {overviewErrorMessage ? (
+            <View style={styles.dataErrorWrap}>
+              <Text style={styles.dataErrorText}>{overviewErrorMessage}</Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={isOverviewLoading || isOverviewRefreshing}
+                onPress={() => {
+                  void loadDataOverview('refresh');
+                }}
+                style={[
+                  styles.dataRetryButton,
+                  (isOverviewLoading || isOverviewRefreshing) && styles.disabledButton,
+                ]}>
+                <Text style={styles.dataRetryButtonText}>重试</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <Pressable
+            accessibilityRole="button"
+            disabled={isOverviewLoading || isOverviewRefreshing}
+            onPress={() => {
+              void loadDataOverview('refresh');
+            }}
+            style={[
+              styles.dataRefreshButton,
+              (isOverviewLoading || isOverviewRefreshing) && styles.disabledButton,
+            ]}>
+            <Text style={styles.dataRefreshButtonText}>刷新数据概况</Text>
+          </Pressable>
         </CardContainer>
       </View>
 
@@ -221,6 +340,12 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: spacing.md,
   },
+  dataRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
   infoLabel: {
     ...typography.bodySmall,
     color: colors.textSecondary,
@@ -287,6 +412,51 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: '#8a5a22',
     fontWeight: '700',
+  },
+  dataHintText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  dataErrorWrap: {
+    gap: spacing.sm,
+  },
+  dataErrorText: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  dataRetryButton: {
+    alignSelf: 'flex-start',
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#f0c3c3',
+    backgroundColor: '#ffecec',
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+  },
+  dataRetryButtonText: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  dataRefreshButton: {
+    alignSelf: 'flex-start',
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+  },
+  dataRefreshButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  disabledButton: {
+    opacity: 0.5,
   },
   listText: {
     ...typography.body,

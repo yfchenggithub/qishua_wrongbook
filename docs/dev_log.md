@@ -1219,3 +1219,41 @@
   - 解锁状态仍为会话级，App 重启后需重新点击 7 次解锁（符合当前阶段约束）。
 - 下一步：
   - 进入 S-E：补开发入口守卫与发布前防误开检查（例如 release 构建二次确认不显示任何 dev 入口）。
+
+### 2026-05-09 - 设置页阶段10-E：本地数据概况卡片
+
+- 任务目标：在设置页新增正式可见“数据概况”卡片，展示本机错题与复做相关数量；不影响开发入口隐藏机制。
+- 修改文件：
+  - `app/(tabs)/settings.tsx`
+  - `src/repositories/ReviewRecordRepository.ts`
+  - `src/repositories/MistakeImageRepository.ts`
+  - `docs/dev_log.md`
+- 核心变化：
+  - 设置页新增“数据概况”卡片，显示 5 个真实统计字段：
+    - 总错题数
+    - 待复做数
+    - 已七刷数
+    - 复做记录数
+    - 图片记录数
+  - 统计数据来源：
+    - `MistakeListService.getMistakeListStats()` -> 总错题/待复做/已七刷
+    - `ReviewRecordRepository.countReviewRecords()` -> 复做记录总数
+    - `MistakeImageRepository.countMistakeImages()` -> 图片记录总数
+  - 新增加载与刷新状态：
+    - 初次加载与手动刷新时显示 `正在读取本地数据...`
+    - 增加 `刷新数据概况` 按钮，点击后重新读取
+  - 新增错误态：
+    - 读取失败显示 `本地数据概况读取失败`
+    - 提供 `重试` 按钮重新读取
+  - 空数据兜底：
+    - 失败或无数据时展示全 0，避免页面崩溃
+  - 保持开发入口机制不变：
+    - `__DEV__ && isDevModeUnlocked` 才显示开发调试区域
+    - 未解锁不显示 `/dev/db` 与 `/dev/images`
+- 验收结果：
+  - `npm run typecheck` 通过。
+  - `npx eslint "app/(tabs)/settings.tsx" "src/repositories/ReviewRecordRepository.ts" "src/repositories/MistakeImageRepository.ts" --no-cache` 通过。
+- 遗留问题：
+  - 当前统计读取策略为“进入设置页读取一次 + 手动刷新”，未做 focus 自动刷新（符合本阶段约束）。
+- 下一步：
+  - 进入 S-F：补设置页数据概况的交互与文案收口（含更新时间提示、空态提示优化与 Android 真机回归清单）。

@@ -174,6 +174,22 @@ LIMIT 1;`,
     }
   },
 
+  async countReviewRecords(): Promise<number> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const row = await db.getFirstAsync<{ total: number | null }>(
+        `SELECT COUNT(*) AS total
+FROM review_records;`,
+      );
+
+      return Number(row?.total ?? 0);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'countReviewRecords failed.', error);
+      throw error;
+    }
+  },
+
   async deleteReviewRecord(id: string): Promise<boolean> {
     try {
       await ensureDatabaseReady();

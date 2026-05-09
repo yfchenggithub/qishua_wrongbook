@@ -158,6 +158,22 @@ ORDER BY created_at ASC;`,
     }
   },
 
+  async countMistakeImages(): Promise<number> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const row = await db.getFirstAsync<{ total: number | null }>(
+        `SELECT COUNT(*) AS total
+FROM mistake_images;`,
+      );
+
+      return Number(row?.total ?? 0);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'countMistakeImages failed.', error);
+      throw error;
+    }
+  },
+
   async deleteImage(id: string): Promise<boolean> {
     try {
       await ensureDatabaseReady();
