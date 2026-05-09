@@ -78,7 +78,6 @@ const DEV_ENTRIES: DevEntry[] = [
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const canUseDevUnlock = __DEV__;
 
   const [devTapCount, setDevTapCount] = useState(0);
   const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(false);
@@ -92,10 +91,6 @@ export default function SettingsScreen() {
   const tapCountRef = useRef(0);
 
   const handleVersionTap = useCallback(() => {
-    if (!canUseDevUnlock) {
-      return;
-    }
-
     if (isDevModeUnlocked) {
       setDevHintMessage('已开启开发调试入口');
       return;
@@ -124,7 +119,7 @@ export default function SettingsScreen() {
     }
 
     setDevHintMessage(null);
-  }, [canUseDevUnlock, devTapCount, isDevModeUnlocked]);
+  }, [devTapCount, isDevModeUnlocked]);
 
   const loadDataOverview = useCallback(async (mode: 'initial' | 'refresh') => {
     if (mode === 'initial') {
@@ -172,9 +167,8 @@ export default function SettingsScreen() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="版本号"
-            accessibilityState={{ disabled: !canUseDevUnlock }}
             hitSlop={8}
-            onPress={canUseDevUnlock ? handleVersionTap : undefined}
+            onPress={handleVersionTap}
             style={styles.versionRowPressable}>
             <Text style={styles.infoLabel}>{VERSION_LABEL}</Text>
             <Text style={styles.infoValue}>{VERSION_VALUE}</Text>
@@ -185,7 +179,7 @@ export default function SettingsScreen() {
               <Text style={styles.infoValue}>{row.value}</Text>
             </View>
           ))}
-          {canUseDevUnlock && devHintMessage ? (
+          {devHintMessage ? (
             <Text style={styles.devHintText}>{devHintMessage}</Text>
           ) : null}
         </CardContainer>
@@ -287,11 +281,11 @@ export default function SettingsScreen() {
         </CardContainer>
       </View>
 
-      {canUseDevUnlock && isDevModeUnlocked ? (
+      {isDevModeUnlocked ? (
         <View style={styles.sectionBlock}>
           <SectionTitle title="开发调试" />
           <CardContainer style={[styles.card, styles.devCard]} padding={spacing.lg}>
-            <Text style={styles.devNoticeText}>仅开发阶段使用，正式发布前会隐藏。</Text>
+            <Text style={styles.devNoticeText}>调试入口默认隐藏，仅用于排查问题，请谨慎使用。</Text>
 
             {DEV_ENTRIES.map((entry) => (
               <View key={entry.href} style={styles.devEntryBlock}>
