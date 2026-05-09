@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CardContainer } from '@/src/components/ui';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
@@ -11,6 +11,14 @@ export interface DetailImageCardProps {
   fileSize?: number | null;
   emptyText: string;
   height?: number;
+  loadErrorText?: string;
+  compactEmpty?: boolean;
+  emptyTitle?: string;
+  emptyDescription?: string;
+  emptyActionText?: string;
+  onEmptyActionPress?: () => void;
+  isEmptyActionLoading?: boolean;
+  emptyActionDisabled?: boolean;
 }
 
 function shortenUri(uri: string): string {
@@ -37,6 +45,14 @@ export function DetailImageCard({
   fileSize,
   emptyText,
   height = 220,
+  loadErrorText = '图片加载失败',
+  compactEmpty = false,
+  emptyTitle,
+  emptyDescription,
+  emptyActionText,
+  onEmptyActionPress,
+  isEmptyActionLoading = false,
+  emptyActionDisabled = false,
 }: DetailImageCardProps) {
   const [imageFailed, setImageFailed] = useState(false);
 
@@ -56,7 +72,14 @@ export function DetailImageCard({
   const canShowImage = hasUri && exists === true && !imageFailed;
   const isFileMissing = hasUri && exists === false;
   const isLoadFailed = hasUri && exists === true && imageFailed;
-  const boxStyles = [styles.previewBox, { height }, !hasUri && styles.previewBoxEmpty];
+  const hasEmptyAction = !!emptyActionText && typeof onEmptyActionPress === 'function';
+  const isCompactEmptyState = !hasUri && compactEmpty;
+  const boxStyles = [
+    styles.previewBox,
+    !isCompactEmptyState ? { height } : undefined,
+    !hasUri && !isCompactEmptyState ? styles.previewBoxEmpty : undefined,
+    isCompactEmptyState ? styles.previewBoxCompact : undefined,
+  ];
 
   return (
     <CardContainer style={styles.card} padding={spacing.md}>
@@ -84,12 +107,37 @@ export function DetailImageCard({
 
         {isLoadFailed ? (
           <View style={styles.messageWrap}>
-            <Text style={styles.errorText}>图片加载失败</Text>
+            <Text style={styles.errorText}>{loadErrorText}</Text>
             <Text style={styles.uriText}>{shortenUri(normalizedUri!)}</Text>
           </View>
         ) : null}
 
-        {!hasUri ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
+        {!hasUri && !isCompactEmptyState ? <Text style={styles.emptyText}>{emptyText}</Text> : null}
+
+        {isCompactEmptyState ? (
+          <View style={styles.compactEmptyContent}>
+            <View style={styles.compactEmptyTextWrap}>
+              <Text style={styles.compactEmptyTitle}>{emptyTitle ?? emptyText}</Text>
+              {emptyDescription ? (
+                <Text style={styles.compactEmptyDescription}>{emptyDescription}</Text>
+              ) : null}
+            </View>
+
+            {hasEmptyAction ? (
+              <Pressable
+                style={[
+                  styles.compactEmptyAction,
+                  (isEmptyActionLoading || emptyActionDisabled) && styles.compactEmptyActionDisabled,
+                ]}
+                onPress={onEmptyActionPress}
+                disabled={isEmptyActionLoading || emptyActionDisabled}>
+                <Text style={styles.compactEmptyActionText}>
+                  {isEmptyActionLoading ? '保存中...' : emptyActionText}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       {canShowImage && fileSize !== undefined && fileSize !== null ? (
@@ -122,9 +170,51 @@ const styles = StyleSheet.create({
   previewBoxEmpty: {
     borderStyle: 'dashed',
   },
+  previewBoxCompact: {
+    borderStyle: 'solid',
+    backgroundColor: colors.surface,
+    paddingVertical: spacing.sm,
+  },
   image: {
     width: '100%',
     height: '100%',
+  },
+  compactEmptyContent: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  compactEmptyTextWrap: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  compactEmptyTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  compactEmptyDescription: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  compactEmptyAction: {
+    alignSelf: 'flex-start',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  compactEmptyActionDisabled: {
+    opacity: 0.5,
+  },
+  compactEmptyActionText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
   },
   messageWrap: {
     gap: spacing.xs,
@@ -151,3 +241,4 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
 });
+

@@ -2,6 +2,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Image,
   Pressable,
   StyleSheet,
@@ -19,14 +20,15 @@ import {
   SectionTitle,
   StatusPill,
 } from '@/src/components';
-import type { DetailReviewRecordItem, MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
+import type { DetailImageSlotType, DetailReviewRecordItem, MistakeDetailViewModel } from '@/src/models/MistakeDetailViewModel';
+import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
-import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 const BRAND = {
   title: '七刷错题本',
-  subtitle: '详情来自本地 SQLite',
+  subtitle: '详情来自本地离线数据',
 } as const;
 const PAGE_SCOPE = 'MistakeDetailScreen';
 
@@ -35,6 +37,9 @@ type DetailPageState =
   | { kind: 'success'; detail: MistakeDetailViewModel }
   | { kind: 'notFound'; message: string }
   | { kind: 'error'; message: string };
+
+type SupplementTarget = 'my_solution' | 'answer';
+type SupplementSource = 'camera' | 'library';
 
 function toBriefErrorMessage(message?: string): string {
   const fallback = '读取错题失败，请稍后重试。';
@@ -123,6 +128,36 @@ function formatReviewCreatedAt(iso: string): string {
   return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
 }
 
+function isCancelLikeMessage(message?: string): boolean {
+  if (!message) {
+    return false;
+  }
+  const normalized = message.toLowerCase();
+  return normalized.includes('cancel') || normalized.includes('取消');
+}
+
+function isSupplementTarget(type: DetailImageSlotType): type is SupplementTarget {
+  return type === 'my_solution' || type === 'answer';
+}
+
+function getSupplementDialogTitle(target: SupplementTarget): string {
+  return target === 'my_solution' ? '补充我的做法' : '补充答案解析';
+}
+
+function getEmptyTitle(target: SupplementTarget): string {
+  return target === 'my_solution' ? '我的做法：还没有添加' : '答案解析：还没有添加';
+}
+
+function getEmptyDescription(target: SupplementTarget): string {
+  return target === 'my_solution'
+    ? '建议补充自己的解法，复做时更容易对比。'
+    : '建议补充答案或解析，复盘时更清楚。';
+}
+
+function getEmptyActionText(target: SupplementTarget): string {
+  return target === 'my_solution' ? '补充做法' : '补充答案';
+}
+
 function ReviewRecordCard({ record }: { record: DetailReviewRecordItem }) {
   const [imageFailed, setImageFailed] = useState(false);
   const hasImage = !!record.solutionImageUri;
@@ -155,14 +190,12 @@ function ReviewRecordCard({ record }: { record: DetailReviewRecordItem }) {
 function StateCard({
   title,
   message,
-  detailText,
   onBack,
   onRetry,
   retryText = '重试',
 }: {
   title: string;
   message: string;
-  detailText?: string;
   onBack: () => void;
   onRetry?: () => void;
   retryText?: string;
@@ -171,7 +204,6 @@ function StateCard({
     <CardContainer style={styles.stateCard} padding={spacing.lg}>
       <Text style={styles.stateTitle}>{title}</Text>
       <Text style={styles.stateMessage}>{message}</Text>
-      {detailText ? <Text style={styles.stateDetailText}>{detailText}</Text> : null}
 
       <View style={styles.stateActions}>
         <Pressable style={styles.stateSecondaryButton} onPress={onBack}>
@@ -194,6 +226,7 @@ export default function MistakeDetailScreen() {
 
   const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [supplementingType, setSupplementingType] = useState<SupplementTarget | null>(null);
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
 
@@ -274,7 +307,7 @@ export default function MistakeDetailScreen() {
     if (result.notFound) {
       setState({
         kind: 'notFound',
-        message: '没有找到这道错题',
+        message: '没有找到这道错题。',
       });
       return;
     }
@@ -306,6 +339,82 @@ export default function MistakeDetailScreen() {
     }, [loadDetail]),
   );
 
+  const handlePickAndSaveSupplementImage = useCallback(async (
+    target: SupplementTarget,
+    source: SupplementSource,
+  ) => {
+    if (state.kind !== 'success') {
+      return;
+    }
+    if (supplementingType !== null) {
+      return;
+    }
+
+    const mistakeId = state.detail.id;
+    setSupplementingType(target);
+
+    try {
+      const saveResult = source === 'camera'
+        ? await ImageService.takePhotoAndSave({ mistakeId, type: target })
+        : await ImageService.pickImageAndSave({ mistakeId, type: target });
+
+      const imageUri = saveResult.image?.uri?.trim();
+      if (!saveResult.ok || !imageUri) {
+        if (!isCancelLikeMessage(saveResult.errorMessage)) {
+          Alert.alert('提示', saveResult.errorMessage?.trim() || '保存失败，请重试');
+        }
+        return;
+      }
+
+      const persistResult = await MistakeDetailService.saveOptionalDetailImage({
+        mistakeId,
+        imageType: target,
+        imageUri,
+      });
+      if (!persistResult.ok) {
+        Alert.alert('提示', persistResult.errorMessage ?? '保存失败，请重试');
+        return;
+      }
+
+      await loadDetail({ keepCurrent: true });
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to supplement detail image.', {
+        id: mistakeId,
+        target,
+        source,
+        error,
+      });
+      Alert.alert('提示', '保存失败，请重试');
+    } finally {
+      setSupplementingType(null);
+    }
+  }, [loadDetail, state, supplementingType]);
+
+  const handlePressSupplement = useCallback((target: SupplementTarget) => {
+    if (supplementingType !== null) {
+      return;
+    }
+
+    Alert.alert(getSupplementDialogTitle(target), '请选择图片来源', [
+      {
+        text: '拍照',
+        onPress: () => {
+          void handlePickAndSaveSupplementImage(target, 'camera');
+        },
+      },
+      {
+        text: '从相册选择',
+        onPress: () => {
+          void handlePickAndSaveSupplementImage(target, 'library');
+        },
+      },
+      {
+        text: '取消',
+        style: 'cancel',
+      },
+    ]);
+  }, [handlePickAndSaveSupplementImage, supplementingType]);
+
   return (
     <ScreenContainer scroll contentStyle={styles.screenContent}>
       <Pressable style={styles.backButton} onPress={handleBack}>
@@ -325,7 +434,6 @@ export default function MistakeDetailScreen() {
         <StateCard
           title="读取错题失败"
           message={state.message}
-          detailText={routeId ? `错题 ID：${routeId}` : undefined}
           onBack={handleBack}
           onRetry={routeId ? () => void loadDetail() : undefined}
         />
@@ -335,7 +443,6 @@ export default function MistakeDetailScreen() {
         <StateCard
           title="没有找到这道错题"
           message={state.message}
-          detailText={routeId ? `错题 ID：${routeId}` : undefined}
           onBack={handleBack}
           onRetry={routeId ? () => void loadDetail() : undefined}
           retryText="刷新"
@@ -376,8 +483,14 @@ export default function MistakeDetailScreen() {
 
           <CardContainer style={styles.imagesSectionCard} padding={spacing.lg}>
             <View style={styles.imagesHeaderRow}>
-              <SectionTitle title="题目 / 做法 / 答案" />
-              <Pressable onPress={() => void loadDetail({ keepCurrent: true })} style={styles.refreshButton}>
+              <SectionTitle title="题目 / 我的做法 / 答案解析" />
+              <Pressable
+                onPress={() => void loadDetail({ keepCurrent: true })}
+                disabled={isRefreshing || supplementingType !== null}
+                style={[
+                  styles.refreshButton,
+                  (isRefreshing || supplementingType !== null) && styles.refreshButtonDisabled,
+                ]}>
                 <Text style={styles.refreshButtonText}>{isRefreshing ? '刷新中...' : '刷新'}</Text>
               </Pressable>
             </View>
@@ -385,16 +498,37 @@ export default function MistakeDetailScreen() {
             <View style={styles.slotList}>
               {state.detail.imageSlots
                 .filter((slot) => slot.type !== 'review_solution')
-                .map((slot) => (
-                  <DetailImageCard
-                    key={slot.type}
-                    title={slot.title}
-                    uri={slot.uri}
-                    exists={slot.exists}
-                    fileSize={slot.fileSize}
-                    emptyText={slot.emptyText}
-                  />
-              ))}
+                .map((slot) => {
+                  const hasUri = typeof slot.uri === 'string' && slot.uri.trim().length > 0;
+                  const supplementTarget = isSupplementTarget(slot.type) ? slot.type : null;
+
+                  return (
+                    <DetailImageCard
+                      key={slot.type}
+                      title={slot.title}
+                      uri={slot.uri}
+                      exists={slot.exists}
+                      fileSize={slot.fileSize}
+                      emptyText={slot.emptyText}
+                      loadErrorText={slot.type === 'question' ? '题目图片加载失败' : '图片加载失败'}
+                      compactEmpty={supplementTarget !== null && !hasUri}
+                      emptyTitle={supplementTarget ? getEmptyTitle(supplementTarget) : undefined}
+                      emptyDescription={supplementTarget ? getEmptyDescription(supplementTarget) : undefined}
+                      emptyActionText={supplementTarget ? getEmptyActionText(supplementTarget) : undefined}
+                      onEmptyActionPress={
+                        supplementTarget ? () => handlePressSupplement(supplementTarget) : undefined
+                      }
+                      isEmptyActionLoading={
+                        supplementTarget !== null && supplementingType === supplementTarget
+                      }
+                      emptyActionDisabled={
+                        supplementTarget !== null
+                        && supplementingType !== null
+                        && supplementingType !== supplementTarget
+                      }
+                    />
+                  );
+                })}
             </View>
           </CardContainer>
 
@@ -425,6 +559,7 @@ export default function MistakeDetailScreen() {
 const styles = StyleSheet.create({
   screenContent: {
     paddingTop: spacing.lg,
+    paddingBottom: spacing.xl + layout.bottomTabHeight,
     gap: spacing.lg,
   },
   backButton: {
@@ -457,10 +592,6 @@ const styles = StyleSheet.create({
   stateMessage: {
     ...typography.body,
     color: colors.textSecondary,
-  },
-  stateDetailText: {
-    ...typography.caption,
-    color: colors.textMuted,
   },
   stateActions: {
     marginTop: spacing.sm,
@@ -563,6 +694,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+  },
+  refreshButtonDisabled: {
+    opacity: 0.6,
   },
   refreshButtonText: {
     ...typography.caption,

@@ -21,6 +21,17 @@ type GetMistakeDetailResult = {
   notFound?: boolean;
 };
 
+export type SaveOptionalDetailImageParams = {
+  mistakeId: string;
+  imageType: 'my_solution' | 'answer';
+  imageUri: string;
+};
+
+type SaveOptionalDetailImageResult = {
+  ok: boolean;
+  errorMessage?: string;
+};
+
 type SlotSeed = {
   type: DetailImageSlot['type'];
   title: string;
@@ -154,19 +165,13 @@ async function buildImageSlots(mistake: Mistake, images: MistakeImage[]): Promis
     },
     {
       type: 'answer',
-      title: '答案',
+      title: '答案解析',
       uri: answerUri,
-      emptyText: '暂无答案图片',
+      emptyText: '暂无答案解析图片',
     },
   ];
 
-  return Promise.all(
-    slotSeeds.map((seed) =>
-      enrichSlotWithLocalFileInfo({
-        ...seed,
-      }),
-    ),
-  );
+  return Promise.all(slotSeeds.map((seed) => enrichSlotWithLocalFileInfo({ ...seed })));
 }
 
 function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSlot[]): MistakeDetailViewModel {
@@ -190,7 +195,9 @@ function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSl
   };
 }
 
-function mapReviewRecords(mistakeReviewRecords: Awaited<ReturnType<typeof ReviewRecordRepository.listReviewRecordsByMistakeId>>): DetailReviewRecordItem[] {
+function mapReviewRecords(
+  mistakeReviewRecords: Awaited<ReturnType<typeof ReviewRecordRepository.listReviewRecordsByMistakeId>>,
+): DetailReviewRecordItem[] {
   return mistakeReviewRecords.map((record) => ({
     id: record.id,
     reviewIndex: record.review_index,
@@ -264,3 +271,56 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
     };
   }
 }
+
+export async function saveOptionalDetailImage(
+  params: SaveOptionalDetailImageParams,
+): Promise<SaveOptionalDetailImageResult> {
+  const mistakeId = normalizeMistakeId(params.mistakeId);
+  const imageUri = normalizeOptionalText(params.imageUri);
+
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  if (!imageUri) {
+    return {
+      ok: false,
+      errorMessage: '图片地址不能为空。',
+    };
+  }
+
+  try {
+    await MistakeImageRepository.createMistakeImage({
+      mistake_id: mistakeId,
+      type: params.imageType,
+      uri: imageUri,
+    });
+
+    if (params.imageType === 'answer') {
+      await MistakeRepository.updateMistake(mistakeId, {
+        answer_image_uri: imageUri,
+      });
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Saved optional detail image successfully.', {
+      mistakeId,
+      imageType: params.imageType,
+    });
+
+    return { ok: true };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'saveOptionalDetailImage failed.', {
+      mistakeId,
+      imageType: params.imageType,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+

@@ -390,7 +390,7 @@ export default function AddScreen() {
       const previousDraftId = draft.draftId;
       Alert.alert(
         '保存成功',
-        `错题已加入 7 刷计划}`,
+        `错题已加入 7 刷计划!`,
       );
       setDraft(createNextDraft(previousDraftId));
       setValidationErrors([]);
