@@ -25,7 +25,7 @@ import type { MistakeListFilter, MistakeListItem, MistakeListStatus } from '@/sr
 import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeListService from '@/src/services/MistakeListService';
-import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 const SEARCH_DEBOUNCE_MS = 350;
 const PAGE_SCOPE = 'LibraryScreen';
@@ -82,7 +82,7 @@ function MistakeLibraryCard({
 
   return (
     <Pressable onPress={onPress} style={styles.cardPressable}>
-      <CardContainer padding={spacing.lg} style={styles.card}>
+      <CardContainer padding={spacing.md} style={styles.card}>
         <View style={styles.cardRow}>
           {showImage ? (
             <Image
@@ -97,14 +97,22 @@ function MistakeLibraryCard({
 
           <View style={styles.cardMain}>
             <View style={styles.cardTopLine}>
-              <Text style={styles.cardMeta}>{item.module}</Text>
-              <Text style={styles.arrow}>{'>'}</Text>
+              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.cardMeta}>
+                {item.module}
+              </Text>
+              <Text maxFontSizeMultiplier={1.1} style={styles.arrow}>
+                {'>'}
+              </Text>
             </View>
 
-            <Text style={styles.cardTitle}>{item.title}</Text>
-            <Text style={styles.cardSource}>{item.subtitle}</Text>
+            <Text numberOfLines={2} maxFontSizeMultiplier={1.2} style={styles.cardTitle}>
+              {item.title}
+            </Text>
+            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.cardSource}>
+              {item.subtitle}
+            </Text>
 
-            <Text style={styles.progressLabel}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.progressLabel}>
               进度：{item.reviewCount}/{item.maxReviewCount}
             </Text>
 
@@ -114,7 +122,13 @@ function MistakeLibraryCard({
                 current={item.reviewCount}
                 completed={item.reviewCount}
               />
-              <StatusPill label={item.statusLabel} tone={mapStatusToTone(item.displayStatus)} />
+            </View>
+            <View style={styles.statusRow}>
+              <StatusPill
+                label={item.statusLabel}
+                tone={mapStatusToTone(item.displayStatus)}
+                style={styles.statusPill}
+              />
             </View>
           </View>
         </View>
@@ -333,6 +347,7 @@ export default function LibraryScreen() {
                 placeholder={libraryMock.searchPlaceholder}
                 placeholderTextColor={colors.textMuted}
                 style={styles.searchInput}
+                maxFontSizeMultiplier={1.2}
                 returnKeyType="search"
                 onSubmitEditing={() => setDebouncedKeyword(searchText.trim())}
               />
@@ -369,10 +384,10 @@ const styles = StyleSheet.create({
   screenContent: {
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.lg,
-    gap: spacing.lg,
+    gap: spacing.md,
   },
   listContent: {
-    paddingBottom: spacing.xl,
+    paddingBottom: layout.bottomTabHeight,
   },
   searchWrap: {
     flexDirection: 'row',
@@ -382,7 +397,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
-    minHeight: 60,
+    minHeight: 52,
     paddingHorizontal: spacing.md,
   },
   searchInput: {
@@ -417,7 +432,7 @@ const styles = StyleSheet.create({
     height: spacing.md,
   },
   stateWrap: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     marginHorizontal: spacing.screenPadding,
     borderRadius: radius.lg,
     borderWidth: 1,
@@ -427,7 +442,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 132,
+    minHeight: 112,
   },
   stateText: {
     ...typography.body,
@@ -480,17 +495,20 @@ const styles = StyleSheet.create({
   },
   cardMain: {
     flex: 1,
+    minWidth: 0,
     gap: spacing.xs,
   },
   cardTopLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   cardMeta: {
     ...typography.body,
     color: colors.textSecondary,
     fontWeight: '600',
+    flex: 1,
+    minWidth: 0,
   },
   arrow: {
     ...typography.body,
@@ -500,8 +518,8 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     ...typography.sectionTitle,
-    fontSize: 20,
-    lineHeight: 28,
+    fontSize: 18,
+    lineHeight: 24,
   },
   cardSource: {
     ...typography.body,
@@ -516,12 +534,19 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    justifyContent: 'flex-start',
+    gap: spacing.xs,
+  },
+  statusRow: {
+    marginTop: spacing.xs,
+    alignItems: 'flex-end',
+  },
+  statusPill: {
+    maxWidth: '100%',
   },
   thumb: {
-    width: 112,
-    height: 112,
+    width: 92,
+    height: 92,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -537,8 +562,8 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   thumbImage: {
-    width: 112,
-    height: 112,
+    width: 92,
+    height: 92,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,

@@ -5,7 +5,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { BrandHeader, CardContainer, ScreenContainer, SectionTitle } from '@/src/components';
 import { MistakeImageRepository, ReviewRecordRepository } from '@/src/repositories';
 import * as MistakeListService from '@/src/services/MistakeListService';
-import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 type InfoRow = {
   label: string;
@@ -162,7 +162,7 @@ export default function SettingsScreen() {
 
       <View style={styles.sectionBlock}>
         <SectionTitle title="App 信息" />
-        <CardContainer style={styles.card} padding={spacing.lg}>
+        <CardContainer style={styles.card} padding={spacing.md}>
           <Text style={styles.appName}>七刷错题本</Text>
           <Pressable
             accessibilityRole="button"
@@ -187,7 +187,7 @@ export default function SettingsScreen() {
 
       <View style={styles.sectionBlock}>
         <SectionTitle title="数据概况" />
-        <CardContainer style={styles.card} padding={spacing.lg}>
+        <CardContainer style={styles.card} padding={spacing.md}>
           <View style={styles.dataRow}>
             <Text style={styles.infoLabel}>总错题数</Text>
             <Text style={styles.infoValue}>{dataOverview.totalMistakes}</Text>
@@ -250,7 +250,7 @@ export default function SettingsScreen() {
 
       <View style={styles.sectionBlock}>
         <SectionTitle title="核心流程" />
-        <CardContainer style={styles.card} padding={spacing.lg}>
+        <CardContainer style={styles.card} padding={spacing.md}>
           {CORE_FLOW_ITEMS.map((item) => (
             <Text key={item} style={styles.listText}>
               • {item}
@@ -261,7 +261,7 @@ export default function SettingsScreen() {
 
       <View style={styles.sectionBlock}>
         <SectionTitle title="本地数据" />
-        <CardContainer style={styles.card} padding={spacing.lg}>
+        <CardContainer style={styles.card} padding={spacing.md}>
           {LOCAL_DATA_ITEMS.map((item) => (
             <Text key={item} style={styles.listText}>
               • {item}
@@ -272,7 +272,7 @@ export default function SettingsScreen() {
 
       <View style={styles.sectionBlock}>
         <SectionTitle title="后续计划" />
-        <CardContainer style={styles.card} padding={spacing.lg}>
+        <CardContainer style={styles.card} padding={spacing.md}>
           {ROADMAP_ITEMS.map((item) => (
             <Text key={item} style={styles.listText}>
               • {item}
@@ -284,7 +284,7 @@ export default function SettingsScreen() {
       {isDevModeUnlocked ? (
         <View style={styles.sectionBlock}>
           <SectionTitle title="开发调试" />
-          <CardContainer style={[styles.card, styles.devCard]} padding={spacing.lg}>
+          <CardContainer style={[styles.card, styles.devCard]} padding={spacing.md}>
             <Text style={styles.devNoticeText}>调试入口默认隐藏，仅用于排查问题，请谨慎使用。</Text>
 
             {DEV_ENTRIES.map((entry) => (
@@ -313,19 +313,20 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   screenContent: {
     paddingTop: spacing.lg,
-    gap: spacing.xl,
+    paddingBottom: layout.bottomTabHeight,
+    gap: spacing.lg,
   },
   sectionBlock: {
-    gap: spacing.md,
+    gap: spacing.sm,
   },
   card: {
     borderRadius: radius.xl,
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   appName: {
     ...typography.sectionTitle,
-    fontSize: 22,
-    lineHeight: 30,
+    fontSize: 19,
+    lineHeight: 24,
     marginBottom: spacing.xs,
   },
   infoRow: {
@@ -352,8 +353,8 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   versionRowPressable: {
-    minHeight: 44,
-    paddingVertical: spacing.xs,
+    minHeight: 38,
+    paddingVertical: 2,
     borderRadius: radius.md,
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -379,8 +380,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#eddac0',
     backgroundColor: colors.surface,
-    padding: spacing.md,
-    gap: spacing.sm,
+    padding: spacing.sm,
+    gap: spacing.xs,
   },
   devEntryTitle: {
     ...typography.body,
@@ -392,7 +393,7 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   devEntryButton: {
-    minHeight: 44,
+    minHeight: 38,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: '#c48f4d',
@@ -400,7 +401,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   devEntryButtonText: {
     ...typography.caption,
@@ -421,7 +422,7 @@ const styles = StyleSheet.create({
   },
   dataRetryButton: {
     alignSelf: 'flex-start',
-    minHeight: 40,
+    minHeight: 36,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: '#f0c3c3',
@@ -436,7 +437,7 @@ const styles = StyleSheet.create({
   },
   dataRefreshButton: {
     alignSelf: 'flex-start',
-    minHeight: 40,
+    minHeight: 36,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
@@ -455,6 +456,6 @@ const styles = StyleSheet.create({
   listText: {
     ...typography.body,
     color: colors.textSecondary,
-    lineHeight: 26,
+    lineHeight: 22,
   },
 });

@@ -14,7 +14,12 @@ export interface StatusPillProps {
 export function StatusPill({ label, tone = 'dark', style, textStyle }: StatusPillProps) {
   return (
     <View style={[styles.base, toneStyles[tone], style]}>
-      <Text style={[styles.text, textToneStyles[tone], textStyle]}>{label}</Text>
+      <Text
+        numberOfLines={1}
+        maxFontSizeMultiplier={1.1}
+        style={[styles.text, textToneStyles[tone], textStyle]}>
+        {label}
+      </Text>
     </View>
   );
 }
@@ -22,12 +27,13 @@ export function StatusPill({ label, tone = 'dark', style, textStyle }: StatusPil
 const styles = StyleSheet.create({
   base: {
     alignSelf: 'flex-start',
+    maxWidth: '100%',
     borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
   },
   text: {
-    ...typography.body,
+    ...typography.bodySmall,
     fontWeight: '700',
   },
 });
@@ -55,4 +61,3 @@ const textToneStyles: Record<StatusPillTone, TextStyle> = {
     color: colors.success,
   },
 };
-

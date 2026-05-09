@@ -8,7 +8,11 @@ export interface SectionTitleProps {
 }
 
 export function SectionTitle({ title, style }: SectionTitleProps) {
-  return <Text style={[styles.title, style]}>{title}</Text>;
+  return (
+    <Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={[styles.title, style]}>
+      {title}
+    </Text>
+  );
 }
 
 const styles = StyleSheet.create({
@@ -16,4 +20,3 @@ const styles = StyleSheet.create({
     ...typography.sectionTitle,
   },
 });
-

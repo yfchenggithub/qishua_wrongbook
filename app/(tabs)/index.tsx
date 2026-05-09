@@ -14,7 +14,7 @@ import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeLis
 import { todayMock } from '@/src/mocks/today';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { Logger } from '@/src/services/Logger';
-import { colors, radius, shadows, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
 const QUEUE_LIMIT = 3;
@@ -58,18 +58,26 @@ function MistakeCard({
   pressable?: () => void;
 }) {
   const content = (
-    <CardContainer padding={spacing.lg} style={styles.mistakeCard}>
+    <CardContainer padding={spacing.md} style={styles.mistakeCard}>
       <View style={styles.mistakeRow}>
         <ThumbnailPlaceholder />
 
         <View style={styles.mistakeMain}>
           <View style={styles.mistakeTopLine}>
-            <Text style={styles.mistakeMeta}>{item.module}</Text>
-            <Text style={styles.arrow}>{'>'}</Text>
+            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.mistakeMeta}>
+              {item.module}
+            </Text>
+            <Text maxFontSizeMultiplier={1.1} style={styles.arrow}>
+              {'>'}
+            </Text>
           </View>
 
-          <Text style={styles.mistakeTitle}>{item.title}</Text>
-          <Text style={styles.mistakeSource}>{item.subtitle}</Text>
+          <Text numberOfLines={2} maxFontSizeMultiplier={1.2} style={styles.mistakeTitle}>
+            {item.title}
+          </Text>
+          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.mistakeSource}>
+            {item.subtitle}
+          </Text>
 
           <View style={styles.progressRow}>
             <ProgressDots
@@ -77,8 +85,12 @@ function MistakeCard({
               current={item.reviewCount}
               completed={item.reviewCount}
             />
-            <StatusPill label={item.statusLabel} tone={mapStatusToTone(item.displayStatus)} />
           </View>
+          <StatusPill
+            label={item.statusLabel}
+            tone={mapStatusToTone(item.displayStatus)}
+            style={styles.statusPill}
+          />
         </View>
       </View>
     </CardContainer>
@@ -101,7 +113,7 @@ function SectionStateCard({
   onActionPress?: () => void;
 }) {
   return (
-    <CardContainer padding={spacing.lg} style={styles.stateCard}>
+    <CardContainer padding={spacing.md} style={styles.stateCard}>
       <Text style={styles.stateText}>{message}</Text>
       {actionLabel && onActionPress ? (
         <Pressable onPress={onActionPress} style={styles.stateActionButton}>
@@ -231,23 +243,29 @@ export default function TodayScreen() {
     <ScreenContainer scroll contentStyle={styles.screenContent}>
       <BrandHeader title={todayMock.brand.title} subtitle={todayMock.brand.subtitle} />
 
-      <CardContainer style={styles.taskSummaryCard} padding={spacing.xl}>
+      <CardContainer style={styles.taskSummaryCard} padding={spacing.lg}>
         <Text style={styles.taskCaption}>今日任务</Text>
         <View style={styles.taskDueRow}>
-          <Text style={styles.taskDueCount}>{stats.due}</Text>
+          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskDueCount}>
+            {stats.due}
+          </Text>
           <Text style={styles.taskDueLabel}>道待复做</Text>
         </View>
 
         <View style={styles.taskStatsRow}>
           {summaryStats.map((stat) => (
             <View key={stat.label} style={styles.taskStatCell}>
-              <Text style={styles.taskStatLabel}>{stat.label}</Text>
-              <Text style={styles.taskStatValue}>{stat.value}</Text>
+              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskStatLabel}>
+                {stat.label}
+              </Text>
+              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskStatValue}>
+                {stat.value}
+              </Text>
             </View>
           ))}
         </View>
 
-        <Text style={[styles.statsHint, errorMessage ? styles.statsHintError : null]}>
+        <Text maxFontSizeMultiplier={1.1} style={[styles.statsHint, errorMessage ? styles.statsHintError : null]}>
           {errorMessage
             ? errorMessage
             : isLoading
@@ -307,7 +325,8 @@ export default function TodayScreen() {
 const styles = StyleSheet.create({
   screenContent: {
     paddingTop: spacing.lg,
-    gap: spacing.xl,
+    paddingBottom: layout.bottomTabHeight,
+    gap: spacing.lg,
   },
   taskSummaryCard: {
     backgroundColor: '#0B0B0D',
@@ -321,7 +340,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   taskDueRow: {
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: spacing.sm,
@@ -329,17 +348,19 @@ const styles = StyleSheet.create({
   taskDueCount: {
     ...typography.numberHero,
     color: colors.white,
-    lineHeight: 72,
+    lineHeight: 58,
   },
   taskDueLabel: {
     ...typography.sectionTitle,
     color: colors.white,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
+    fontSize: 18,
+    lineHeight: 24,
   },
   taskStatsRow: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     flexDirection: 'row',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   taskStatCell: {
     flex: 1,
@@ -348,8 +369,8 @@ const styles = StyleSheet.create({
     borderColor: '#2A2B31',
     backgroundColor: '#141519',
     paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.md,
-    minHeight: 96,
+    paddingVertical: spacing.sm,
+    minHeight: 84,
     justifyContent: 'space-between',
   },
   taskStatLabel: {
@@ -360,8 +381,10 @@ const styles = StyleSheet.create({
   taskStatValue: {
     ...typography.sectionTitle,
     color: colors.white,
-    fontSize: 34,
-    lineHeight: 40,
+    fontSize: 26,
+    lineHeight: 32,
+    flexShrink: 1,
+    includeFontPadding: false,
   },
   statsHint: {
     marginTop: spacing.md,
@@ -411,17 +434,20 @@ const styles = StyleSheet.create({
   },
   mistakeMain: {
     flex: 1,
+    minWidth: 0,
     gap: spacing.sm,
   },
   mistakeTopLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
   mistakeMeta: {
     ...typography.body,
     color: colors.textSecondary,
     fontWeight: '600',
+    flex: 1,
+    minWidth: 0,
   },
   arrow: {
     ...typography.body,
@@ -431,8 +457,8 @@ const styles = StyleSheet.create({
   },
   mistakeTitle: {
     ...typography.sectionTitle,
-    fontSize: 20,
-    lineHeight: 28,
+    fontSize: 18,
+    lineHeight: 24,
   },
   mistakeSource: {
     ...typography.body,
@@ -442,12 +468,16 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
     gap: spacing.sm,
   },
+  statusPill: {
+    marginTop: spacing.xs,
+    alignSelf: 'flex-start',
+  },
   thumb: {
-    width: 112,
-    height: 112,
+    width: 96,
+    height: 96,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -458,14 +488,14 @@ const styles = StyleSheet.create({
   },
   thumbAxisX: {
     position: 'absolute',
-    width: 76,
+    width: 64,
     height: 1.5,
     backgroundColor: '#8E949D',
   },
   thumbAxisY: {
     position: 'absolute',
     width: 1.5,
-    height: 76,
+    height: 64,
     backgroundColor: '#8E949D',
   },
   thumbCurve: {

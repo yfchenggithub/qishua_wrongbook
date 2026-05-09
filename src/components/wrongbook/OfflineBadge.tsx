@@ -11,7 +11,9 @@ export function OfflineBadge({ label = '离线', style }: OfflineBadgeProps) {
   return (
     <View style={[styles.container, style]}>
       <View style={styles.dot} />
-      <Text style={styles.text}>{label}</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.text}>
+        {label}
+      </Text>
     </View>
   );
 }
@@ -26,7 +28,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.successBg,
     borderWidth: 1,
     borderColor: '#BFEACD',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
   dot: {
@@ -41,4 +43,3 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-

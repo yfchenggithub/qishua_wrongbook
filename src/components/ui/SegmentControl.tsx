@@ -57,7 +57,12 @@ export function SegmentControl({
             key={option.value}
             style={[styles.item, selected && styles.itemSelected]}
             onPress={() => handlePress(option.value)}>
-            <Text style={[styles.itemText, selected && styles.itemTextSelected]}>{option.label}</Text>
+            <Text
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.1}
+              style={[styles.itemText, selected && styles.itemTextSelected]}>
+              {option.label}
+            </Text>
           </Pressable>
         );
       })}
@@ -76,7 +81,7 @@ const styles = StyleSheet.create({
   },
   item: {
     flex: 1,
-    minHeight: 48,
+    minHeight: 44,
     borderRadius: radius.md,
     justifyContent: 'center',
     alignItems: 'center',
@@ -94,4 +99,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

@@ -27,20 +27,22 @@ export function PrimaryButton({
         pressed && !disabled && styles.buttonPressed,
         style,
       ]}>
-      <Text style={[styles.text, textStyle]}>{title}</Text>
+      <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={[styles.text, textStyle]}>
+        {title}
+      </Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   button: {
-    minHeight: 56,
+    minHeight: 50,
     borderRadius: radius.xl,
     backgroundColor: colors.black,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
+    paddingVertical: spacing.sm,
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -50,9 +52,8 @@ const styles = StyleSheet.create({
   },
   text: {
     ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 16,
+    lineHeight: 22,
     color: colors.white,
   },
 });
-

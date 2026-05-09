@@ -27,7 +27,10 @@ export function TagChip({
         pressed && onPress ? styles.pressed : null,
         style,
       ]}>
-      <Text style={[styles.text, selected ? styles.selectedText : styles.unselectedText, textStyle]}>
+      <Text
+        numberOfLines={1}
+        maxFontSizeMultiplier={1.1}
+        style={[styles.text, selected ? styles.selectedText : styles.unselectedText, textStyle]}>
         {label}
       </Text>
     </Pressable>
@@ -39,7 +42,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
     borderWidth: 1,
   },
   selected: {
@@ -64,4 +67,3 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 });
-

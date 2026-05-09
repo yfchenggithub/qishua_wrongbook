@@ -43,11 +43,11 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   dot: {
-    width: 14,
-    height: 14,
+    width: 12,
+    height: 12,
     borderRadius: radius.pill,
     backgroundColor: '#D9DADD',
   },
@@ -55,8 +55,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.black,
   },
   currentRing: {
-    width: 24,
-    height: 24,
+    width: 20,
+    height: 20,
     borderRadius: radius.pill,
     borderWidth: 2,
     borderColor: colors.black,
@@ -65,10 +65,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
   },
   currentInner: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: radius.pill,
     backgroundColor: colors.black,
   },
 });
-

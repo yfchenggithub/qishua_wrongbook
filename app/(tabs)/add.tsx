@@ -36,7 +36,7 @@ import {
   takePhotoAndSave,
 } from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
-import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'AddScreen';
 const MAX_DRAFT_RETRY = 5;
@@ -173,7 +173,7 @@ function CaptureEntryCard({
   onDeleteImage: () => void;
 }) {
   return (
-    <CardContainer style={styles.captureCard} padding={spacing.lg}>
+    <CardContainer style={styles.captureCard} padding={spacing.md}>
       <View style={styles.captureRow}>
         {image ? (
           <Image source={{ uri: image.uri }} style={styles.capturePreviewImage} resizeMode="cover" />
@@ -182,8 +182,12 @@ function CaptureEntryCard({
         )}
 
         <View style={styles.captureMain}>
-          <Text style={styles.captureTitle}>{config.title}</Text>
-          <Text style={styles.captureSubtitle}>{config.subtitle}</Text>
+          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.captureTitle}>
+            {config.title}
+          </Text>
+          <Text numberOfLines={2} maxFontSizeMultiplier={1.1} style={styles.captureSubtitle}>
+            {config.subtitle}
+          </Text>
 
           {image ? (
             <Text style={styles.imageMetaText}>已选择：{image.fileName}</Text>
@@ -473,6 +477,7 @@ export default function AddScreen() {
             placeholder="例如：椭圆切线范围题"
             placeholderTextColor={colors.textMuted}
             style={styles.textInput}
+            maxFontSizeMultiplier={1.2}
           />
 
           <Text style={styles.inputLabel}>备注（可选）</Text>
@@ -483,6 +488,7 @@ export default function AddScreen() {
             placeholderTextColor={colors.textMuted}
             style={[styles.textInput, styles.noteInput]}
             multiline
+            maxFontSizeMultiplier={1.2}
             textAlignVertical="top"
           />
         </CardContainer>
@@ -520,7 +526,8 @@ export default function AddScreen() {
 const styles = StyleSheet.create({
   screenContent: {
     paddingTop: spacing.lg,
-    gap: spacing.xl,
+    paddingBottom: layout.bottomTabHeight,
+    gap: spacing.lg,
   },
   sectionBlock: {
     gap: spacing.md,
@@ -534,16 +541,16 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   introIconBox: {
-    width: 78,
-    height: 78,
+    width: 68,
+    height: 68,
     borderRadius: radius.md,
     backgroundColor: colors.surfaceMuted,
     justifyContent: 'center',
     alignItems: 'center',
   },
   introDocShape: {
-    width: 40,
-    height: 48,
+    width: 34,
+    height: 42,
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: colors.border,
@@ -567,8 +574,8 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: spacing.xs,
     bottom: spacing.xs,
-    width: 24,
-    height: 24,
+    width: 20,
+    height: 20,
     borderRadius: radius.pill,
     backgroundColor: colors.black,
     alignItems: 'center',
@@ -576,8 +583,8 @@ const styles = StyleSheet.create({
   },
   introPlusText: {
     color: colors.white,
-    fontSize: 16,
-    lineHeight: 16,
+    fontSize: 14,
+    lineHeight: 14,
     fontWeight: '700',
   },
   introTextWrap: {
@@ -586,8 +593,8 @@ const styles = StyleSheet.create({
   },
   introTitle: {
     ...typography.sectionTitle,
-    fontSize: 20,
-    lineHeight: 28,
+    fontSize: 18,
+    lineHeight: 24,
   },
   introSubtitle: {
     ...typography.body,
@@ -601,45 +608,45 @@ const styles = StyleSheet.create({
   },
   captureCard: {
     borderRadius: radius.xl,
-    minHeight: 180,
+    minHeight: 148,
     justifyContent: 'center',
   },
   captureRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: spacing.md,
   },
   capturePlaceholder: {
-    width: 102,
-    height: 122,
+    width: 84,
+    height: 100,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: '#D9DCE1',
     borderStyle: 'dashed',
     justifyContent: 'center',
     alignItems: 'center',
-    gap: spacing.sm,
+    gap: spacing.xs,
     paddingHorizontal: spacing.xs,
   },
   capturePreviewImage: {
-    width: 102,
-    height: 122,
+    width: 84,
+    height: 100,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
   },
   cameraBody: {
-    width: 40,
-    height: 28,
+    width: 34,
+    height: 24,
     borderRadius: radius.sm,
     backgroundColor: colors.black,
     alignItems: 'center',
     justifyContent: 'center',
   },
   cameraLens: {
-    width: 16,
-    height: 16,
+    width: 14,
+    height: 14,
     borderRadius: radius.pill,
     borderWidth: 2,
     borderColor: colors.white,
@@ -651,12 +658,13 @@ const styles = StyleSheet.create({
   },
   captureMain: {
     flex: 1,
+    minWidth: 0,
     gap: spacing.xs,
   },
   captureTitle: {
     ...typography.sectionTitle,
-    fontSize: 20,
-    lineHeight: 28,
+    fontSize: 17,
+    lineHeight: 22,
   },
   captureSubtitle: {
     ...typography.body,
@@ -673,8 +681,9 @@ const styles = StyleSheet.create({
   captureActionButton: {
     flex: 1,
     borderRadius: radius.lg,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    minHeight: 38,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
     borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
@@ -699,8 +708,9 @@ const styles = StyleSheet.create({
   },
   captureDeleteButton: {
     borderRadius: radius.lg,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    minHeight: 36,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
     borderWidth: 1,
     borderColor: '#F0C3C3',
     backgroundColor: '#FFECEC',
@@ -739,10 +749,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
-    minHeight: 48,
+    minHeight: 44,
   },
   noteInput: {
-    minHeight: 112,
+    minHeight: 96,
   },
   errorCard: {
     borderRadius: radius.xl,

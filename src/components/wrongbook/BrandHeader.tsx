@@ -26,10 +26,14 @@ export function BrandHeader({
   return (
     <View style={[styles.container, style]}>
       <View style={styles.titleRow}>
-        <Text style={[styles.title, titleStyle]}>{title}</Text>
+        <Text numberOfLines={1} maxFontSizeMultiplier={1.15} style={[styles.title, titleStyle]}>
+          {title}
+        </Text>
         {showOffline ? <OfflineBadge label={offlineLabel} /> : null}
       </View>
-      <Text style={[styles.subtitle, subtitleStyle]}>{subtitle}</Text>
+      <Text maxFontSizeMultiplier={1.2} style={[styles.subtitle, subtitleStyle]}>
+        {subtitle}
+      </Text>
     </View>
   );
 }
@@ -41,14 +45,14 @@ const styles = StyleSheet.create({
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     gap: spacing.sm,
   },
   title: {
     ...typography.titleMedium,
+    flexShrink: 1,
   },
   subtitle: {
     ...typography.body,
   },
 });
-
