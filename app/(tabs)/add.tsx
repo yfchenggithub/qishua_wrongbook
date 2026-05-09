@@ -148,6 +148,7 @@ function CaptureEntryCard({
   onDeleteImage: () => void;
 }) {
   const isCompact = variant === 'compact';
+  const canTapPreviewToTakePhoto = !image && !busy;
   const photoActionText = image ? '重新拍照' : '拍照';
 
   return (
@@ -167,7 +168,16 @@ function CaptureEntryCard({
         {config.subtitle}
       </Text>
 
-      <View style={[styles.capturePreviewWrap, isCompact && styles.capturePreviewWrapCompact]}>
+      <Pressable
+        accessibilityRole={canTapPreviewToTakePhoto ? 'button' : undefined}
+        accessibilityLabel={canTapPreviewToTakePhoto ? 'Take photo' : undefined}
+        onPress={canTapPreviewToTakePhoto ? onTakePhoto : undefined}
+        disabled={!canTapPreviewToTakePhoto}
+        style={({ pressed }) => [
+          styles.capturePreviewWrap,
+          isCompact && styles.capturePreviewWrapCompact,
+          canTapPreviewToTakePhoto && pressed && styles.capturePreviewWrapPressed,
+        ]}>
         {image ? (
           <Image source={{ uri: image.uri }} style={styles.capturePreviewImage} resizeMode="cover" />
         ) : (
@@ -180,7 +190,7 @@ function CaptureEntryCard({
             </Text>
           </View>
         )}
-      </View>
+      </Pressable>
 
       <View style={styles.captureActionRow}>
         <Pressable
@@ -632,6 +642,9 @@ const styles = StyleSheet.create({
   },
   capturePreviewWrapCompact: {
     height: 106,
+  },
+  capturePreviewWrapPressed: {
+    opacity: 0.85,
   },
   capturePreviewImage: {
     width: '100%',
