@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, spacing, typography } from '@/src/styles/tokens';
@@ -9,6 +9,8 @@ export interface ImagePreviewModalProps {
   title: string;
   onClose: () => void;
 }
+
+const DOUBLE_TAP_DELAY = 300;
 
 function normalizeUri(uri: string | null): string | null {
   if (typeof uri !== 'string') {
@@ -26,6 +28,7 @@ export function ImagePreviewModal({
   onClose,
 }: ImagePreviewModalProps) {
   const [imageFailed, setImageFailed] = useState(false);
+  const lastTapRef = useRef(0);
 
   const normalizedUri = useMemo(() => normalizeUri(uri), [uri]);
 
@@ -35,6 +38,17 @@ export function ImagePreviewModal({
 
   const canShowImage = visible && !!normalizedUri && !imageFailed;
   const headerTitle = title.trim().length > 0 ? title : '图片预览';
+
+  const handleContentPress = useCallback(() => {
+    const now = Date.now();
+    if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
+      onClose();
+      lastTapRef.current = 0;
+      return;
+    }
+
+    lastTapRef.current = now;
+  }, [onClose]);
 
   return (
     <Modal
@@ -53,7 +67,11 @@ export function ImagePreviewModal({
           </Pressable>
         </View>
 
-        <View style={styles.content}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="双击关闭预览"
+          style={({ pressed }) => [styles.content, pressed && styles.contentPressed]}
+          onPress={handleContentPress}>
           {canShowImage ? (
             <Image
               source={{ uri: normalizedUri! }}
@@ -66,7 +84,7 @@ export function ImagePreviewModal({
               {normalizedUri ? '图片加载失败，请返回重试' : '暂无可预览图片'}
             </Text>
           )}
-        </View>
+        </Pressable>
       </View>
     </Modal>
   );
@@ -114,6 +132,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  contentPressed: {
+    opacity: 0.96,
   },
   image: {
     width: '100%',

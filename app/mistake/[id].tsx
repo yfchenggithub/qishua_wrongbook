@@ -229,18 +229,21 @@ function ReviewRecordCard({
       </View>
 
       {canShowImage ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${previewTitle}，双击查看大图`}
-          onPress={handleImagePress}
-          style={({ pressed }) => [styles.reviewRecordImageWrap, pressed && styles.previewTapPressed]}>
-          <Image
-            source={{ uri: normalizedUri }}
-            style={styles.reviewRecordImage}
-            resizeMode="cover"
-            onError={() => setImageFailed(true)}
-          />
-        </Pressable>
+        <View style={styles.reviewRecordPreviewWrap}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${previewTitle}，双击查看大图`}
+            onPress={handleImagePress}
+            style={({ pressed }) => [styles.reviewRecordImageWrap, pressed && styles.previewTapPressed]}>
+            <Image
+              source={{ uri: normalizedUri }}
+              style={styles.reviewRecordImage}
+              resizeMode="cover"
+              onError={() => setImageFailed(true)}
+            />
+          </Pressable>
+          <Text style={styles.reviewRecordPreviewHint}>双击查看大图</Text>
+        </View>
       ) : hasImage ? (
         <View style={styles.reviewRecordBadge}>
           <Text style={styles.reviewRecordBadgeText}>已保存照片</Text>
@@ -833,6 +836,10 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
   },
+  reviewRecordPreviewWrap: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
   reviewRecordImageWrap: {
     borderRadius: radius.md,
     overflow: 'hidden',
@@ -847,6 +854,12 @@ const styles = StyleSheet.create({
   },
   previewTapPressed: {
     opacity: 0.84,
+  },
+  reviewRecordPreviewHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 10,
+    lineHeight: 12,
   },
   reviewRecordBadge: {
     borderRadius: radius.pill,
