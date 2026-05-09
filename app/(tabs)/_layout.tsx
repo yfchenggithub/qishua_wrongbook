@@ -45,6 +45,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="settings"
+        options={{
+          title: '设置',
+          tabBarIcon: ({ color }) => <MaterialIcons size={24} name="settings" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="explore"
         options={{
           href: null,
