@@ -41,3 +41,49 @@ export function isDueTodayOrBefore(iso?: string | null): boolean {
 
   return toDateOnlyString(dueDate) <= toDateOnlyString(new Date());
 }
+
+export function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0);
+}
+
+export function endOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999);
+}
+
+export function getLocalDayRange(baseDate = new Date(), offsetDays = 0): {
+  start: Date;
+  end: Date;
+} {
+  const day = addDays(startOfLocalDay(baseDate), offsetDays);
+  return {
+    start: startOfLocalDay(day),
+    end: endOfLocalDay(day),
+  };
+}
+
+export function parseLocalDateTime(value: string | null | undefined): Date | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const dateOnlyMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(trimmed);
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const monthIndex = Number(dateOnlyMatch[2]) - 1;
+    const day = Number(dateOnlyMatch[3]);
+    const localDate = new Date(year, monthIndex, day, 0, 0, 0, 0);
+    return Number.isNaN(localDate.getTime()) ? null : localDate;
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return parsed;
+}

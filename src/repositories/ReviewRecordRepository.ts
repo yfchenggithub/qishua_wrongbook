@@ -1,5 +1,6 @@
 import { getDatabase, initDatabase } from '@/src/db';
 import { MAX_REVIEW_COUNT } from '@/src/constants/review';
+import type { ReviewResult } from '@/src/models/Mistake';
 import type { CreateReviewRecordInput, ReviewRecord } from '@/src/models/ReviewRecord';
 import { Logger } from '@/src/services/Logger';
 import type * as SQLite from 'expo-sqlite';
@@ -27,6 +28,13 @@ SELECT
   created_at
 FROM review_records
 `;
+
+export interface ReviewRecordResultStats {
+  total: number;
+  mastered: number;
+  unsure: number;
+  wrong: number;
+}
 
 let databaseReady = false;
 let databaseInitPromise: Promise<void> | null = null;
@@ -81,6 +89,27 @@ function mapReviewRecordRow(row: ReviewRecord): ReviewRecord {
     ...row,
     review_index: Number(row.review_index),
   };
+}
+
+type ReviewRecordStatsRow = {
+  total: number | null;
+  mastered: number | null;
+  unsure: number | null;
+  wrong: number | null;
+};
+
+function normalizeRangeIso(value: string, fieldName: string): string {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) {
+    throw new Error(`${fieldName} must be a non-empty ISO datetime string.`);
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fieldName} must be a valid datetime string.`);
+  }
+
+  return trimmed;
 }
 
 function buildReviewRecord(
@@ -169,6 +198,75 @@ LIMIT 1;`,
       return mapReviewRecordRow(row);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'getLatestReviewRecord failed.', { mistakeId, error });
+      throw error;
+    }
+  },
+
+  async listReviewRecordsByCreatedAtRange(
+    startInclusiveIso: string,
+    endInclusiveIso: string,
+  ): Promise<ReviewRecord[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedStart = normalizeRangeIso(startInclusiveIso, 'startInclusiveIso');
+      const normalizedEnd = normalizeRangeIso(endInclusiveIso, 'endInclusiveIso');
+      const rows = await db.getAllAsync<ReviewRecord>(
+        `${SELECT_REVIEW_RECORD_FIELDS_SQL}
+WHERE created_at >= ?
+  AND created_at <= ?
+ORDER BY created_at ASC;`,
+        normalizedStart,
+        normalizedEnd,
+      );
+      return rows.map(mapReviewRecordRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listReviewRecordsByCreatedAtRange failed.', {
+        startInclusiveIso,
+        endInclusiveIso,
+        error,
+      });
+      throw error;
+    }
+  },
+
+  async getReviewResultStatsByCreatedAtRange(
+    startInclusiveIso: string,
+    endInclusiveIso: string,
+  ): Promise<ReviewRecordResultStats> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedStart = normalizeRangeIso(startInclusiveIso, 'startInclusiveIso');
+      const normalizedEnd = normalizeRangeIso(endInclusiveIso, 'endInclusiveIso');
+      const row = await db.getFirstAsync<ReviewRecordStatsRow>(
+        `SELECT
+  COUNT(*) AS total,
+  SUM(CASE WHEN result = ? THEN 1 ELSE 0 END) AS mastered,
+  SUM(CASE WHEN result = ? THEN 1 ELSE 0 END) AS unsure,
+  SUM(CASE WHEN result = ? THEN 1 ELSE 0 END) AS wrong
+FROM review_records
+WHERE created_at >= ?
+  AND created_at <= ?;`,
+        'mastered' satisfies ReviewResult,
+        'unsure' satisfies ReviewResult,
+        'wrong' satisfies ReviewResult,
+        normalizedStart,
+        normalizedEnd,
+      );
+
+      return {
+        total: Number(row?.total ?? 0),
+        mastered: Number(row?.mastered ?? 0),
+        unsure: Number(row?.unsure ?? 0),
+        wrong: Number(row?.wrong ?? 0),
+      };
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'getReviewResultStatsByCreatedAtRange failed.', {
+        startInclusiveIso,
+        endInclusiveIso,
+        error,
+      });
       throw error;
     }
   },

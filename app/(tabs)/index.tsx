@@ -12,23 +12,33 @@ import {
 } from '@/src/components';
 import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
 import { todayMock } from '@/src/mocks/today';
+import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { Logger } from '@/src/services/Logger';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
 const QUEUE_LIMIT = 3;
+const UPCOMING_DAYS = 3;
+
+const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
+  hasAnyMistake: false,
+  todayDueCount: 0,
+  todayQueue: [],
+  todayCompletedStats: {
+    total: 0,
+    mastered: 0,
+    unsure: 0,
+    wrong: 0,
+  },
+  homeStatus: 'empty',
+  upcomingPlan: [],
+};
 
 function normalizeMistakeId(id: string): string | null {
   const normalized = typeof id === 'string' ? id.trim() : '';
   return normalized.length > 0 ? normalized : null;
 }
-
-type HomeStats = {
-  total: number;
-  due: number;
-  mastered: number;
-};
 
 function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success' {
   if (status === 'mastered') {
@@ -38,6 +48,33 @@ function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success
     return 'dark';
   }
   return 'light';
+}
+
+function buildHomePrimaryMessage(summary: HomeTaskSummary): string {
+  if (summary.homeStatus === 'empty') {
+    return '还没有错题\n先拍一道错题，开始七刷计划';
+  }
+  if (summary.homeStatus === 'dueToday') {
+    return `今天该复做\n${summary.todayDueCount} 道`;
+  }
+  if (summary.homeStatus === 'completedToday') {
+    const { total, mastered, unsure, wrong } = summary.todayCompletedStats;
+    return `今天复做已完成\n今天完成 ${total} 道（会了 ${mastered} / 模糊 ${unsure} / 不会 ${wrong}）`;
+  }
+  return '今天没有到期复做';
+}
+
+function buildHomeHintText(status: HomeStatus): string {
+  if (status === 'empty') {
+    return '新增错题后，系统会自动安排七刷节奏';
+  }
+  if (status === 'dueToday') {
+    return '优先完成今天到期题，不提前复做未来题';
+  }
+  if (status === 'completedToday') {
+    return '今天任务已完成，保持节奏即可';
+  }
+  return '今天无需复做，按计划等待下一次到期';
 }
 
 function ThumbnailPlaceholder() {
@@ -124,15 +161,40 @@ function SectionStateCard({
   );
 }
 
+function UpcomingPlanCard({
+  day,
+  onOpenDetail,
+}: {
+  day: UpcomingReviewPlanDay;
+  onOpenDetail: (id: string) => void;
+}) {
+  return (
+    <CardContainer padding={spacing.md} style={styles.upcomingCard}>
+      <Text style={styles.upcomingDayTitle}>
+        {day.dayLabel} · {day.totalCount} 道
+      </Text>
+      <View style={styles.upcomingItemList}>
+        {day.items.map((item) => (
+          <Pressable key={item.mistakeId} onPress={() => onOpenDetail(item.mistakeId)}>
+            <View style={styles.upcomingItemRow}>
+              <Text numberOfLines={1} style={styles.upcomingItemTitle}>
+                {item.title}
+              </Text>
+              <Text style={styles.upcomingItemMeta}>第 {item.nextReviewIndex} / 7 刷</Text>
+            </View>
+          </Pressable>
+        ))}
+      </View>
+      {day.remainingCount > 0 ? (
+        <Text style={styles.upcomingRemainText}>还有 {day.remainingCount} 道未展示</Text>
+      ) : null}
+    </CardContainer>
+  );
+}
+
 export default function TodayScreen() {
   const router = useRouter();
-  const [stats, setStats] = useState<HomeStats>({
-    total: 0,
-    due: 0,
-    mastered: 0,
-  });
-  const [priorityItem, setPriorityItem] = useState<MistakeListItem | null>(null);
-  const [queueItems, setQueueItems] = useState<MistakeListItem[]>([]);
+  const [summary, setSummary] = useState<HomeTaskSummary>(EMPTY_HOME_SUMMARY);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -152,23 +214,12 @@ export default function TodayScreen() {
     }
 
     try {
-      const [statsResult, dueItems, allItems] = await Promise.all([
-        MistakeListService.getMistakeListStats(),
-        MistakeListService.getMistakeListItems({ segment: 'due', keyword: '' }),
-        MistakeListService.getMistakeListItems({ segment: 'all', keyword: '' }),
-      ]);
-
+      const homeSummary = await MistakeListService.getHomeTaskSummary();
       if (requestId !== requestIdRef.current) {
         return;
       }
 
-      setStats({
-        total: statsResult.total,
-        due: statsResult.due,
-        mastered: statsResult.mastered,
-      });
-      setPriorityItem(dueItems[0] ?? null);
-      setQueueItems(allItems.slice(0, QUEUE_LIMIT));
+      setSummary(homeSummary);
       setErrorMessage(null);
       hasSuccessfulLoadRef.current = true;
     } catch (error) {
@@ -178,13 +229,7 @@ export default function TodayScreen() {
       }
 
       if (!hasSuccessfulLoadRef.current) {
-        setStats({
-          total: 0,
-          due: 0,
-          mastered: 0,
-        });
-        setPriorityItem(null);
-        setQueueItems([]);
+        setSummary(EMPTY_HOME_SUMMARY);
       }
 
       setErrorMessage('首页数据读取失败，请稍后重试');
@@ -208,23 +253,44 @@ export default function TodayScreen() {
       hasFocusedRef.current = true;
       void loadHomeData(mode);
       return undefined;
-    }, [loadHomeData])
+    }, [loadHomeData]),
   );
 
-  const completionRate = useMemo(() => {
-    if (stats.total <= 0) {
-      return 0;
+  const todayQueuePreview = useMemo(
+    () => summary.todayQueue.slice(0, QUEUE_LIMIT),
+    [summary.todayQueue],
+  );
+
+  const priorityItem = todayQueuePreview[0] ?? null;
+
+  const upcomingDays = useMemo(
+    () => summary.upcomingPlan.filter((day) => day.totalCount > 0).slice(0, UPCOMING_DAYS),
+    [summary.upcomingPlan],
+  );
+
+  const rightNowHint = useMemo(() => {
+    if (errorMessage) {
+      return errorMessage;
     }
-    return Math.round((stats.mastered / stats.total) * 100);
-  }, [stats.mastered, stats.total]);
+    if (isLoading) {
+      return '正在读取首页任务...';
+    }
+    if (isRefreshing) {
+      return '正在刷新...';
+    }
+    return buildHomeHintText(summary.homeStatus);
+  }, [errorMessage, isLoading, isRefreshing, summary.homeStatus]);
 
   const summaryStats = useMemo(
     () => [
-      { label: '总错题', value: String(stats.total) },
-      { label: '已七刷', value: String(stats.mastered) },
-      { label: '完成率', value: `${completionRate}%` },
+      { label: '今日完成', value: String(summary.todayCompletedStats.total) },
+      { label: '会了', value: String(summary.todayCompletedStats.mastered) },
+      {
+        label: '模糊/不会',
+        value: String(summary.todayCompletedStats.unsure + summary.todayCompletedStats.wrong),
+      },
     ],
-    [completionRate, stats.mastered, stats.total]
+    [summary.todayCompletedStats.mastered, summary.todayCompletedStats.total, summary.todayCompletedStats.unsure, summary.todayCompletedStats.wrong],
   );
 
   const handleOpenDetail = useCallback(
@@ -236,8 +302,18 @@ export default function TodayScreen() {
       }
       router.push(`/mistake/${routeId}` as never);
     },
-    [router]
+    [router],
   );
+
+  const handleStartTodayReview = useCallback(() => {
+    const nextId = normalizeMistakeId(priorityItem?.id ?? '');
+    if (!nextId) {
+      return;
+    }
+    router.push(`/review/${nextId}` as never);
+  }, [priorityItem?.id, router]);
+
+  const homePrimaryMessage = useMemo(() => buildHomePrimaryMessage(summary), [summary]);
 
   return (
     <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
@@ -247,7 +323,7 @@ export default function TodayScreen() {
         <Text style={styles.taskCaption}>今日任务</Text>
         <View style={styles.taskDueRow}>
           <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskDueCount}>
-            {stats.due}
+            {summary.todayDueCount}
           </Text>
           <Text style={styles.taskDueLabel}>道待复做</Text>
         </View>
@@ -265,56 +341,61 @@ export default function TodayScreen() {
           ))}
         </View>
 
-        <Text maxFontSizeMultiplier={1.1} style={[styles.statsHint, errorMessage ? styles.statsHintError : null]}>
-          {errorMessage
-            ? errorMessage
-            : isLoading
-              ? '正在读取本地统计...'
-              : isRefreshing
-                ? '统计更新中...'
-                : '统计来自本地 SQLite'}
+        <Text
+          maxFontSizeMultiplier={1.1}
+          style={[styles.statsHint, errorMessage ? styles.statsHintError : null]}>
+          {rightNowHint}
         </Text>
       </CardContainer>
 
       <View style={styles.sectionBlock}>
-        <SectionTitle title="优先复做" />
+        <SectionTitle title="今日入口" />
         <View style={styles.sectionContent}>
-          {priorityItem ? (
-            <MistakeCard
-              item={priorityItem}
-              pressable={() => handleOpenDetail(priorityItem.id)}
-            />
+          {summary.homeStatus === 'dueToday' && priorityItem ? (
+            <View style={styles.todayEntryWrap}>
+              <MistakeCard item={priorityItem} pressable={() => handleOpenDetail(priorityItem.id)} />
+              <Pressable onPress={handleStartTodayReview} style={styles.primaryActionButton}>
+                <Text style={styles.primaryActionButtonText}>开始今日复做</Text>
+              </Pressable>
+            </View>
           ) : errorMessage && !isLoading ? (
             <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
           ) : (
             <SectionStateCard
-              message={isLoading ? '正在加载今日待复做...' : '今天没有待复做错题'}
-              actionLabel={isLoading ? undefined : '去新增错题'}
-              onActionPress={isLoading ? undefined : () => router.push('/add' as never)}
+              message={homePrimaryMessage}
+              actionLabel={summary.homeStatus === 'empty' ? '新增错题' : undefined}
+              onActionPress={summary.homeStatus === 'empty' ? () => router.push('/add' as never) : undefined}
             />
           )}
         </View>
       </View>
 
       <View style={styles.sectionBlock}>
-        <SectionTitle title="错题队列" />
+        <SectionTitle title="今日复做队列" />
         <View style={styles.queueList}>
-          {queueItems.length > 0 ? (
-            queueItems.map((item) => (
-              <MistakeCard
-                key={item.id}
-                item={item}
-                pressable={() => handleOpenDetail(item.id)}
-              />
+          {summary.homeStatus === 'dueToday' && todayQueuePreview.length > 0 ? (
+            todayQueuePreview.map((item) => (
+              <MistakeCard key={item.id} item={item} pressable={() => handleOpenDetail(item.id)} />
             ))
-          ) : errorMessage && !isLoading ? (
-            <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
+          ) : isLoading ? (
+            <SectionStateCard message="正在加载今日复做队列..." />
           ) : (
-            <SectionStateCard
-              message={isLoading ? '正在加载错题队列...' : '错题队列为空，去新增页录入第一题'}
-              actionLabel={isLoading ? undefined : '去新增错题'}
-              onActionPress={isLoading ? undefined : () => router.push('/add' as never)}
-            />
+            <SectionStateCard message="今天没有需要开始的复做题" />
+          )}
+        </View>
+      </View>
+
+      <View style={styles.sectionBlock}>
+        <SectionTitle title="接下来" />
+        <View style={styles.queueList}>
+          {upcomingDays.length > 0 ? (
+            upcomingDays.map((day) => (
+              <UpcomingPlanCard key={`${day.date}-${day.dayOffset}`} day={day} onOpenDetail={handleOpenDetail} />
+            ))
+          ) : isLoading ? (
+            <SectionStateCard message="正在加载未来计划..." />
+          ) : (
+            <SectionStateCard message="未来 3 天暂无复做安排" />
           )}
         </View>
       </View>
@@ -403,6 +484,9 @@ const styles = StyleSheet.create({
   queueList: {
     gap: spacing.md,
   },
+  todayEntryWrap: {
+    gap: spacing.md,
+  },
   stateCard: {
     borderRadius: radius.xl,
     gap: spacing.sm,
@@ -421,6 +505,20 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
   },
   stateActionText: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '700',
+  },
+  primaryActionButton: {
+    alignSelf: 'flex-start',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  primaryActionButtonText: {
     ...typography.caption,
     color: colors.white,
     fontWeight: '700',
@@ -505,5 +603,38 @@ const styles = StyleSheet.create({
     borderColor: '#8E949D',
     borderRadius: radius.pill,
     transform: [{ rotate: '-18deg' }],
+  },
+  upcomingCard: {
+    borderRadius: radius.xl,
+    gap: spacing.sm,
+  },
+  upcomingDayTitle: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  upcomingItemList: {
+    gap: spacing.xs,
+  },
+  upcomingItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
+  upcomingItemTitle: {
+    ...typography.body,
+    color: colors.textPrimary,
+    flex: 1,
+    minWidth: 0,
+  },
+  upcomingItemMeta: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  upcomingRemainText: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
 });
