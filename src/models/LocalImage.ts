@@ -22,6 +22,19 @@ export interface PickedImageResult {
   errorMessage?: string;
 }
 
+export interface PickedImageAsset {
+  tempUri: string;
+  width?: number;
+  height?: number;
+  fileSize?: number | null;
+}
+
+export interface PickedImagesResult {
+  canceled: boolean;
+  assets?: PickedImageAsset[];
+  errorMessage?: string;
+}
+
 export interface SavedImageResult {
   ok: boolean;
   image?: LocalImage;

@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 
 import { IMAGE_QUALITY } from '@/src/constants/image';
-import type { PickedImageResult } from '@/src/models/LocalImage';
+import type { PickedImageAsset, PickedImageResult, PickedImagesResult } from '@/src/models/LocalImage';
 import { Logger } from '@/src/services/Logger';
 
 const SERVICE_SCOPE = 'ImagePickerService';
@@ -57,6 +57,21 @@ function mapPickedResult(result: ImagePicker.ImagePickerResult): PickedImageResu
     height: asset.height,
     fileSize: asset.fileSize ?? null,
   };
+}
+
+function mapPickedAssets(result: ImagePicker.ImagePickerResult): PickedImageAsset[] {
+  if (result.canceled || !Array.isArray(result.assets)) {
+    return [];
+  }
+
+  return result.assets
+    .filter((asset): asset is ImagePicker.ImagePickerAsset => !!asset?.uri)
+    .map((asset) => ({
+      tempUri: asset.uri,
+      width: asset.width,
+      height: asset.height,
+      fileSize: asset.fileSize ?? null,
+    }));
 }
 
 export async function requestCameraPermission(): Promise<PermissionRequestResult> {
@@ -130,6 +145,51 @@ export async function pickImageFromLibrary(): Promise<PickedImageResult> {
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to pick image from library.', error);
     return canceledWithError(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function pickImagesFromLibrary(maxSelection?: number): Promise<PickedImagesResult> {
+  try {
+    const permission = await requestMediaLibraryPermission();
+    if (!permission.granted) {
+      return {
+        canceled: true,
+        errorMessage: permission.message ?? 'Media library permission denied.',
+      };
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: false,
+      quality: IMAGE_QUALITY,
+      base64: false,
+      exif: false,
+      allowsMultipleSelection: true,
+      selectionLimit: typeof maxSelection === 'number' && maxSelection > 0 ? maxSelection : 0,
+    });
+
+    if (result.canceled) {
+      return { canceled: true };
+    }
+
+    const assets = mapPickedAssets(result);
+    if (assets.length === 0) {
+      return {
+        canceled: true,
+        errorMessage: 'Image picker returned empty assets.',
+      };
+    }
+
+    return {
+      canceled: false,
+      assets,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to pick images from library.', error);
+    return {
+      canceled: true,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 

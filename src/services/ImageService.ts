@@ -1,7 +1,8 @@
-import type { LocalImageType, SavedImageResult } from '@/src/models/LocalImage';
+import type { LocalImage, LocalImageType, SavedImageResult } from '@/src/models/LocalImage';
 import { optimizeImageForStorage } from '@/src/services/ImageOptimizeService';
 import {
   pickImageFromLibrary,
+  pickImagesFromLibrary,
   requestCameraPermission,
   requestMediaLibraryPermission,
   takePhoto,
@@ -24,7 +25,20 @@ export interface SaveImageParams {
   index?: number;
 }
 
+export interface SaveImagesParams {
+  mistakeId: string;
+  type: LocalImageType;
+  index?: number;
+  maxSelection?: number;
+}
+
 export type ImagePermissionResult = PermissionRequestResult;
+
+export interface SavedImagesResult {
+  ok: boolean;
+  images: LocalImage[];
+  errorMessage?: string;
+}
 
 interface PreparedImagePayload {
   uri: string;
@@ -48,6 +62,14 @@ function toShortUri(uri: string | null | undefined): string | null {
 function canceledResult(errorMessage: string): SavedImageResult {
   return {
     ok: false,
+    errorMessage,
+  };
+}
+
+function canceledBatchResult(errorMessage: string): SavedImagesResult {
+  return {
+    ok: false,
+    images: [],
     errorMessage,
   };
 }
@@ -266,6 +288,107 @@ export async function pickImageAndSave(
       error,
     });
     return canceledResult(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function pickImagesAndSave(
+  params: SaveImagesParams,
+): Promise<SavedImagesResult> {
+  Logger.info(SERVICE_SCOPE, 'Start picking images and saving.', {
+    mistakeId: params.mistakeId,
+    type: params.type,
+    index: params.index,
+    maxSelection: params.maxSelection,
+  });
+
+  try {
+    const picked = await pickImagesFromLibrary(params.maxSelection);
+    if (picked.canceled) {
+      Logger.warn(SERVICE_SCOPE, 'User canceled picking images from library.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        index: params.index,
+        maxSelection: params.maxSelection,
+        reason: picked.errorMessage ?? null,
+      });
+      return canceledBatchResult(picked.errorMessage ?? 'User canceled image selection.');
+    }
+
+    const assets = Array.isArray(picked.assets) ? picked.assets : [];
+    if (assets.length === 0) {
+      Logger.warn(SERVICE_SCOPE, 'Picked image assets are empty.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+      });
+      return canceledBatchResult('Invalid image result. Please try again.');
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Picked images successfully.', {
+      mistakeId: params.mistakeId,
+      type: params.type,
+      pickedCount: assets.length,
+    });
+
+    const savedImages: LocalImage[] = [];
+    const startIndex = typeof params.index === 'number' ? params.index : undefined;
+
+    for (let i = 0; i < assets.length; i += 1) {
+      const asset = assets[i];
+      const preparedImage = await prepareImageForStorage(asset.tempUri, {
+        width: asset.width,
+        height: asset.height,
+        fileSize: asset.fileSize ?? null,
+      });
+
+      const savedResult = await saveTempImageToMistakeFolder({
+        mistakeId: params.mistakeId,
+        type: params.type,
+        tempUri: preparedImage.uri,
+        width: preparedImage.width,
+        height: preparedImage.height,
+        fileSize: preparedImage.fileSize ?? null,
+        index: startIndex === undefined ? undefined : startIndex + i,
+      });
+
+      if (!savedResult.ok || !savedResult.image) {
+        Logger.error(SERVICE_SCOPE, 'Failed to save picked image in batch.', {
+          params,
+          savedCount: savedImages.length,
+          failedIndex: i,
+          savedResult,
+        });
+        return {
+          ok: false,
+          images: savedImages,
+          errorMessage: savedResult.errorMessage ?? 'Failed to save image.',
+        };
+      }
+
+      savedImages.push(savedResult.image);
+      Logger.info(SERVICE_SCOPE, 'Saved one picked image in batch successfully.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        batchIndex: i,
+        savedUriShort: toShortUri(savedResult.image.uri),
+      });
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Saved picked images batch successfully.', {
+      mistakeId: params.mistakeId,
+      type: params.type,
+      savedCount: savedImages.length,
+    });
+
+    return {
+      ok: true,
+      images: savedImages,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Unexpected error in pickImagesAndSave.', {
+      params,
+      error,
+    });
+    return canceledBatchResult(error instanceof Error ? error.message : String(error));
   }
 }
 
