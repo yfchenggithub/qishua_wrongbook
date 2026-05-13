@@ -160,3 +160,18 @@
 - 复做页：`ReviewFlowService.getReviewPageData` 负责复做会话展示数据；提交仅调用 `CompleteReviewService.completeReview`。
 - 复做提交：`CompleteReviewService` 在统一事务内写入 `review_records`、`mistake_images(review_solution)` 并更新 `mistakes.review_count/status/next_review_at`。
 - 刷新策略：详情页、题库页、首页在 focus 时刷新，保证复做后跨页状态一致。
+
+## 12. 第9步补充：新增页批量拍照与离开拦截（9-I）
+
+### 12.1 批量拍照保存链路
+1. 新增页题目图入口支持相机/相册追加到 `photoQueue`（上限 20）。
+2. 保存时进入 `handleSaveDraftBatch`，按队列顺序逐条构造草稿并调用 `CreateMistakeService.createMistakeFromDraft`。
+3. 单张队列保留可选图片与备注；多张队列仅保留题目图 + 通用字段（module/errorReason/difficulty 等），可选图片不批量复制。
+4. 全部成功则清空队列并重置草稿；部分失败则仅保留失败项供重试。
+
+### 12.2 离开新增页拦截链路
+- 返回/路由移除：由 `add.tsx` 的 `beforeRemove` 拦截。
+- 底部 Tab 切换：由 `app/(tabs)/_layout.tsx` 的 `listeners.tabPress` 统一拦截。
+- 共享状态：`LeaveGuardService` 维护 `hasUnsavedPhotosInAddScreen`，由新增页在 `photoQueue` 变化时同步。
+- 交互规则：有未保存题目图时弹出确认框“继续编辑 / 放弃离开”；继续编辑留在新增页，放弃离开才执行导航。
+- 数据安全：离开确认逻辑不清空 `photoQueue`，返回新增页后未保存照片仍保留。

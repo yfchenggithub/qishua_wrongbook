@@ -142,3 +142,19 @@
 - `review_records`：记录每次复做历史（第几刷、结果、时间、solution_image_uri）。
 - `mistake_images(type=review_solution)`：记录每次复做照片的图片资产轨迹。
 - `mistakes`：保存当前进度状态（`review_count/status/next_review_at`），当 `status=mastered` 时 `next_review_at=null`。
+
+## 10. 第9步补充：新增页批量拍照与离开拦截契约（9-I）
+
+### 10.1 批量拍照队列（页面态）
+- 题目图片允许在新增页进入队列模式，`photoQueue` 仅存在于页面运行时状态，不落库。
+- 队列上限为 `20` 张；超限时必须阻止继续添加并提示用户先保存当前队列。
+
+### 10.2 批量保存落库规则
+- 点击保存时，队列中的每一张题目图都独立落一条 `mistakes` 记录，并写入对应 `mistake_images(type=question)` 记录。
+- 当队列数量为 `1` 时：沿用当前草稿 `draftId`，允许同时携带 `mySolutionImage`、`answerImage` 与 `note`。
+- 当队列数量大于 `1` 时：每条记录生成新的 `mistakeId`；`mySolutionImage`、`answerImage`、`note` 不复制到批量子项，避免“一张做法图/答案图”误绑定多题。
+- 批量保存不新增数据库表，不修改既有字段；仍使用 `mistakes`、`mistake_images` 现有契约。
+
+### 10.3 部分成功与重试约束
+- 若批量保存出现部分失败：已成功项保留落库结果；失败项应保留在队列中供用户重试。
+- 失败重试时仍按“每张题目图 -> 一条 mistakes 记录”规则执行，且不得覆盖已成功写入的数据。
