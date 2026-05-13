@@ -28,6 +28,7 @@ import {
   pickImagesAndSave,
   takePhotoAndSave,
 } from '@/src/services/ImageService';
+import { setAddScreenHasUnsavedPhotos } from '@/src/services/LeaveGuardService';
 import { Logger } from '@/src/services/Logger';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { createMistakeId } from '@/src/utils/id';
@@ -658,6 +659,16 @@ export default function AddScreen() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    setAddScreenHasUnsavedPhotos(photoQueue.length > 0);
+  }, [photoQueue.length]);
+
+  useEffect(() => {
+    return () => {
+      setAddScreenHasUnsavedPhotos(false);
     };
   }, []);
 
