@@ -44,6 +44,17 @@ async function applyBaseSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(CREATE_SCHEMA_SQL);
 }
 
+async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+  await db.execAsync(`
+PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS mistake_images;
+DROP TABLE IF EXISTS review_records;
+DROP TABLE IF EXISTS mistakes;
+PRAGMA foreign_keys = ON;
+`);
+  await applyBaseSchema(db);
+}
+
 async function runMigrationToCurrentVersion(
   db: SQLite.SQLiteDatabase,
   currentVersion: number,
@@ -66,8 +77,10 @@ async function runMigrationToCurrentVersion(
     to: DATABASE_VERSION,
   });
 
-  // MVP v1: initialize or reconcile schema with idempotent CREATE TABLE/INDEX SQL.
-  await applyBaseSchema(db);
+  // Development phase strategy:
+  // For schema-breaking changes, rebuild domain tables directly instead of
+  // carrying compatibility fields.
+  await rebuildDomainSchema(db);
   await setUserVersion(db, DATABASE_VERSION);
 }
 

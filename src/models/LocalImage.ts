@@ -1,4 +1,6 @@
-export type LocalImageType = 'question' | 'my_solution' | 'answer' | 'review_solution';
+import type { ImageType } from '@/src/models/Mistake';
+
+export type LocalImageType = ImageType;
 
 export interface LocalImage {
   id: string;

@@ -1,8 +1,9 @@
 export type MistakeStatus = 'active' | 'mastered' | 'archived';
 
-export type MistakeImageType = 'question' | 'my_solution' | 'answer' | 'review_solution';
+export type ImageType = 'question' | 'my_solution' | 'answer' | 'review_solution';
+export type MistakeImageType = ImageType;
 
-export type ReviewResult = 'done' | 'still_wrong' | 'too_easy';
+export type ReviewResult = 'mastered' | 'unsure' | 'wrong';
 
 export interface Mistake {
   id: string;
@@ -11,14 +12,14 @@ export interface Mistake {
   title?: string | null;
   error_reason?: string | null;
   difficulty: number;
-  question_image_uri?: string | null;
-  answer_image_uri?: string | null;
   note?: string | null;
   review_count: number;
   status: MistakeStatus;
   created_at: string;
   updated_at: string;
   next_review_at?: string | null;
+  last_review_at?: string | null;
+  last_review_result?: ReviewResult | null;
 }
 
 export interface CreateMistakeInput {
@@ -27,11 +28,11 @@ export interface CreateMistakeInput {
   title?: string;
   error_reason?: string;
   difficulty?: number;
-  question_image_uri?: string | null;
-  answer_image_uri?: string | null;
   note?: string | null;
   subject?: string;
   next_review_at?: string | null;
+  last_review_at?: string | null;
+  last_review_result?: ReviewResult | null;
 }
 
 export interface UpdateMistakeInput {
@@ -40,11 +41,11 @@ export interface UpdateMistakeInput {
   title?: string | null;
   error_reason?: string | null;
   difficulty?: number;
-  question_image_uri?: string | null;
-  answer_image_uri?: string | null;
   note?: string | null;
   review_count?: number;
   status?: MistakeStatus;
   next_review_at?: string | null;
+  last_review_at?: string | null;
+  last_review_result?: ReviewResult | null;
   updated_at?: string;
 }
