@@ -3,6 +3,7 @@ import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type {
   CreateMistakeInput,
   Mistake,
+  ReviewResult,
   MistakeStatus,
   UpdateMistakeInput,
 } from '@/src/models/Mistake';
@@ -21,14 +22,14 @@ INSERT INTO mistakes (
   title,
   error_reason,
   difficulty,
-  question_image_uri,
-  answer_image_uri,
   note,
   review_count,
   status,
   created_at,
   updated_at,
-  next_review_at
+  next_review_at,
+  last_review_at,
+  last_review_result
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
@@ -40,14 +41,14 @@ SELECT
   title,
   error_reason,
   difficulty,
-  question_image_uri,
-  answer_image_uri,
   note,
   review_count,
   status,
   created_at,
   updated_at,
-  next_review_at
+  next_review_at,
+  last_review_at,
+  last_review_result
 FROM mistakes
 `;
 
@@ -74,6 +75,8 @@ export interface UpdateReviewProgressParams {
   reviewCount: number;
   nextReviewAt?: string | null;
   status?: MistakeStatus;
+  lastReviewAt?: string | null;
+  lastReviewResult?: ReviewResult | null;
 }
 
 export interface UpdateReviewProgressInTransactionParams {
@@ -82,6 +85,8 @@ export interface UpdateReviewProgressInTransactionParams {
   newReviewCount: number;
   newStatus: MistakeStatus;
   nextReviewAt?: string | null;
+  lastReviewAt?: string | null;
+  lastReviewResult?: ReviewResult | null;
   updatedAt: string;
 }
 
@@ -360,14 +365,14 @@ export const MistakeRepository = {
         title: input.title ?? null,
         error_reason: input.error_reason ?? null,
         difficulty: normalizeDifficulty(input.difficulty),
-        question_image_uri: input.question_image_uri ?? null,
-        answer_image_uri: input.answer_image_uri ?? null,
         note: input.note ?? null,
         review_count: 0,
         status: REVIEW_STATUS.ACTIVE,
         created_at: createdAt,
         updated_at: createdAt,
         next_review_at: input.next_review_at === undefined ? createdAt : input.next_review_at,
+        last_review_at: input.last_review_at ?? null,
+        last_review_result: input.last_review_result ?? null,
       };
 
       await db.runAsync(
@@ -378,14 +383,14 @@ export const MistakeRepository = {
         record.title ?? null,
         record.error_reason ?? null,
         record.difficulty,
-        record.question_image_uri ?? null,
-        record.answer_image_uri ?? null,
         record.note ?? null,
         record.review_count,
         record.status,
         record.created_at,
         record.updated_at,
         record.next_review_at ?? null,
+        record.last_review_at ?? null,
+        record.last_review_result ?? null,
       );
 
       const created = await getByIdInternal(record.id);
@@ -587,12 +592,12 @@ FROM mistakes;`,
         'title',
         'error_reason',
         'difficulty',
-        'question_image_uri',
-        'answer_image_uri',
         'note',
         'review_count',
         'status',
         'next_review_at',
+        'last_review_at',
+        'last_review_result',
       ];
 
       for (const field of updatableFields) {
@@ -660,6 +665,12 @@ WHERE id = ?;`,
       if (params.status !== undefined) {
         input.status = params.status;
       }
+      if (params.lastReviewAt !== undefined) {
+        input.last_review_at = params.lastReviewAt;
+      }
+      if (params.lastReviewResult !== undefined) {
+        input.last_review_result = params.lastReviewResult;
+      }
 
       return await MistakeRepository.updateMistake(params.mistakeId, input);
     } catch (error) {
@@ -676,14 +687,18 @@ WHERE id = ?;`,
       const normalizedOldReviewCount = normalizeReviewCount(params.oldReviewCount);
       const normalizedNewReviewCount = normalizeReviewCount(params.newReviewCount);
       const nextReviewAt = params.nextReviewAt ?? null;
+      const lastReviewAt = params.lastReviewAt ?? null;
+      const lastReviewResult = params.lastReviewResult ?? null;
 
       const result = await db.runAsync(
         `UPDATE mistakes
-SET review_count = ?, status = ?, next_review_at = ?, updated_at = ?
+SET review_count = ?, status = ?, next_review_at = ?, last_review_at = ?, last_review_result = ?, updated_at = ?
 WHERE id = ? AND review_count = ? AND status = ?;`,
         normalizedNewReviewCount,
         params.newStatus,
         nextReviewAt,
+        lastReviewAt,
+        lastReviewResult,
         params.updatedAt,
         params.mistakeId,
         normalizedOldReviewCount,

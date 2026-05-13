@@ -5,7 +5,7 @@ import type {
   MistakeListItem,
   MistakeListStatus,
 } from '@/src/models/MistakeListItem';
-import { MistakeRepository, type ListMistakesOptions } from '@/src/repositories';
+import { MistakeImageRepository, MistakeRepository, type ListMistakesOptions } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import { formatDateShort, isDueTodayOrBefore } from '@/src/utils/date';
 
@@ -124,7 +124,7 @@ function buildSubtitle(mistake: Mistake): string {
   return subtitleParts.join(' · ');
 }
 
-export function mapMistakeToListItem(mistake: Mistake): MistakeListItem {
+export function mapMistakeToListItem(mistake: Mistake, thumbnailUri?: string | null): MistakeListItem {
   return {
     id: mistake.id,
     module: mistake.module,
@@ -132,7 +132,7 @@ export function mapMistakeToListItem(mistake: Mistake): MistakeListItem {
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,
     difficulty: mistake.difficulty,
-    thumbnailUri: mistake.question_image_uri ?? null,
+    thumbnailUri: thumbnailUri ?? null,
     reviewCount: mistake.review_count,
     maxReviewCount: MAX_REVIEW_COUNT,
     status: mistake.status,
@@ -153,7 +153,12 @@ export async function getMistakeListItems(filter: MistakeListFilter): Promise<Mi
     });
     const options = buildListQueryOptions(filter);
     const mistakes = await MistakeRepository.listMistakes(options);
-    const listItems = mistakes.map(mapMistakeToListItem);
+    const listItems = await Promise.all(
+      mistakes.map(async (mistake) => {
+        const coverImage = await MistakeImageRepository.getCoverImageForMistake(mistake.id);
+        return mapMistakeToListItem(mistake, coverImage?.uri ?? null);
+      }),
+    );
     Logger.info(SERVICE_SCOPE, 'Loaded mistake list items successfully.', {
       segment: filter.segment,
       keywordPreview: toKeywordPreview(filter.keyword),

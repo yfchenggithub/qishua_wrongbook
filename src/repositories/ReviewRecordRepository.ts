@@ -1,20 +1,18 @@
 import { getDatabase, initDatabase } from '@/src/db';
 import { MAX_REVIEW_COUNT } from '@/src/constants/review';
-import type { ReviewResult } from '@/src/models/Mistake';
 import type { CreateReviewRecordInput, ReviewRecord } from '@/src/models/ReviewRecord';
 import { Logger } from '@/src/services/Logger';
 import type * as SQLite from 'expo-sqlite';
 
 const REPO_SCOPE = 'ReviewRecordRepository';
-const DEFAULT_REVIEW_RESULT: ReviewResult = 'done';
 
 const INSERT_REVIEW_RECORD_SQL = `
 INSERT INTO review_records (
   id,
   mistake_id,
   review_index,
-  solution_image_uri,
   result,
+  note,
   created_at
 ) VALUES (?, ?, ?, ?, ?, ?);
 `;
@@ -24,8 +22,8 @@ SELECT
   id,
   mistake_id,
   review_index,
-  solution_image_uri,
   result,
+  note,
   created_at
 FROM review_records
 `;
@@ -88,12 +86,13 @@ function mapReviewRecordRow(row: ReviewRecord): ReviewRecord {
 function buildReviewRecord(
   input: CreateReviewRecordInput & { id?: string; createdAt?: string },
 ): ReviewRecord {
+  const note = typeof input.note === 'string' ? input.note.trim() : '';
   return {
     id: input.id?.trim() || buildReviewRecordId(),
     mistake_id: input.mistake_id,
     review_index: normalizeReviewIndex(input.review_index),
-    solution_image_uri: input.solution_image_uri ?? null,
-    result: input.result ?? DEFAULT_REVIEW_RESULT,
+    result: input.result,
+    note: note.length > 0 ? note : null,
     created_at: input.createdAt ?? nowIso(),
   };
 }
@@ -225,8 +224,8 @@ FROM review_records;`,
         record.id,
         record.mistake_id,
         record.review_index,
-        record.solution_image_uri ?? null,
         record.result,
+        record.note ?? null,
         record.created_at,
       );
 

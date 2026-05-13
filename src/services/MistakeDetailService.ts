@@ -143,12 +143,10 @@ async function enrichSlotWithLocalFileInfo(slot: DetailImageSlot): Promise<Detai
   }
 }
 
-async function buildImageSlots(mistake: Mistake, images: MistakeImage[]): Promise<DetailImageSlot[]> {
-  const questionUri =
-    normalizeOptionalText(mistake.question_image_uri) ?? findFirstUriByType(images, 'question');
+async function buildImageSlots(_mistake: Mistake, images: MistakeImage[]): Promise<DetailImageSlot[]> {
+  const questionUri = findFirstUriByType(images, 'question');
   const mySolutionUri = findFirstUriByType(images, 'my_solution');
-  const answerUri =
-    normalizeOptionalText(mistake.answer_image_uri) ?? findFirstUriByType(images, 'answer');
+  const answerUri = findFirstUriByType(images, 'answer');
 
   const slotSeeds: SlotSeed[] = [
     {
@@ -195,16 +193,25 @@ function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSl
   };
 }
 
-function mapReviewRecords(
+async function mapReviewRecords(
   mistakeReviewRecords: Awaited<ReturnType<typeof ReviewRecordRepository.listReviewRecordsByMistakeId>>,
-): DetailReviewRecordItem[] {
-  return mistakeReviewRecords.map((record) => ({
-    id: record.id,
-    reviewIndex: record.review_index,
-    createdAt: record.created_at,
-    result: record.result,
-    solutionImageUri: normalizeOptionalText(record.solution_image_uri),
-  }));
+): Promise<DetailReviewRecordItem[]> {
+  const mapped = await Promise.all(
+    mistakeReviewRecords.map(async (record) => {
+      const reviewSolutionImages = await MistakeImageRepository.getReviewSolutionImages(record.id);
+      const solutionImageUri = normalizeOptionalText(reviewSolutionImages[0]?.uri ?? null);
+
+      return {
+        id: record.id,
+        reviewIndex: record.review_index,
+        createdAt: record.created_at,
+        result: record.result,
+        solutionImageUri,
+      };
+    }),
+  );
+
+  return mapped;
 }
 
 function mapMistakeToDetailViewModelWithRecords(
@@ -245,10 +252,10 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
       };
     }
 
-    const mistakeImages = await MistakeImageRepository.listImagesByMistakeId(mistakeId);
+    const mistakeImages = await MistakeImageRepository.getImagesByMistakeId(mistakeId);
     const imageSlots = await buildImageSlots(mistake, mistakeImages);
     const mistakeReviewRecords = await ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId);
-    const reviewRecords = mapReviewRecords(mistakeReviewRecords);
+    const reviewRecords = await mapReviewRecords(mistakeReviewRecords);
     const detail = mapMistakeToDetailViewModelWithRecords(mistake, imageSlots, reviewRecords);
 
     Logger.info(SERVICE_SCOPE, 'Loaded mistake detail successfully.', {
@@ -293,17 +300,15 @@ export async function saveOptionalDetailImage(
   }
 
   try {
-    await MistakeImageRepository.createMistakeImage({
-      mistake_id: mistakeId,
-      type: params.imageType,
-      uri: imageUri,
-    });
-
-    if (params.imageType === 'answer') {
-      await MistakeRepository.updateMistake(mistakeId, {
-        answer_image_uri: imageUri,
-      });
-    }
+    const imagesOfType = await MistakeImageRepository.getImagesByMistakeIdAndType(mistakeId, params.imageType);
+    const nextSortOrder = imagesOfType.length;
+    await MistakeImageRepository.insertMistakeImages(mistakeId, [
+      {
+        type: params.imageType,
+        uri: imageUri,
+        sort_order: nextSortOrder,
+      },
+    ]);
 
     Logger.info(SERVICE_SCOPE, 'Saved optional detail image successfully.', {
       mistakeId,
@@ -323,4 +328,3 @@ export async function saveOptionalDetailImage(
     };
   }
 }
-

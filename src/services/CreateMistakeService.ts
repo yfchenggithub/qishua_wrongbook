@@ -1,6 +1,6 @@
 import { getDatabase } from '@/src/db';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
-import type { MistakeImageType } from '@/src/models/Mistake';
+import type { ImageType } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
 import { validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
 import { Logger } from '@/src/services/Logger';
@@ -20,8 +20,9 @@ type CreateMistakeFromDraftResult = {
 };
 
 type MistakeImageInput = {
-  type: MistakeImageType;
+  type: Exclude<ImageType, 'review_solution'>;
   uri: string;
+  sort_order: number;
 };
 
 type DraftImagePresence = {
@@ -67,13 +68,16 @@ function getDraftImagePresence(draft: AddMistakeDraft): DraftImagePresence {
 
 function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
   const images: MistakeImageInput[] = [];
+  let nextSortOrder = 0;
 
   const questionUri = draft.questionImage?.uri?.trim();
   if (questionUri) {
     images.push({
       type: 'question',
       uri: questionUri,
+      sort_order: nextSortOrder,
     });
+    nextSortOrder += 1;
   }
 
   const mySolutionUri = draft.mySolutionImage?.uri?.trim();
@@ -81,7 +85,9 @@ function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
     images.push({
       type: 'my_solution',
       uri: mySolutionUri,
+      sort_order: nextSortOrder,
     });
+    nextSortOrder += 1;
   }
 
   const answerUri = draft.answerImage?.uri?.trim();
@@ -89,6 +95,7 @@ function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
     images.push({
       type: 'answer',
       uri: answerUri,
+      sort_order: nextSortOrder,
     });
   }
 
@@ -129,8 +136,6 @@ async function persistDraft(
     title: normalizeOptionalText(draft.title),
     error_reason: normalizeOptionalText(draft.errorReason),
     difficulty: draft.difficulty,
-    question_image_uri: questionImageUri,
-    answer_image_uri: answerImageUri,
     note: normalizeOptionalText(draft.note),
     next_review_at: new Date().toISOString(),
   });
@@ -141,13 +146,7 @@ async function persistDraft(
   });
 
   const imageInputs = collectImageInputs(draft);
-  for (const image of imageInputs) {
-    await MistakeImageRepository.createMistakeImage({
-      mistake_id: mistakeId,
-      type: image.type,
-      uri: image.uri,
-    });
-  }
+  await MistakeImageRepository.insertMistakeImages(mistakeId, imageInputs);
 
   Logger.info(SERVICE_SCOPE, 'Created mistake_images rows successfully.', {
     draftId: draft.draftId,

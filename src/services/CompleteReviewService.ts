@@ -15,7 +15,7 @@ import {
 const SERVICE_SCOPE = 'CompleteReviewService';
 const REVIEW_STATE_CHANGED_MESSAGE = '复做状态已变化，请返回详情页刷新';
 const UNKNOWN_ERROR_MESSAGE = '提交复做失败，请稍后重试。';
-const REVIEW_RESULT_VALUES: ReviewResult[] = ['done', 'still_wrong', 'too_easy'];
+const REVIEW_RESULT_VALUES: ReviewResult[] = ['mastered', 'unsure', 'wrong'];
 
 interface NormalizedCompleteReviewInput {
   mistakeId: string;
@@ -49,7 +49,7 @@ function toErrorMessage(error: unknown): string {
 
 function normalizeReviewResult(result: ReviewResult | undefined): ReviewResult | null {
   if (result === undefined) {
-    return 'done';
+    return 'mastered';
   }
   if (REVIEW_RESULT_VALUES.includes(result)) {
     return result;
@@ -96,7 +96,7 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
   if (!result) {
     return {
       ok: false,
-      errorMessage: 'result 必须是 done / still_wrong / too_easy',
+      errorMessage: 'result 必须是 mastered / unsure / wrong',
     };
   }
 
@@ -218,26 +218,35 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
 
     try {
       await withDatabaseTransaction(async (db) => {
-        await ReviewRecordRepository.createReviewRecordInTransaction(db, {
+        const createdReviewRecord = await ReviewRecordRepository.createReviewRecordInTransaction(db, {
           mistake_id: normalizedInput.mistakeId,
           review_index: normalizedInput.reviewIndex,
-          solution_image_uri: normalizedInput.solutionImageUri,
           result: normalizedInput.result,
+          note: null,
           createdAt: nowIso,
         });
         Logger.info(SERVICE_SCOPE, 'Created review_record successfully in transaction.', {
           mistakeId: normalizedInput.mistakeId,
+          reviewRecordId: createdReviewRecord.id,
           reviewIndex: normalizedInput.reviewIndex,
         });
 
-        await MistakeImageRepository.createMistakeImageInTransaction(db, {
-          mistake_id: normalizedInput.mistakeId,
-          type: 'review_solution',
-          uri: normalizedInput.solutionImageUri,
-          createdAt: nowIso,
-        });
+        await MistakeImageRepository.insertReviewSolutionImagesInTransaction(
+          db,
+          normalizedInput.mistakeId,
+          createdReviewRecord.id,
+          [
+            {
+              type: 'review_solution',
+              uri: normalizedInput.solutionImageUri,
+              sort_order: 0,
+            },
+          ],
+          nowIso,
+        );
         Logger.info(SERVICE_SCOPE, 'Created review_solution mistake_images row successfully in transaction.', {
           mistakeId: normalizedInput.mistakeId,
+          reviewRecordId: createdReviewRecord.id,
           reviewIndex: normalizedInput.reviewIndex,
           solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
         });
@@ -248,6 +257,8 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           newReviewCount,
           newStatus,
           nextReviewAt,
+          lastReviewAt: nowIso,
+          lastReviewResult: normalizedInput.result,
           updatedAt: nowIso,
         });
 
