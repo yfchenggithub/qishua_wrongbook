@@ -19,7 +19,8 @@ export interface DetailReviewRecordItem {
   id: string;
   reviewIndex: number;
   createdAt: string;
-  result: ReviewResult;
+  // Keep legacy result literals for page compatibility during migration.
+  result: ReviewResult | 'done' | 'still_wrong' | 'too_easy';
   solutionImageUri?: string | null;
 }
 

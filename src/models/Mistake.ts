@@ -12,6 +12,10 @@ export interface Mistake {
   title?: string | null;
   error_reason?: string | null;
   difficulty: number;
+  /** @deprecated Legacy compatibility only. Do not read/write in business logic. */
+  question_image_uri?: string | null;
+  /** @deprecated Legacy compatibility only. Do not read/write in business logic. */
+  answer_image_uri?: string | null;
   note?: string | null;
   review_count: number;
   status: MistakeStatus;
@@ -28,6 +32,10 @@ export interface CreateMistakeInput {
   title?: string;
   error_reason?: string;
   difficulty?: number;
+  /** @deprecated Legacy compatibility only. Do not read/write in business logic. */
+  question_image_uri?: string | null;
+  /** @deprecated Legacy compatibility only. Do not read/write in business logic. */
+  answer_image_uri?: string | null;
   note?: string | null;
   subject?: string;
   next_review_at?: string | null;
@@ -41,6 +49,10 @@ export interface UpdateMistakeInput {
   title?: string | null;
   error_reason?: string | null;
   difficulty?: number;
+  /** @deprecated Legacy compatibility only. Do not read/write in business logic. */
+  question_image_uri?: string | null;
+  /** @deprecated Legacy compatibility only. Do not read/write in business logic. */
+  answer_image_uri?: string | null;
   note?: string | null;
   review_count?: number;
   status?: MistakeStatus;

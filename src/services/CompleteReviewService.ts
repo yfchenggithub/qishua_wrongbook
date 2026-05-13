@@ -47,8 +47,11 @@ function toErrorMessage(error: unknown): string {
   return message.length > 0 ? message : UNKNOWN_ERROR_MESSAGE;
 }
 
-function normalizeReviewResult(result: ReviewResult | undefined): ReviewResult | null {
+function normalizeReviewResult(result: ReviewResult | 'done' | undefined): ReviewResult | null {
   if (result === undefined) {
+    return 'mastered';
+  }
+  if (result === 'done') {
     return 'mastered';
   }
   if (REVIEW_RESULT_VALUES.includes(result)) {

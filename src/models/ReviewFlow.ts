@@ -16,7 +16,8 @@ export interface CompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
   solutionImageUri: string;
-  result?: ReviewResult;
+  // Keep 'done' for current review page caller compatibility; service maps/validates.
+  result?: ReviewResult | 'done';
   cleanupImageOnFailure?: boolean;
 }
 
