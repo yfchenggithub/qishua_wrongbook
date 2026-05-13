@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Animated, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
   BrandHeader,
@@ -31,11 +31,15 @@ import {
 import { Logger } from '@/src/services/Logger';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { createMistakeId } from '@/src/utils/id';
+import { useNavigation } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const PAGE_SCOPE = 'AddScreen';
 const MAX_DRAFT_RETRY = 5;
 const MAX_PHOTO_QUEUE_SIZE = 20;
 const DOUBLE_TAP_DELAY = 300;
+const TOAST_DURATION_DEFAULT = 1800;
+const TOAST_DURATION_LONG = 2400;
 
 type DraftImageField = 'questionImage' | 'mySolutionImage' | 'answerImage';
 type CaptureCardVariant = 'primary' | 'compact';
@@ -59,6 +63,8 @@ type LastTapInfo = {
   id: string;
   time: number;
 };
+
+type ToastType = 'success' | 'info' | 'warning' | 'error';
 
 const QUESTION_CAPTURE_ENTRY: CaptureEntryConfig = {
   key: 'questionImage',
@@ -118,6 +124,20 @@ function getModuleLabel(moduleValue: string | null): string {
 
   const option = MODULE_OPTIONS.find((item) => item.value === moduleValue);
   return option?.label ?? moduleValue;
+}
+
+function getToastBackgroundColor(type: ToastType): string {
+  switch (type) {
+    case 'success':
+      return 'rgba(27, 35, 48, 0.92)';
+    case 'warning':
+      return 'rgba(82, 58, 16, 0.94)';
+    case 'error':
+      return 'rgba(88, 28, 28, 0.94)';
+    case 'info':
+    default:
+      return 'rgba(38, 44, 53, 0.92)';
+  }
 }
 
 function isCancelLikeMessage(message?: string): boolean {
@@ -486,6 +506,8 @@ function QuestionPhotoQueueCard({
 }
 
 export default function AddScreen() {
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
   const [photoQueue, setPhotoQueue] = useState<QueuedPhoto[]>([]);
   const [previewPhoto, setPreviewPhoto] = useState<QueuedPhoto | null>(null);
@@ -495,6 +517,12 @@ export default function AddScreen() {
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showOptionalInfo, setShowOptionalInfo] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string>('');
+  const [toastType, setToastType] = useState<ToastType>('info');
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isImageBusy = activeImageAction !== null;
   const isBusy = isImageBusy || isSaving;
@@ -502,6 +530,7 @@ export default function AddScreen() {
   const missingModule = !hasValue(draft.module);
   const canSave = !isBusy && !missingQuestionImage && !missingModule;
   const queueCount = photoQueue.length;
+  const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
   const saveHintTextV2 = isSaving
     ? '正在保存...'
@@ -570,6 +599,93 @@ export default function AddScreen() {
     setPreviewPhoto(null);
   }
 
+  function hideToast() {
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 8,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  }
+
+  function showToast(message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) {
+    const trimmed = message.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+
+    setToastMessage(trimmed);
+    setToastType(type);
+    setToastVisible(true);
+    toastOpacity.setValue(0);
+    toastTranslateY.setValue(8);
+
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 1,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 0,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    toastTimerRef.current = setTimeout(() => {
+      hideToast();
+      toastTimerRef.current = null;
+    }, duration);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const hasUnsavedChanges = photoQueue.length > 0;
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (!hasUnsavedChanges) {
+        return;
+      }
+
+      event.preventDefault();
+      Alert.alert(
+        '确认离开',
+        '当前还有未保存的题目，确定离开吗？',
+        [
+          { text: '继续编辑', style: 'cancel' },
+          {
+            text: '放弃离开',
+            style: 'destructive',
+            onPress: () => navigation.dispatch(event.data.action),
+          },
+        ],
+      );
+    });
+
+    return unsubscribe;
+  }, [navigation, photoQueue.length]);
+
   async function runImageAction(actionKey: string, handler: () => Promise<void>) {
     if (isBusy || isSaving) {
       return;
@@ -580,10 +696,41 @@ export default function AddScreen() {
       await handler();
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Image action failed.', { actionKey, error });
-      Alert.alert('操作失败', error instanceof Error ? error.message : String(error));
+      showToast(error instanceof Error ? error.message : String(error), 'error', TOAST_DURATION_LONG);
     } finally {
       setActiveImageAction(null);
     }
+  }
+
+  function shouldPromptOpenSettings(message?: string): boolean {
+    if (!message) {
+      return false;
+    }
+
+    const normalized = message.toLowerCase();
+    return (
+      normalized.includes('system settings')
+      || normalized.includes('open settings')
+      || normalized.includes('去设置')
+      || normalized.includes('系统设置')
+    );
+  }
+
+  function promptOpenSettings(permissionName: 'camera' | 'album') {
+    const message =
+      permissionName === 'camera'
+        ? '需要相机权限才能拍题，请到系统设置中开启。'
+        : '需要相册权限才能选择图片，请到系统设置中开启。';
+
+    Alert.alert('权限受限', message, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '去设置',
+        onPress: () => {
+          void Linking.openSettings();
+        },
+      },
+    ]);
   }
 
   async function handleTakePhoto(config: CaptureEntryConfig) {
@@ -599,7 +746,7 @@ export default function AddScreen() {
             draftId: draft.draftId,
             photoQueueSize: photoQueue.length,
           });
-          Alert.alert('提示', '一次最多添加 20 道题，请先保存当前队列');
+          showToast('已达到 20 张上限，请先保存当前队列', 'warning');
           return;
         }
       }
@@ -624,12 +771,24 @@ export default function AddScreen() {
           draftId: draft.draftId,
           message: message ?? null,
         });
-        Alert.alert('提示', '拍照失败，请重试');
+        if (shouldPromptOpenSettings(message)) {
+          promptOpenSettings('camera');
+          return;
+        }
+        showToast('拍照失败，请重试', 'error', TOAST_DURATION_LONG);
         return;
       }
 
       if (!result.ok || !result.image) {
-        Alert.alert('未完成', result.errorMessage ?? `${config.title}未完成`);
+        const message = result.errorMessage?.trim();
+        if (isCancelLikeMessage(message)) {
+          return;
+        }
+        if (shouldPromptOpenSettings(message)) {
+          promptOpenSettings('camera');
+          return;
+        }
+        showToast(message ?? `${config.title}未完成`, 'error', TOAST_DURATION_LONG);
         return;
       }
 
@@ -648,8 +807,10 @@ export default function AddScreen() {
           photoId: queueItem.id,
           photoQueueSize: nextQueue.length,
         });
+        showToast('已添加 1 张照片', 'success');
       } else {
         updateDraftImage(config.key, result.image);
+        showToast(`${config.title}已更新`, 'success');
       }
       setValidationErrors([]);
       setSaveErrorMessage(null);
@@ -665,7 +826,7 @@ export default function AddScreen() {
         });
 
         if (photoQueue.length >= MAX_PHOTO_QUEUE_SIZE) {
-          Alert.alert('提示', '一次最多添加 20 道题，请先保存当前队列');
+          showToast('已达到 20 张上限，请先保存当前队列', 'warning');
           return;
         }
 
@@ -688,7 +849,7 @@ export default function AddScreen() {
           await Promise.all(overflowImages.map(async (image) => {
             await deleteLocalImage(image.uri);
           }));
-          Alert.alert('提示', '一次最多添加 20 道题，请先保存当前队列');
+          showToast('已达到 20 张上限，请先保存当前队列', 'warning');
         }
 
         if (acceptedImages.length > 0) {
@@ -701,6 +862,7 @@ export default function AddScreen() {
           });
           setPhotoQueue(nextQueue);
           syncDraftQuestionImage(nextQueue);
+          showToast(`已添加 ${queueItems.length} 张照片`, 'success');
         }
 
         if (!batchResult.ok) {
@@ -718,7 +880,11 @@ export default function AddScreen() {
             message: message ?? null,
             appendedCount: batchResult.images.length,
           });
-          Alert.alert('提示', '图片保存失败，请重试');
+          if (shouldPromptOpenSettings(message)) {
+            promptOpenSettings('album');
+            return;
+          }
+          showToast('图片保存失败，请重试', 'error', TOAST_DURATION_LONG);
           return;
         }
 
@@ -733,13 +899,22 @@ export default function AddScreen() {
       });
 
       if (!result.ok || !result.image) {
-        Alert.alert('未完成', result.errorMessage ?? `${config.title}未完成`);
+        const message = result.errorMessage?.trim();
+        if (isCancelLikeMessage(message)) {
+          return;
+        }
+        if (shouldPromptOpenSettings(message)) {
+          promptOpenSettings('album');
+          return;
+        }
+        showToast(message ?? `${config.title}未完成`, 'error', TOAST_DURATION_LONG);
         return;
       }
 
       updateDraftImage(config.key, result.image);
       setValidationErrors([]);
       setSaveErrorMessage(null);
+      showToast(`${config.title}已更新`, 'success');
     });
   }
 
@@ -749,30 +924,40 @@ export default function AddScreen() {
       return;
     }
 
-    void runImageAction(`delete-question-${photoId}`, async () => {
-      const removed = await deleteLocalImage(target.image.uri);
-      if (!removed) {
-        Logger.warn(PAGE_SCOPE, 'Failed to delete queue image file, but removed from queue.', {
-          draftId: draft.draftId,
-          photoId,
-          uri: target.image.uri,
-        });
-      }
+    Alert.alert('删除照片', '确认删除这张题目照片吗？', [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void runImageAction(`delete-question-${photoId}`, async () => {
+            const removed = await deleteLocalImage(target.image.uri);
+            if (!removed) {
+              Logger.warn(PAGE_SCOPE, 'Failed to delete queue image file, but removed from queue.', {
+                draftId: draft.draftId,
+                photoId,
+                uri: target.image.uri,
+              });
+            }
 
-      setPhotoQueue((prev) => {
-        const next = prev.filter((item) => item.id !== photoId);
-        syncDraftQuestionImage(next);
-        return next;
-      });
-      if (previewPhoto?.id === photoId) {
-        setPreviewPhoto(null);
-      }
-      if (lastTapInfo?.id === photoId) {
-        setLastTapInfo(null);
-      }
-      setValidationErrors([]);
-      setSaveErrorMessage(null);
-    });
+            setPhotoQueue((prev) => {
+              const next = prev.filter((item) => item.id !== photoId);
+              syncDraftQuestionImage(next);
+              return next;
+            });
+            if (previewPhoto?.id === photoId) {
+              setPreviewPhoto(null);
+            }
+            if (lastTapInfo?.id === photoId) {
+              setLastTapInfo(null);
+            }
+            setValidationErrors([]);
+            setSaveErrorMessage(null);
+            showToast('已删除照片', 'info');
+          });
+        },
+      },
+    ]);
   }
 
   function handleDeleteImage(config: CaptureEntryConfig) {
@@ -795,13 +980,14 @@ export default function AddScreen() {
                 imageType: config.type,
                 uri: image.uri,
               });
-              Alert.alert('删除失败', '图片文件删除失败，请稍后重试。');
+              showToast('删除失败，请稍后重试', 'error', TOAST_DURATION_LONG);
               return;
             }
 
             updateDraftImage(config.key, null);
             setValidationErrors([]);
             setSaveErrorMessage(null);
+            showToast('已删除照片', 'info');
           });
         },
       },
@@ -822,7 +1008,9 @@ export default function AddScreen() {
       const normalizedErrors = normalizeValidationErrors(validationInput, validation.errors);
       setValidationErrors(normalizedErrors);
       setSaveErrorMessage(null);
-      Alert.alert('校验未通过', normalizedErrors.join('\n'));
+      showToast(normalizedErrors[0] ?? '校验未通过', 'warning');
+      return true;
+      showToast(normalizedErrors[0] ?? '校验未通过', 'warning');
       return true;
     }
 
@@ -894,11 +1082,28 @@ export default function AddScreen() {
         setValidationErrors([]);
         setSaveErrorMessage(null);
         setShowOptionalInfo(false);
-        Alert.alert('保存成功', `已保存 ${successCount} 道错题`);
+        showToast(
+          successCount > 1 ? `已保存 ${successCount} 道题` : '保存成功，已加入题库',
+          'success',
+        );
         return true;
       }
 
       if (successCount > 0) {
+        const partialMessage = `Saved ${successCount}, failed ${failedCount}. Please retry failed items.`;
+        setPhotoQueue(failedPhotos);
+        syncDraftQuestionImage(failedPhotos);
+        if (previewPhoto && !failedPhotos.some((item) => item.id === previewPhoto.id)) {
+          setPreviewPhoto(null);
+        }
+        if (lastTapInfo && !failedPhotos.some((item) => item.id === lastTapInfo.id)) {
+          setLastTapInfo(null);
+        }
+        setSaveErrorMessage(partialMessage);
+        showToast(`Saved ${successCount}, failed ${failedCount}. Please retry.`, 'warning', TOAST_DURATION_LONG);
+        return true;
+      }
+        /*
         const partialMessage = `成功 ${successCount} 道，失败 ${failedCount} 道`;
         setPhotoQueue(failedPhotos);
         syncDraftQuestionImage(failedPhotos);
@@ -909,14 +1114,24 @@ export default function AddScreen() {
           setLastTapInfo(null);
         }
         setSaveErrorMessage(partialMessage);
-        Alert.alert('部分保存成功', `${partialMessage}，请重试失败项`);
+        showToast(`已保存 ${successCount} 道，${failedCount} 道失败，请检查后重试`, 'warning', TOAST_DURATION_LONG);
+        return true;
+        showToast(`已保存 ${successCount} 道，${failedCount} 道失败，请检查后重试`, 'warning', TOAST_DURATION_LONG);
         return true;
       }
 
       const firstError = failedMessages[0] ?? '保存失败，请重试';
+      */
+      const firstError = failedMessages[0] ?? 'Save failed. Please retry.';
       setSaveErrorMessage(firstError);
-      Alert.alert('保存失败', firstError);
+      showToast(`Save failed: ${firstError}`, 'error', TOAST_DURATION_LONG);
       return true;
+      /*
+      showToast(`保存失败：${firstError}`, 'error', TOAST_DURATION_LONG);
+      return true;
+      showToast(`保存失败：${firstError}`, 'error', TOAST_DURATION_LONG);
+      return true;
+      */
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Unexpected error while batch saving draft.', {
         draftId: draft.draftId,
@@ -924,8 +1139,17 @@ export default function AddScreen() {
       });
       const message = error instanceof Error ? error.message : String(error);
       setSaveErrorMessage(message);
-      Alert.alert('保存失败', message);
+      showToast(`Save failed: ${message}`, 'error', TOAST_DURATION_LONG);
       return true;
+      /*
+      if (Date.now() >= 0) {
+        return true;
+      }
+      showToast(`保存失败：${message}`, 'error', TOAST_DURATION_LONG);
+      return true;
+      showToast(`保存失败：${message}`, 'error', TOAST_DURATION_LONG);
+      return true;
+      */
     } finally {
       setIsSaving(false);
     }
@@ -993,7 +1217,8 @@ export default function AddScreen() {
   }
 
   return (
-    <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
+    <View style={styles.pageRoot}>
+      <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
       <BrandHeader title="新增错题" subtitle="拍题目，选模块，保存到 7 刷计划" />
 
       <View style={styles.sectionBlock}>
@@ -1176,11 +1401,34 @@ export default function AddScreen() {
         title="题目照片预览"
         onClose={handleClosePreview}
       />
-    </ScreenContainer>
+      </ScreenContainer>
+
+      {toastVisible ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.toastContainer,
+            {
+              bottom: toastBottomOffset,
+              opacity: toastOpacity,
+              transform: [{ translateY: toastTranslateY }],
+            },
+          ]}>
+          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
+              {toastMessage}
+            </Text>
+          </View>
+        </Animated.View>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pageRoot: {
+    flex: 1,
+  },
   screenContent: {
     paddingTop: spacing.lg,
     paddingBottom: layout.bottomTabHeight + spacing.lg,
@@ -1489,5 +1737,28 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
+  },
+  toastContainer: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    alignItems: 'center',
+  },
+  toastBubble: {
+    maxWidth: '86%',
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: colors.black,
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
