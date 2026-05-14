@@ -2,13 +2,14 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  Animated,
   Image,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   BrandHeader,
@@ -19,6 +20,7 @@ import {
   StatusPill,
 } from '@/src/components';
 import type { DetailImageSlot } from '@/src/models/MistakeDetailViewModel';
+import type { ReviewResult } from '@/src/models/Mistake';
 import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewPageData } from '@/src/services/ReviewFlowService';
 import * as CompleteReviewService from '@/src/services/CompleteReviewService';
@@ -28,12 +30,22 @@ import * as ReviewFlowService from '@/src/services/ReviewFlowService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'ReviewPage';
+const TOAST_DURATION_DEFAULT = 2200;
+const TOAST_DURATION_LONG = 3200;
+
+type ToastType = 'success' | 'info' | 'error';
 
 type ReviewPageState =
   | { kind: 'loading' }
   | { kind: 'success'; data: ReviewPageData }
   | { kind: 'notFound'; message: string }
   | { kind: 'error'; message: string };
+
+const REVIEW_RESULT_OPTIONS: { label: string; value: ReviewResult }[] = [
+  { label: '会了', value: 'mastered' },
+  { label: '模糊', value: 'unsure' },
+  { label: '不会', value: 'wrong' },
+];
 
 function normalizeRouteId(value: string | string[] | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -65,6 +77,16 @@ function mapStatusToTone(status: ReviewPageData['session']['status']): 'dark' | 
     return 'light';
   }
   return 'dark';
+}
+
+function getToastBackgroundColor(type: ToastType): string {
+  if (type === 'success') {
+    return 'rgba(24, 38, 30, 0.95)';
+  }
+  if (type === 'error') {
+    return 'rgba(88, 28, 28, 0.95)';
+  }
+  return 'rgba(38, 44, 53, 0.95)';
 }
 
 function QuestionPreviewCard({ slot }: { slot?: DetailImageSlot }) {
@@ -112,16 +134,27 @@ function QuestionPreviewCard({ slot }: { slot?: DetailImageSlot }) {
 
 export default function ReviewScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id?: string | string[] }>();
   const routeId = useMemo(() => normalizeRouteId(id), [id]);
 
   const [state, setState] = useState<ReviewPageState>({ kind: 'loading' });
   const [capturedReviewImage, setCapturedReviewImage] = useState<LocalImage | null>(null);
-  const [submitErrorMessage, setSubmitErrorMessage] = useState<string | null>(null);
+  const [selectedResult, setSelectedResult] = useState<ReviewResult | null>(null);
   const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
   const [isDeletingImage, setIsDeletingImage] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<ToastType>('info');
+  const [toastVisible, setToastVisible] = useState(false);
+
   const requestIdRef = useRef(0);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const toastBottomOffset = insets.bottom + spacing.lg;
 
   const handleBack = useCallback(() => {
     if (typeof router.canGoBack === 'function' && router.canGoBack()) {
@@ -136,6 +169,62 @@ export default function ReviewScreen() {
 
     router.replace('/(tabs)/library' as never);
   }, [routeId, router]);
+
+  const hideToast = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 8,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  }, [toastOpacity, toastTranslateY]);
+
+  const showToast = useCallback(
+    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
+      const normalizedMessage = message.trim();
+      if (!normalizedMessage) {
+        return;
+      }
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      setToastMessage(normalizedMessage);
+      setToastType(type);
+      setToastVisible(true);
+      toastOpacity.setValue(0);
+      toastTranslateY.setValue(8);
+
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      toastTimerRef.current = setTimeout(() => {
+        hideToast();
+        toastTimerRef.current = null;
+      }, duration);
+    },
+    [hideToast, toastOpacity, toastTranslateY],
+  );
 
   const loadPageData = useCallback(async () => {
     if (!routeId) {
@@ -196,8 +285,22 @@ export default function ReviewScreen() {
 
   useEffect(() => {
     setCapturedReviewImage(null);
-    setSubmitErrorMessage(null);
+    setSelectedResult(null);
   }, [routeId]);
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+      if (navigateTimerRef.current) {
+        clearTimeout(navigateTimerRef.current);
+        navigateTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const handleCaptureReviewPhoto = useCallback(async () => {
     if (!routeId || state.kind !== 'success') {
@@ -207,7 +310,7 @@ export default function ReviewScreen() {
       return;
     }
     if (!state.data.session.canReview) {
-      setSubmitErrorMessage(state.data.session.reason ?? '当前状态不能继续复做');
+      showToast(state.data.session.reason ?? '当前状态不能继续复做', 'info');
       return;
     }
 
@@ -220,9 +323,11 @@ export default function ReviewScreen() {
       });
 
       if (!saveResult.ok || !saveResult.image) {
-        const message = saveResult.errorMessage ?? '拍照失败，请重试';
-        setSubmitErrorMessage(message);
-        Alert.alert('拍照未完成', message);
+        Logger.warn(PAGE_SCOPE, 'Capture review photo did not return a valid image.', {
+          routeId,
+          errorMessage: saveResult.errorMessage ?? null,
+        });
+        showToast('拍照失败，请重试', 'error', TOAST_DURATION_LONG);
         return;
       }
 
@@ -231,19 +336,24 @@ export default function ReviewScreen() {
       }
 
       setCapturedReviewImage(saveResult.image);
-      setSubmitErrorMessage(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setSubmitErrorMessage(message);
       Logger.error(PAGE_SCOPE, 'Failed to capture review photo.', {
         routeId,
         error,
       });
-      Alert.alert('拍照失败', message);
+      showToast('拍照失败，请重试', 'error', TOAST_DURATION_LONG);
     } finally {
       setIsCapturingPhoto(false);
     }
-  }, [capturedReviewImage?.uri, isCapturingPhoto, isDeletingImage, isSubmitting, routeId, state]);
+  }, [
+    capturedReviewImage?.uri,
+    isCapturingPhoto,
+    isDeletingImage,
+    isSubmitting,
+    routeId,
+    showToast,
+    state,
+  ]);
 
   const handleDeleteReviewPhoto = useCallback(async () => {
     if (!capturedReviewImage || isSubmitting || isDeletingImage || isCapturingPhoto) {
@@ -254,23 +364,21 @@ export default function ReviewScreen() {
     try {
       const removed = await ImageService.deleteLocalImage(capturedReviewImage.uri);
       if (!removed) {
-        const message = '删除复做照片失败，请稍后重试';
-        setSubmitErrorMessage(message);
-        Alert.alert('删除失败', message);
+        Logger.warn(PAGE_SCOPE, 'deleteLocalImage returned false when deleting review photo.', {
+          uri: capturedReviewImage.uri,
+        });
+        showToast('删除失败，请稍后重试', 'error', TOAST_DURATION_LONG);
         return;
       }
 
       setCapturedReviewImage(null);
-      setSubmitErrorMessage(null);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setSubmitErrorMessage(message);
       Logger.error(PAGE_SCOPE, 'Failed to delete review photo.', { error });
-      Alert.alert('删除失败', message);
+      showToast('删除失败，请稍后重试', 'error', TOAST_DURATION_LONG);
     } finally {
       setIsDeletingImage(false);
     }
-  }, [capturedReviewImage, isCapturingPhoto, isDeletingImage, isSubmitting]);
+  }, [capturedReviewImage, isCapturingPhoto, isDeletingImage, isSubmitting, showToast]);
 
   const handleSubmit = useCallback(async () => {
     if (!routeId || state.kind !== 'success') {
@@ -282,45 +390,51 @@ export default function ReviewScreen() {
 
     const { session } = state.data;
     if (!session.canReview) {
-      setSubmitErrorMessage(session.reason ?? '当前状态不能继续复做');
+      showToast(session.reason ?? '当前状态不能继续复做', 'info');
       return;
     }
 
-    if (!capturedReviewImage?.uri) {
-      const message = '请先拍本次复做照片';
-      setSubmitErrorMessage(message);
+    if (!selectedResult) {
+      showToast('请先选择本次结果', 'info');
       return;
     }
 
     setIsSubmitting(true);
-    setSubmitErrorMessage(null);
+    let submittedSuccessfully = false;
     try {
       const result = await CompleteReviewService.completeReview({
         mistakeId: routeId,
         reviewIndex: session.nextReviewIndex,
-        solutionImageUri: capturedReviewImage.uri,
-        result: 'mastered',
+        solutionImageUri: capturedReviewImage?.uri ?? null,
+        result: selectedResult,
         cleanupImageOnFailure: true,
       });
 
       if (!result.ok) {
-        const message = result.errorMessage ?? '提交复做失败，请稍后重试';
-        setSubmitErrorMessage(message);
+        Logger.warn(PAGE_SCOPE, 'Review submit finished without success.', {
+          routeId,
+          reviewIndex: session.nextReviewIndex,
+          errorMessage: result.errorMessage ?? null,
+        });
+        showToast('保存失败，请稍后重试', 'error', TOAST_DURATION_LONG);
         return;
       }
 
-      if (result.newStatus === 'mastered') {
-        Alert.alert('提交成功', '恭喜，已完成七刷');
-      } else {
-        Alert.alert('提交成功', `第 ${session.nextReviewIndex} 刷已完成，下一次复做已安排`);
+      submittedSuccessfully = true;
+      showToast('已保存本次复做', 'success');
+      if (navigateTimerRef.current) {
+        clearTimeout(navigateTimerRef.current);
       }
-      router.replace(`/mistake/${routeId}` as never);
+      navigateTimerRef.current = setTimeout(() => {
+        router.replace(`/mistake/${routeId}` as never);
+      }, 320);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setSubmitErrorMessage(message);
       Logger.error(PAGE_SCOPE, 'Failed to submit review completion.', { error, routeId });
+      showToast('保存失败，请稍后重试', 'error', TOAST_DURATION_LONG);
     } finally {
-      setIsSubmitting(false);
+      if (!submittedSuccessfully) {
+        setIsSubmitting(false);
+      }
     }
   }, [
     capturedReviewImage?.uri,
@@ -329,6 +443,8 @@ export default function ReviewScreen() {
     isSubmitting,
     routeId,
     router,
+    selectedResult,
+    showToast,
     state,
   ]);
 
@@ -374,7 +490,12 @@ export default function ReviewScreen() {
           <Text style={styles.stateMessage}>{state.message}</Text>
           <View style={styles.stateButtonRow}>
             <PrimaryButton title="重试" onPress={() => void loadPageData()} style={styles.stateButton} />
-            <PrimaryButton title="返回" onPress={handleBack} style={styles.stateButtonLight} textStyle={styles.stateButtonLightText} />
+            <PrimaryButton
+              title="返回"
+              onPress={handleBack}
+              style={styles.stateButtonLight}
+              textStyle={styles.stateButtonLightText}
+            />
           </View>
         </CardContainer>
       </ScreenContainer>
@@ -385,100 +506,156 @@ export default function ReviewScreen() {
   const questionSlot = detail.imageSlots.find((slot) => slot.type === 'question');
   const captureDisabled = isSubmitting || isDeletingImage || isCapturingPhoto || !session.canReview;
   const deleteDisabled = isSubmitting || isDeletingImage || isCapturingPhoto;
+  const resultSelectDisabled =
+    isSubmitting || isCapturingPhoto || isDeletingImage || !session.canReview;
   const submitDisabled =
     isSubmitting || isCapturingPhoto || isDeletingImage || !session.canReview;
   const submitButtonTitle = !session.canReview
     ? session.reason ?? '当前不可复做'
     : isSubmitting
-      ? '保存中...'
-      : `标记第 ${session.nextReviewIndex} 刷完成`;
+      ? '保存中…'
+      : '保存本次复做';
 
   return (
-    <ScreenContainer scroll contentStyle={styles.screenContent}>
-      <Pressable style={styles.backButton} onPress={handleBack}>
-        <Text style={styles.backButtonText}>返回错题详情</Text>
-      </Pressable>
+    <View style={styles.pageRoot}>
+      <ScreenContainer scroll contentStyle={styles.screenContent}>
+        <Pressable style={styles.backButton} onPress={handleBack}>
+          <Text style={styles.backButtonText}>返回错题详情</Text>
+        </Pressable>
 
-      <BrandHeader title="七刷错题本" subtitle="复做任务" />
+        <BrandHeader title="七刷错题本" subtitle="复做任务" />
 
-      <CardContainer style={styles.summaryCard} padding={spacing.lg}>
-        <Text style={styles.moduleText}>{detail.module}</Text>
-        <Text style={styles.titleText}>{detail.title}</Text>
-        <View style={styles.progressRow}>
-          <Text style={styles.progressText}>
-            当前进度：{session.currentReviewCount}/{session.maxReviewCount}
-          </Text>
-          <StatusPill label={detail.statusLabel} tone={mapStatusToTone(session.status)} />
-        </View>
-        <Text style={styles.nextReviewText}>本次复做：第 {session.nextReviewIndex} 刷</Text>
-        <ProgressDots
-          total={session.maxReviewCount}
-          current={session.nextReviewIndex}
-          completed={session.currentReviewCount}
-          style={styles.progressDots}
-        />
-        {!session.canReview ? (
-          <Text style={styles.reasonText}>当前不可复做：{session.reason ?? '请返回详情页刷新'}</Text>
-        ) : null}
-      </CardContainer>
-
-      <QuestionPreviewCard slot={questionSlot} />
-
-      <CardContainer style={styles.captureCard} padding={spacing.lg}>
-        <Text style={styles.captureTitle}>本次复做照片</Text>
-
-        {!capturedReviewImage ? (
-          <Pressable
-            onPress={() => void handleCaptureReviewPhoto()}
-            disabled={captureDisabled}
-            style={[styles.capturePlaceholder, captureDisabled && styles.disabledControl]}>
-            <Text style={styles.capturePlaceholderIcon}>+</Text>
-            <Text style={styles.capturePlaceholderText}>拍本次做法</Text>
-          </Pressable>
-        ) : (
-          <View style={styles.previewWrap}>
-            <Image
-              source={{ uri: capturedReviewImage.uri }}
-              style={styles.reviewPreviewImage}
-              resizeMode="contain"
-            />
-            <View style={styles.captureActionRow}>
-              <Pressable
-                onPress={() => void handleCaptureReviewPhoto()}
-                disabled={captureDisabled}
-                style={[styles.captureActionButton, styles.primaryAction, captureDisabled && styles.disabledControl]}>
-                <Text style={styles.primaryActionText}>重新拍照</Text>
-              </Pressable>
-
-              <Pressable
-                onPress={() => void handleDeleteReviewPhoto()}
-                disabled={deleteDisabled}
-                style={[styles.captureActionButton, styles.secondaryAction, deleteDisabled && styles.disabledControl]}>
-                <Text style={styles.secondaryActionText}>
-                  {isDeletingImage ? '删除中...' : '删除'}
-                </Text>
-              </Pressable>
-            </View>
+        <CardContainer style={styles.summaryCard} padding={spacing.lg}>
+          <Text style={styles.moduleText}>{detail.module}</Text>
+          <Text style={styles.titleText}>{detail.title}</Text>
+          <View style={styles.progressRow}>
+            <Text style={styles.progressText}>
+              当前进度：{session.currentReviewCount}/{session.maxReviewCount}
+            </Text>
+            <StatusPill label={detail.statusLabel} tone={mapStatusToTone(session.status)} />
           </View>
-        )}
-      </CardContainer>
-
-      {submitErrorMessage ? (
-        <CardContainer style={styles.errorCard} padding={spacing.lg}>
-          <Text style={styles.errorText}>{submitErrorMessage}</Text>
+          <Text style={styles.nextReviewText}>本次复做：第 {session.nextReviewIndex} 刷</Text>
+          <ProgressDots
+            total={session.maxReviewCount}
+            current={session.nextReviewIndex}
+            completed={session.currentReviewCount}
+            style={styles.progressDots}
+          />
+          {!session.canReview ? (
+            <Text style={styles.reasonText}>当前不可复做：{session.reason ?? '请返回详情页刷新'}</Text>
+          ) : null}
         </CardContainer>
-      ) : null}
 
-      <PrimaryButton
-        title={submitButtonTitle}
-        disabled={submitDisabled}
-        onPress={() => void handleSubmit()}
-      />
-    </ScreenContainer>
+        <QuestionPreviewCard slot={questionSlot} />
+
+        <CardContainer style={styles.resultCard} padding={spacing.lg}>
+          <Text style={styles.resultTitle}>本次结果</Text>
+          <View style={styles.resultOptionsRow}>
+            {REVIEW_RESULT_OPTIONS.map((option) => {
+              const selected = selectedResult === option.value;
+              return (
+                <Pressable
+                  key={option.value}
+                  onPress={() => setSelectedResult(option.value)}
+                  disabled={resultSelectDisabled}
+                  style={[
+                    styles.resultOptionButton,
+                    selected ? styles.resultOptionButtonSelected : styles.resultOptionButtonIdle,
+                    resultSelectDisabled ? styles.disabledControl : null,
+                  ]}>
+                  <Text
+                    style={[
+                      styles.resultOptionText,
+                      selected ? styles.resultOptionTextSelected : styles.resultOptionTextIdle,
+                    ]}>
+                    {option.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </CardContainer>
+
+        <CardContainer style={styles.captureCard} padding={spacing.lg}>
+          <Text style={styles.captureTitle}>本次复做照片（可选）</Text>
+
+          {!capturedReviewImage ? (
+            <Pressable
+              onPress={() => void handleCaptureReviewPhoto()}
+              disabled={captureDisabled}
+              style={[styles.capturePlaceholder, captureDisabled && styles.disabledControl]}>
+              <Text style={styles.capturePlaceholderIcon}>+</Text>
+              <Text style={styles.capturePlaceholderText}>拍本次做法（可选）</Text>
+            </Pressable>
+          ) : (
+            <View style={styles.previewWrap}>
+              <Image
+                source={{ uri: capturedReviewImage.uri }}
+                style={styles.reviewPreviewImage}
+                resizeMode="contain"
+              />
+              <View style={styles.captureActionRow}>
+                <Pressable
+                  onPress={() => void handleCaptureReviewPhoto()}
+                  disabled={captureDisabled}
+                  style={[
+                    styles.captureActionButton,
+                    styles.primaryAction,
+                    captureDisabled && styles.disabledControl,
+                  ]}>
+                  <Text style={styles.primaryActionText}>重新拍照</Text>
+                </Pressable>
+
+                <Pressable
+                  onPress={() => void handleDeleteReviewPhoto()}
+                  disabled={deleteDisabled}
+                  style={[
+                    styles.captureActionButton,
+                    styles.secondaryAction,
+                    deleteDisabled && styles.disabledControl,
+                  ]}>
+                  <Text style={styles.secondaryActionText}>
+                    {isDeletingImage ? '删除中…' : '删除'}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          )}
+        </CardContainer>
+
+        <PrimaryButton
+          title={submitButtonTitle}
+          disabled={submitDisabled}
+          onPress={() => void handleSubmit()}
+        />
+      </ScreenContainer>
+
+      {toastVisible ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.toastContainer,
+            {
+              bottom: toastBottomOffset,
+              opacity: toastOpacity,
+              transform: [{ translateY: toastTranslateY }],
+            },
+          ]}>
+          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
+              {toastMessage}
+            </Text>
+          </View>
+        </Animated.View>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pageRoot: {
+    flex: 1,
+  },
   screenContent: {
     paddingTop: spacing.lg,
     gap: spacing.lg,
@@ -596,6 +773,46 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
+  resultCard: {
+    borderRadius: radius.xl,
+    gap: spacing.sm,
+  },
+  resultTitle: {
+    ...typography.sectionTitle,
+    fontSize: 20,
+    lineHeight: 28,
+  },
+  resultOptionsRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  resultOptionButton: {
+    flex: 1,
+    minHeight: 56,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  resultOptionButtonIdle: {
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+  },
+  resultOptionButtonSelected: {
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+  },
+  resultOptionText: {
+    ...typography.body,
+    fontWeight: '700',
+  },
+  resultOptionTextIdle: {
+    color: colors.textPrimary,
+  },
+  resultOptionTextSelected: {
+    color: colors.white,
+  },
   captureCard: {
     borderRadius: radius.xl,
     gap: spacing.sm,
@@ -673,11 +890,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
   },
-  errorCard: {
-    borderRadius: radius.xl,
-    borderColor: '#F2C9C9',
-    backgroundColor: '#FFF5F5',
-  },
   errorText: {
     ...typography.body,
     color: colors.danger,
@@ -685,5 +897,28 @@ const styles = StyleSheet.create({
   },
   disabledControl: {
     opacity: 0.5,
+  },
+  toastContainer: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    alignItems: 'center',
+  },
+  toastBubble: {
+    maxWidth: '86%',
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: colors.black,
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

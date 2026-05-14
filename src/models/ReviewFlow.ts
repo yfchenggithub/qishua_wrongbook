@@ -15,8 +15,8 @@ export interface ReviewSession {
 export interface CompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
-  solutionImageUri: string;
-  result?: ReviewResult;
+  solutionImageUri?: string | null;
+  result: ReviewResult;
   cleanupImageOnFailure?: boolean;
 }
 

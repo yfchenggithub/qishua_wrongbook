@@ -20,7 +20,7 @@ const REVIEW_RESULT_VALUES: ReviewResult[] = ['mastered', 'unsure', 'wrong'];
 interface NormalizedCompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
-  solutionImageUri: string;
+  solutionImageUri: string | null;
   result: ReviewResult;
   cleanupImageOnFailure: boolean;
 }
@@ -47,10 +47,7 @@ function toErrorMessage(error: unknown): string {
   return message.length > 0 ? message : UNKNOWN_ERROR_MESSAGE;
 }
 
-function normalizeReviewResult(result: ReviewResult | undefined): ReviewResult | null {
-  if (result === undefined) {
-    return 'mastered';
-  }
+function normalizeReviewResult(result: ReviewResult): ReviewResult | null {
   if (REVIEW_RESULT_VALUES.includes(result)) {
     return result;
   }
@@ -83,14 +80,9 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
     };
   }
 
-  const solutionImageUri =
+  const solutionImageUriRaw =
     typeof input.solutionImageUri === 'string' ? input.solutionImageUri.trim() : '';
-  if (!solutionImageUri) {
-    return {
-      ok: false,
-      errorMessage: 'solutionImageUri 不能为空',
-    };
-  }
+  const solutionImageUri = solutionImageUriRaw.length > 0 ? solutionImageUriRaw : null;
 
   const result = normalizeReviewResult(input.result);
   if (!result) {
@@ -231,25 +223,41 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           reviewIndex: normalizedInput.reviewIndex,
         });
 
-        await MistakeImageRepository.insertReviewSolutionImagesInTransaction(
-          db,
-          normalizedInput.mistakeId,
-          createdReviewRecord.id,
-          [
+        if (normalizedInput.solutionImageUri) {
+          await MistakeImageRepository.insertReviewSolutionImagesInTransaction(
+            db,
+            normalizedInput.mistakeId,
+            createdReviewRecord.id,
+            [
+              {
+                type: 'review_solution',
+                uri: normalizedInput.solutionImageUri,
+                sort_order: 0,
+              },
+            ],
+            nowIso,
+          );
+          Logger.info(
+            SERVICE_SCOPE,
+            'Created review_solution mistake_images row successfully in transaction.',
             {
-              type: 'review_solution',
-              uri: normalizedInput.solutionImageUri,
-              sort_order: 0,
+              mistakeId: normalizedInput.mistakeId,
+              reviewRecordId: createdReviewRecord.id,
+              reviewIndex: normalizedInput.reviewIndex,
+              solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
             },
-          ],
-          nowIso,
-        );
-        Logger.info(SERVICE_SCOPE, 'Created review_solution mistake_images row successfully in transaction.', {
-          mistakeId: normalizedInput.mistakeId,
-          reviewRecordId: createdReviewRecord.id,
-          reviewIndex: normalizedInput.reviewIndex,
-          solutionImageUriShort: toShortUri(normalizedInput.solutionImageUri),
-        });
+          );
+        } else {
+          Logger.info(
+            SERVICE_SCOPE,
+            'Skipped creating review_solution mistake_images row because no review photo was provided.',
+            {
+              mistakeId: normalizedInput.mistakeId,
+              reviewRecordId: createdReviewRecord.id,
+              reviewIndex: normalizedInput.reviewIndex,
+            },
+          );
+        }
 
         const affectedRows = await MistakeRepository.updateReviewProgressInTransaction(db, {
           mistakeId: normalizedInput.mistakeId,
@@ -284,7 +292,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
         nextReviewAt,
       });
     } catch (error) {
-      if (normalizedInput.cleanupImageOnFailure) {
+      if (normalizedInput.cleanupImageOnFailure && normalizedInput.solutionImageUri) {
         Logger.warn(SERVICE_SCOPE, 'Attempting to cleanup orphan review image after transaction failure.', {
           mistakeId: normalizedInput.mistakeId,
           reviewIndex: normalizedInput.reviewIndex,
