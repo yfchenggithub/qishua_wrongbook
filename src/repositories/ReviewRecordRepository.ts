@@ -84,10 +84,19 @@ function normalizeReviewIndex(reviewIndex: number): number {
   return normalized;
 }
 
+function normalizeStoredReviewResult(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function mapReviewRecordRow(row: ReviewRecord): ReviewRecord {
   return {
     ...row,
     review_index: Number(row.review_index),
+    result: normalizeStoredReviewResult(row.result),
   };
 }
 

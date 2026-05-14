@@ -4,7 +4,7 @@ export interface ReviewRecord {
   id: string;
   mistake_id: string;
   review_index: number;
-  result: ReviewResult;
+  result: string | null;
   note?: string | null;
   created_at: string;
 }

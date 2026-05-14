@@ -107,13 +107,16 @@ function isReviewButtonDisabled(detail: MistakeDetailViewModel): boolean {
 }
 
 function formatReviewResultLabel(result: DetailReviewRecordItem['result']): string {
-  if (result === 'wrong') {
+  if (result === 'wrong' || result === 'unknown') {
     return '不会';
   }
-  if (result === 'unsure') {
+  if (result === 'unsure' || result === 'vague') {
     return '模糊';
   }
-  return '会了';
+  if (result === 'mastered' || result === 'known') {
+    return '会了';
+  }
+  return '已完成';
 }
 
 function pad2(value: number): string {

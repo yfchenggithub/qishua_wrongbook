@@ -50,7 +50,7 @@ type MistakeImageDebugItem = {
 type ReviewRecordDebugItem = {
   id: string;
   review_index: number;
-  result: string;
+  result: string | null;
   note?: string | null;
   created_at: string;
   review_solution_count: number;
@@ -777,7 +777,7 @@ export default function DevDatabasePage() {
                     <View key={item.id} style={styles.listItem}>
                       <Text style={styles.monoText}>id: {item.id}</Text>
                       <Text style={styles.monoText}>review_index: {item.review_index}</Text>
-                      <Text style={styles.monoText}>result: {item.result}</Text>
+                      <Text style={styles.monoText}>result: {formatNullable(item.result)}</Text>
                       <Text style={styles.monoText}>note: {formatNullable(item.note)}</Text>
                       <Text style={styles.monoText}>created_at: {item.created_at}</Text>
                       <Text style={styles.monoText}>

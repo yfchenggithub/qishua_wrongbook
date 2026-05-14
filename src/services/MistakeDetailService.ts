@@ -1,5 +1,6 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type {
+  DetailReviewResult,
   DetailImageSlot,
   DetailReviewRecordItem,
   MistakeDetailViewModel,
@@ -58,6 +59,16 @@ function normalizeOptionalText(value?: string | null): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeDetailReviewResult(result: string | null | undefined): DetailReviewResult {
+  if (result === 'mastered' || result === 'unsure' || result === 'wrong') {
+    return result;
+  }
+  if (result === 'known' || result === 'vague' || result === 'unknown') {
+    return result;
+  }
+  return null;
 }
 
 function findFirstUriByType(images: MistakeImage[], type: DetailImageSlot['type']): string | null {
@@ -205,7 +216,7 @@ async function mapReviewRecords(
         id: record.id,
         reviewIndex: record.review_index,
         createdAt: record.created_at,
-        result: record.result,
+        result: normalizeDetailReviewResult(record.result),
         solutionImageUri,
       };
     }),

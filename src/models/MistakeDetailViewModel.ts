@@ -15,11 +15,13 @@ export interface DetailImageSlot {
   emptyText: string;
 }
 
+export type DetailReviewResult = ReviewResult | 'known' | 'vague' | 'unknown' | null;
+
 export interface DetailReviewRecordItem {
   id: string;
   reviewIndex: number;
   createdAt: string;
-  result: ReviewResult;
+  result: DetailReviewResult;
   solutionImageUri?: string | null;
 }
 
