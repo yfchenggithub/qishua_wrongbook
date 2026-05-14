@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   BrandHeader,
@@ -15,11 +16,16 @@ import { todayMock } from '@/src/mocks/today';
 import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { Logger } from '@/src/services/Logger';
+import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
 const QUEUE_LIMIT = 3;
 const UPCOMING_DAYS = 3;
+const TOAST_DURATION_DEFAULT = 2200;
+const TOAST_DURATION_LONG = 3200;
+
+type ToastType = 'success' | 'info' | 'error';
 
 const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
   hasAnyMistake: false,
@@ -48,6 +54,16 @@ function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success
     return 'dark';
   }
   return 'light';
+}
+
+function getToastBackgroundColor(type: ToastType): string {
+  if (type === 'success') {
+    return 'rgba(24, 38, 30, 0.95)';
+  }
+  if (type === 'error') {
+    return 'rgba(88, 28, 28, 0.95)';
+  }
+  return 'rgba(38, 44, 53, 0.95)';
 }
 
 function buildHomePrimaryMessage(summary: HomeTaskSummary): string {
@@ -194,14 +210,22 @@ function UpcomingPlanCard({
 
 export default function TodayScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [summary, setSummary] = useState<HomeTaskSummary>(EMPTY_HOME_SUMMARY);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<ToastType>('info');
+  const [toastVisible, setToastVisible] = useState(false);
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const hasSuccessfulLoadRef = useRef(false);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadHomeData = useCallback(async (mode: 'initial' | 'refresh') => {
     const requestId = requestIdRef.current + 1;
@@ -254,6 +278,72 @@ export default function TodayScreen() {
       void loadHomeData(mode);
       return undefined;
     }, [loadHomeData]),
+  );
+
+  const hideToast = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 8,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  }, [toastOpacity, toastTranslateY]);
+
+  const showToast = useCallback(
+    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
+      const normalizedMessage = message.trim();
+      if (!normalizedMessage) {
+        return;
+      }
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      setToastMessage(normalizedMessage);
+      setToastType(type);
+      setToastVisible(true);
+      toastOpacity.setValue(0);
+      toastTranslateY.setValue(8);
+
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      toastTimerRef.current = setTimeout(() => {
+        hideToast();
+        toastTimerRef.current = null;
+      }, duration);
+    },
+    [hideToast, toastOpacity, toastTranslateY],
+  );
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    },
+    [],
   );
 
   const todayQueuePreview = useMemo(
@@ -313,10 +403,47 @@ export default function TodayScreen() {
     router.push(`/review/${nextId}` as never);
   }, [priorityItem?.id, router]);
 
+  const handleExportTodayWorksheet = useCallback(async () => {
+    if (isExportingPdf) {
+      return;
+    }
+
+    setIsExportingPdf(true);
+    try {
+      const result = await TodayReviewPdfExportService.exportTodayReviewPdf();
+      if (result.success) {
+        showToast('今日练习卷已生成', 'success');
+        return;
+      }
+
+      if (result.reason === 'empty') {
+        showToast('今天暂无可导出的复做题', 'info');
+        return;
+      }
+
+      Logger.warn(PAGE_SCOPE, 'Today worksheet export finished without success.', {
+        reason: result.reason,
+        message: result.message,
+      });
+      showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to export today worksheet.', { error });
+      showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  }, [isExportingPdf, showToast]);
+
+  const exportButtonText = isExportingPdf ? '生成中…' : '导出今日练习卷';
+  const canShowExportButton =
+    summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
+  const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
+
   const homePrimaryMessage = useMemo(() => buildHomePrimaryMessage(summary), [summary]);
 
   return (
-    <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
+    <View style={styles.pageRoot}>
+      <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
       <BrandHeader title={todayMock.brand.title} subtitle={todayMock.brand.subtitle} />
 
       <CardContainer style={styles.taskSummaryCard} padding={spacing.lg}>
@@ -357,15 +484,34 @@ export default function TodayScreen() {
               <Pressable onPress={handleStartTodayReview} style={styles.primaryActionButton}>
                 <Text style={styles.primaryActionButtonText}>开始今日复做</Text>
               </Pressable>
+              <Pressable
+                onPress={() => void handleExportTodayWorksheet()}
+                disabled={isExportingPdf}
+                style={[styles.secondaryActionButton, isExportingPdf ? styles.secondaryActionButtonDisabled : null]}>
+                <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+              </Pressable>
             </View>
           ) : errorMessage && !isLoading ? (
             <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
           ) : (
-            <SectionStateCard
-              message={homePrimaryMessage}
-              actionLabel={summary.homeStatus === 'empty' ? '新增错题' : undefined}
-              onActionPress={summary.homeStatus === 'empty' ? () => router.push('/add' as never) : undefined}
-            />
+            <View style={styles.todayEntryWrap}>
+              <SectionStateCard
+                message={homePrimaryMessage}
+                actionLabel={summary.homeStatus === 'empty' ? '新增错题' : undefined}
+                onActionPress={summary.homeStatus === 'empty' ? () => router.push('/add' as never) : undefined}
+              />
+              {canShowExportButton ? (
+                <Pressable
+                  onPress={() => void handleExportTodayWorksheet()}
+                  disabled={isExportingPdf}
+                  style={[
+                    styles.secondaryActionButton,
+                    isExportingPdf ? styles.secondaryActionButtonDisabled : null,
+                  ]}>
+                  <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+                </Pressable>
+              ) : null}
+            </View>
           )}
         </View>
       </View>
@@ -399,11 +545,34 @@ export default function TodayScreen() {
           )}
         </View>
       </View>
-    </ScreenContainer>
+      </ScreenContainer>
+
+      {toastVisible ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.toastContainer,
+            {
+              bottom: toastBottomOffset,
+              opacity: toastOpacity,
+              transform: [{ translateY: toastTranslateY }],
+            },
+          ]}>
+          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
+              {toastMessage}
+            </Text>
+          </View>
+        </Animated.View>
+      ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pageRoot: {
+    flex: 1,
+  },
   screenContent: {
     paddingTop: spacing.lg,
     paddingBottom: layout.bottomTabHeight,
@@ -523,6 +692,23 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontWeight: '700',
   },
+  secondaryActionButton: {
+    alignSelf: 'flex-start',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#C9CBD2',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  secondaryActionButtonDisabled: {
+    opacity: 0.6,
+  },
+  secondaryActionButtonText: {
+    ...typography.caption,
+    color: '#141519',
+    fontWeight: '700',
+  },
   mistakeCard: {
     borderRadius: radius.xl,
   },
@@ -636,5 +822,28 @@ const styles = StyleSheet.create({
   upcomingRemainText: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  toastContainer: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    alignItems: 'center',
+  },
+  toastBubble: {
+    maxWidth: '86%',
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: colors.black,
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });
