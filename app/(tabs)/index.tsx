@@ -421,6 +421,14 @@ export default function TodayScreen() {
         return;
       }
 
+      if (result.reason === 'share_unavailable') {
+        Logger.warn(PAGE_SCOPE, 'Sharing unavailable while exporting today worksheet.', {
+          message: result.message,
+        });
+        showToast('当前设备暂不支持分享，请在文件管理中查看已导出的练习卷', 'info');
+        return;
+      }
+
       Logger.warn(PAGE_SCOPE, 'Today worksheet export finished without success.', {
         reason: result.reason,
         message: result.message,
@@ -434,7 +442,7 @@ export default function TodayScreen() {
     }
   }, [isExportingPdf, showToast]);
 
-  const exportButtonText = isExportingPdf ? '生成中…' : '导出今日练习卷';
+  const exportButtonText = isExportingPdf ? '正在生成练习卷…' : '导出今日练习卷';
   const canShowExportButton =
     summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
