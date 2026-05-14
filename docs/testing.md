@@ -1,4 +1,4 @@
-﻿# 七刷错题本 - 验收测试清单（MVP）
+# 七刷错题本 - 验收测试清单（MVP）
 
 适用环境：Windows + VSCode + Codex，使用 Web 预览、Android 真机或 Android 模拟器进行验收。
 
@@ -51,18 +51,18 @@
 - [ ] 是否有控制台异常
 - [ ] 是否更新了必要文档
 
-## 8. ��4��ͼƬ�־û����գ�Android �����
+## 8. ??4?????????????Android ?????
 
-- [ ] ִ�� `npx expo run:android` ��� Android ��������װ��
-- [ ] �� `/dev/images` ����ҳ��
-- [ ] �����һ�����ձ��桱��ť���ɹ����档
-- [ ] �ر� App�������˳�����
-- [ ] ���´� App��
-- [ ] �ٴν��� `/dev/images`��
-- [ ] �����ˢ��ͼƬ�б����
-- [ ] ȷ�ϸղű����ͼƬ��Ȼ���ڲ���Ԥ����
-- [ ] ɾ������ͼƬ���б��ʱ���¡�
-- [ ] �����ɾ�� dev-image-test ͼƬĿ¼�����б���ա�
+- [ ] ??? `npx expo run:android` ??? Android ???????????
+- [ ] ?? `/dev/images` ???????
+- [ ] ??????????????桱???????????档
+- [ ] ??? App?????????????
+- [ ] ???′? App??
+- [ ] ??ν??? `/dev/images`??
+- [ ] ???????????б????
+- [ ] ??????????????????????????
+- [ ] ????????????б????????
+- [ ] ???????? dev-image-test ?????????б?????
 
 ## 9. 录入草稿体验验收补充（第5步）
 
@@ -85,7 +85,7 @@
 - [ ] 点击保存。
 - [ ] 打开 `/dev/db`。
 - [ ] 点击“查询最近10条错题”。
-- [ ] 确认 `mistakes` 有记录（含 id/module/difficulty/question_image_uri 等字段）。
+- [ ] 确认 `mistakes` 有记录（含 id/module/difficulty/legacy-question-image-uri(removed) 等字段）。
 - [ ] 在该记录上点击“查看该错题图片记录”。
 - [ ] 确认 `mistake_images` 有图片记录（type/uri/created_at）。
 - [ ] 确认每条图片 `exists = true`。
@@ -117,7 +117,7 @@
 ### 11.3 /dev/db 联合验收
 - [ ] 在新增页保存一条错题后，打开 `/dev/db`。
 - [ ] 点击“查询最近10条错题”，确认 `mistakes` 记录存在。
-- [ ] 校验关键字段：`id/module/difficulty/question_image_uri/review_count/status/created_at`。
+- [ ] 校验关键字段：`id/module/difficulty/legacy-question-image-uri(removed)/review_count/status/created_at`。
 - [ ] 确认 `id` 与新增页保存时使用的 `draftId` 一致。
 - [ ] 点击“查看该错题图片记录”，确认 `mistake_images` 中 `question/my_solution/answer` 类型正确。
 - [ ] 对每条图片记录检查 `exists = true`，并显示 `size`（可为空）。
@@ -187,7 +187,7 @@
 - [ ] 详情页 `ProgressDots`、`statusLabel`、复做按钮文案与当前状态一致。
 - [ ] 详情页可看到“复做记录”模块；无记录显示“还没有复做记录”。
 - [ ] 详情页复做记录按刷次升序展示，包含第 N 刷、created_at、result。
-- [ ] 复做记录存在 `solution_image_uri` 时可见缩略图或“已保存照片”。
+- [ ] 复做记录存在 `legacy-solution-image-uri(removed)` 时可见缩略图或“已保存照片”。
 - [ ] 返回题库页后，卡片进度与状态标签更新。
 - [ ] 题库页“待复做”不包含 `mastered` 错题；“已七刷”能看到该错题。
 - [ ] 返回首页后，今日待复做、已七刷、完成率、优先复做、错题队列同步更新。
@@ -199,7 +199,7 @@
 - [ ] 新增页可拍题目照片。
 - [ ] 可选择模块、错因、难度。
 - [ ] 点击保存后写入 `mistakes` 与 `mistake_images`。
-- [ ] `mistakes.question_image_uri` 有值。
+- [ ] `mistakes.legacy-question-image-uri(removed)` 有值。
 - [ ] 新记录 `review_count = 0`。
 - [ ] 新记录 `status = active`。
 - [ ] 新记录 `next_review_at` 为当天日期。
@@ -257,3 +257,4 @@
 - [ ] 点击“放弃离开”才允许离开当前页。
 - [ ] 切换到其他页后再回新增页，未保存照片仍可见（不丢失）。
 - [ ] 无未保存题目图时，返回或切 Tab 不应出现离开确认弹窗。
+

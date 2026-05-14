@@ -299,7 +299,7 @@ export default function ReviewScreen() {
         mistakeId: routeId,
         reviewIndex: session.nextReviewIndex,
         solutionImageUri: capturedReviewImage.uri,
-        result: 'done',
+        result: 'mastered',
         cleanupImageOnFailure: true,
       });
 

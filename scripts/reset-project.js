@@ -63,7 +63,7 @@ const moveDirectories = async (userInput) => {
           console.log(`➡️ /${dir} moved to /${exampleDir}/${dir}.`);
         } else {
           await fs.promises.rm(oldDirPath, { recursive: true, force: true });
-          console.log(`❌ /${dir} deleted.`);
+          console.log(`�?/${dir} deleted.`);
         }
       } else {
         console.log(`➡️ /${dir} does not exist, skipping.`);
@@ -85,16 +85,16 @@ const moveDirectories = async (userInput) => {
     await fs.promises.writeFile(layoutPath, layoutContent);
     console.log("📄 app/_layout.tsx created.");
 
-    console.log("\n✅ Project reset complete. Next steps:");
+    console.log("\n�?Project reset complete. Next steps:");
     console.log(
       `1. Run \`npx expo start\` to start a development server.\n2. Edit app/index.tsx to edit the main screen.${
         userInput === "y"
-          ? `\n3. Delete the /${exampleDir} directory when you're done referencing it.`
+          ? `\n3. Delete the /${exampleDir} directory after you finish referencing it.`
           : ""
       }`
     );
   } catch (error) {
-    console.error(`❌ Error during script execution: ${error.message}`);
+    console.error(`�?Error during script execution: ${error.message}`);
   }
 };
 
@@ -105,8 +105,9 @@ rl.question(
     if (userInput === "y" || userInput === "n") {
       moveDirectories(userInput).finally(() => rl.close());
     } else {
-      console.log("❌ Invalid input. Please enter 'Y' or 'N'.");
+      console.log("�?Invalid input. Please enter 'Y' or 'N'.");
       rl.close();
     }
   }
 );
+

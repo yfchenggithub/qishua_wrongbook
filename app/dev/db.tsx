@@ -1,13 +1,6 @@
 import { Stack, useRouter } from 'expo-router';
 import { useMemo, useState } from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { checkDatabaseHealth, initDatabase, resetDatabaseForDev } from '@/src/db';
@@ -32,20 +25,23 @@ type MistakeDebugItem = {
   review_count: number;
   status: string;
   next_review_at?: string | null;
-  question_image_uri?: string | null;
-  answer_image_uri?: string | null;
-  question_image_has_value: boolean;
-  answer_image_has_value: boolean;
-  question_image_exists: boolean | null;
-  answer_image_exists: boolean | null;
+  last_review_at?: string | null;
+  last_review_result?: string | null;
   created_at: string;
   updated_at: string;
+  question_count: number;
+  my_solution_count: number;
+  answer_count: number;
+  review_solution_count: number;
+  cover_uri?: string | null;
 };
 
 type MistakeImageDebugItem = {
   id: string;
+  review_record_id?: string | null;
   type: string;
   uri: string;
+  sort_order: number;
   created_at: string;
   exists: boolean;
   fileSize?: number | null;
@@ -54,11 +50,10 @@ type MistakeImageDebugItem = {
 type ReviewRecordDebugItem = {
   id: string;
   review_index: number;
-  solution_image_uri?: string | null;
   result: string;
+  note?: string | null;
   created_at: string;
-  solution_exists: boolean | null;
-  solution_file_size: number | null;
+  review_solution_count: number;
 };
 
 type ImageExistenceCheck = {
@@ -107,7 +102,7 @@ function formatError(error: unknown): string {
 
 function formatNullable(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') {
-    return '(空)';
+    return '(empty)';
   }
   return String(value);
 }
@@ -123,7 +118,7 @@ function normalizeMistakeId(id: string): string | null {
 
 function toShortUri(uri: string | null | undefined): string {
   if (!hasNonEmptyText(uri)) {
-    return '(空)';
+    return '(empty)';
   }
 
   const trimmed = uri!.trim();
@@ -153,11 +148,11 @@ function buildConsistencyChecks(
   const countMatches = reviewRecords.length === mistake.review_count;
   checks.push({
     key: 'count-match',
-    label: 'review_count 与 review_records 数量',
+    label: 'review_count equals review_records count',
     level: countMatches ? 'pass' : 'fail',
     message: countMatches
-      ? `通过（${mistake.review_count} = ${reviewRecords.length}）`
-      : `失败：review_count=${mistake.review_count}，review_records=${reviewRecords.length}`,
+      ? `pass: ${mistake.review_count} = ${reviewRecords.length}`
+      : `fail: review_count=${mistake.review_count}, review_records=${reviewRecords.length}`,
   });
 
   const expectedIndices = buildExpectedReviewIndices(mistake.review_count);
@@ -168,11 +163,11 @@ function buildConsistencyChecks(
 
   checks.push({
     key: 'index-continuity',
-    label: 'review_index 连续性',
+    label: 'review_index continuity',
     level: indexContinuous ? 'pass' : 'fail',
     message: indexContinuous
-      ? `通过（${actualIndices.length === 0 ? '无复做记录' : actualIndices.join(', ')}）`
-      : `失败：期望 ${expectedIndices.join(', ') || '(空)'}，实际 ${actualIndices.join(', ') || '(空)'}`,
+      ? `pass: ${actualIndices.length === 0 ? '(empty)' : actualIndices.join(', ')}`
+      : `fail: expected=${expectedIndices.join(', ') || '(empty)'}, actual=${actualIndices.join(', ') || '(empty)'}`,
   });
 
   if (mistake.status === REVIEW_STATUS.MASTERED) {
@@ -182,18 +177,18 @@ function buildConsistencyChecks(
 
     checks.push({
       key: 'mastered-rule',
-      label: 'mastered 状态规则',
+      label: 'mastered status rule',
       level: masteredRulePassed ? 'pass' : 'fail',
       message: masteredRulePassed
-        ? '通过（review_count=7 且 next_review_at=null）'
-        : `失败：review_count=${mistake.review_count}，next_review_at=${formatNullable(mistake.next_review_at)}`,
+        ? 'pass: review_count=7 and next_review_at=null'
+        : `fail: review_count=${mistake.review_count}, next_review_at=${formatNullable(mistake.next_review_at)}`,
     });
   } else {
     checks.push({
       key: 'mastered-rule',
-      label: 'mastered 状态规则',
+      label: 'mastered status rule',
       level: 'pass',
-      message: `通过（当前 status=${mistake.status}，此规则不触发）`,
+      message: `pass: skipped, current status=${mistake.status}`,
     });
   }
 
@@ -201,55 +196,71 @@ function buildConsistencyChecks(
     const activeRulePassed = mistake.review_count < MAX_REVIEW_COUNT;
     checks.push({
       key: 'active-rule',
-      label: 'active 状态规则',
+      label: 'active status rule',
       level: activeRulePassed ? 'pass' : 'fail',
       message: activeRulePassed
-        ? `通过（review_count=${mistake.review_count} < ${MAX_REVIEW_COUNT}）`
-        : `失败：active 但 review_count=${mistake.review_count}`,
+        ? `pass: review_count=${mistake.review_count} < ${MAX_REVIEW_COUNT}`
+        : `fail: active with review_count=${mistake.review_count}`,
     });
   } else {
     checks.push({
       key: 'active-rule',
-      label: 'active 状态规则',
+      label: 'active status rule',
       level: 'pass',
-      message: `通过（当前 status=${mistake.status}，此规则不触发）`,
+      message: `pass: skipped, current status=${mistake.status}`,
     });
   }
 
-  const missingReviewSolutionImageIndexes: number[] = [];
-  for (const record of reviewRecords) {
-    if (!hasNonEmptyText(record.solution_image_uri)) {
-      missingReviewSolutionImageIndexes.push(record.review_index);
-      continue;
-    }
-
-    const matched = mistakeImages.some(
-      (image) => image.type === 'review_solution' && image.uri === record.solution_image_uri,
-    );
-    if (!matched) {
-      missingReviewSolutionImageIndexes.push(record.review_index);
-    }
-  }
-
-  const hasReviewSolutionMismatch = missingReviewSolutionImageIndexes.length > 0;
+  const nonReviewWithBinding = mistakeImages.filter(
+    (item) =>
+      (item.type === 'question' || item.type === 'my_solution' || item.type === 'answer') &&
+      hasNonEmptyText(item.review_record_id ?? null),
+  );
   checks.push({
-    key: 'review-solution-mapping',
-    label: 'review_records 与 review_solution 图片映射',
-    level: hasReviewSolutionMismatch ? 'fail' : 'pass',
-    message: hasReviewSolutionMismatch
-      ? `失败：第 ${missingReviewSolutionImageIndexes.join(', ')} 刷缺少对应 review_solution 图片记录`
-      : '通过',
+    key: 'non-review-binding',
+    label: 'question/my_solution/answer must not bind review_record_id',
+    level: nonReviewWithBinding.length > 0 ? 'fail' : 'pass',
+    message:
+      nonReviewWithBinding.length > 0
+        ? `fail: found ${nonReviewWithBinding.length} image(s) with unexpected review_record_id`
+        : 'pass',
+  });
+
+  const reviewSolutionMissingBinding = mistakeImages.filter(
+    (item) => item.type === 'review_solution' && !hasNonEmptyText(item.review_record_id ?? null),
+  );
+  checks.push({
+    key: 'review-solution-binding',
+    label: 'review_solution must bind review_record_id',
+    level: reviewSolutionMissingBinding.length > 0 ? 'fail' : 'pass',
+    message:
+      reviewSolutionMissingBinding.length > 0
+        ? `fail: found ${reviewSolutionMissingBinding.length} unbound review_solution image(s)`
+        : 'pass',
+  });
+
+  const missingReviewSolutionImageIndexes = reviewRecords
+    .filter((record) => record.review_solution_count <= 0)
+    .map((record) => record.review_index);
+  checks.push({
+    key: 'review-record-image-link',
+    label: 'each review_record has bound review_solution images',
+    level: missingReviewSolutionImageIndexes.length > 0 ? 'warn' : 'pass',
+    message:
+      missingReviewSolutionImageIndexes.length > 0
+        ? `warn: review_index=${missingReviewSolutionImageIndexes.join(', ')} has no review_solution image`
+        : 'pass',
   });
 
   const missingLocalFiles = imageChecks.filter((item) => !item.exists);
   checks.push({
     key: 'local-file-exists',
-    label: '数据库图片 URI 本地文件存在性',
+    label: 'all image URIs have local files',
     level: missingLocalFiles.length > 0 ? 'warn' : 'pass',
     message:
       missingLocalFiles.length > 0
-        ? `警告：${missingLocalFiles.length} 条 URI 对应本地文件不存在`
-        : '通过',
+        ? `warn: ${missingLocalFiles.length} URI(s) missing local files`
+        : 'pass',
   });
 
   return checks;
@@ -261,8 +272,10 @@ async function buildMistakeImageDebugItems(images: MistakeImage[]): Promise<Mist
       const info = await getImageInfo(image.uri);
       return {
         id: image.id,
+        review_record_id: image.review_record_id ?? null,
         type: image.type,
         uri: image.uri,
+        sort_order: image.sort_order,
         created_at: image.created_at,
         exists: info.exists,
         fileSize: info.size ?? null,
@@ -271,72 +284,40 @@ async function buildMistakeImageDebugItems(images: MistakeImage[]): Promise<Mist
   );
 }
 
-async function buildReviewRecordDebugItems(
-  records: ReviewRecord[],
-): Promise<ReviewRecordDebugItem[]> {
+async function buildReviewRecordDebugItems(records: ReviewRecord[]): Promise<ReviewRecordDebugItem[]> {
   return Promise.all(
     records.map(async (record) => {
-      if (!hasNonEmptyText(record.solution_image_uri)) {
-        return {
-          id: record.id,
-          review_index: record.review_index,
-          solution_image_uri: record.solution_image_uri,
-          result: record.result,
-          created_at: record.created_at,
-          solution_exists: null,
-          solution_file_size: null,
-        };
-      }
-
-      const info = await getImageInfo(record.solution_image_uri!);
+      const reviewSolutionImages = await MistakeImageRepository.getReviewSolutionImages(record.id);
       return {
         id: record.id,
         review_index: record.review_index,
-        solution_image_uri: record.solution_image_uri,
         result: record.result,
+        note: record.note ?? null,
         created_at: record.created_at,
-        solution_exists: info.exists,
-        solution_file_size: info.size ?? null,
+        review_solution_count: reviewSolutionImages.length,
       };
     }),
   );
 }
 
 async function buildImageExistenceChecks(
-  mistake: Mistake,
-  reviewRecords: ReviewRecordDebugItem[],
   mistakeImages: MistakeImageDebugItem[],
 ): Promise<ImageExistenceCheck[]> {
   const checks: ImageExistenceCheck[] = [];
 
-  async function pushCheck(source: string, label: string, uri: string | null | undefined) {
-    if (!hasNonEmptyText(uri)) {
-      return;
+  for (const image of mistakeImages) {
+    if (!hasNonEmptyText(image.uri)) {
+      continue;
     }
 
-    const info = await getImageInfo(uri!);
+    const info = await getImageInfo(image.uri);
     checks.push({
-      source,
-      label,
-      uri: uri!,
+      source: 'mistake_images',
+      label: `${image.type} (${image.id})`,
+      uri: image.uri,
       exists: info.exists,
       size: info.size ?? null,
     });
-  }
-
-  await pushCheck('mistakes', 'question_image_uri', mistake.question_image_uri);
-  await pushCheck('mistakes', 'answer_image_uri', mistake.answer_image_uri);
-
-  for (const record of reviewRecords) {
-    await pushCheck(
-      'review_records',
-      `第 ${record.review_index} 刷 solution_image_uri`,
-      record.solution_image_uri,
-    );
-  }
-
-  for (const image of mistakeImages) {
-    await pushCheck('mistake_images', `${image.type} (${image.id})`, image.uri);
   }
 
   return checks;
@@ -352,11 +333,15 @@ function getCheckTextColor(level: ConsistencyCheckLevel): string {
   return '#b42318';
 }
 
+function countImagesByType(images: MistakeImage[], type: MistakeImage['type']): number {
+  return images.filter((item) => item.type === type).length;
+}
+
 export default function DevDatabasePage() {
   const router = useRouter();
 
   const [activeAction, setActiveAction] = useState<ActionType>(null);
-  const [statusMessage, setStatusMessage] = useState('等待操作');
+  const [statusMessage, setStatusMessage] = useState('Ready');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [healthReport, setHealthReport] = useState<DatabaseHealthReport | null>(null);
   const [createdMistakeId, setCreatedMistakeId] = useState<string | null>(null);
@@ -372,21 +357,21 @@ export default function DevDatabasePage() {
   const actionLabel = useMemo(() => {
     switch (activeAction) {
       case 'init':
-        return '正在初始化数据库...';
+        return 'Initializing database...';
       case 'health':
-        return '正在执行健康检查...';
+        return 'Running health check...';
       case 'insert':
-        return '正在插入示例错题...';
+        return 'Inserting sample mistake...';
       case 'list-recent':
-        return '正在查询最近错题...';
+        return 'Loading recent mistakes...';
       case 'images':
-        return '正在查询图片记录...';
+        return 'Loading mistake images...';
       case 'consistency':
-        return '正在执行单题一致性检查...';
+        return 'Running consistency checks...';
       case 'stats':
-        return '正在查询统计...';
+        return 'Loading stats...';
       case 'reset':
-        return '正在清空开发数据...';
+        return 'Resetting development database...';
       default:
         return '';
     }
@@ -400,7 +385,7 @@ export default function DevDatabasePage() {
     } catch (error) {
       Logger.error(PAGE_SCOPE, `${action} action failed.`, error);
       setErrorMessage(formatError(error));
-      setStatusMessage(`${action} 失败`);
+      setStatusMessage(`${action} failed`);
     } finally {
       setActiveAction(null);
     }
@@ -413,7 +398,7 @@ export default function DevDatabasePage() {
   async function handleInitDatabase() {
     await runAction('init', async () => {
       await initDatabase();
-      setStatusMessage('数据库初始化成功');
+      setStatusMessage('Database initialized');
       resetPendingConfirmState();
     });
   }
@@ -422,7 +407,7 @@ export default function DevDatabasePage() {
     await runAction('health', async () => {
       const report = await checkDatabaseHealth();
       setHealthReport(report);
-      setStatusMessage('健康检查完成');
+      setStatusMessage('Health check completed');
       resetPendingConfirmState();
     });
   }
@@ -430,16 +415,21 @@ export default function DevDatabasePage() {
   async function handleInsertSampleMistake() {
     await runAction('insert', async () => {
       const created = await MistakeRepository.createMistake({
-        module: '圆锥曲线',
-        title: '椭圆切线条件应用错误',
-        error_reason: '公式误用',
-        difficulty: 4,
-        question_image_uri: null,
-        answer_image_uri: null,
-        note: '开发调试数据',
+        module: 'conic',
+        title: 'sample mistake',
+        error_reason: 'dev debug seed',
+        difficulty: 3,
+        note: 'created from dev db page',
       });
+      await MistakeImageRepository.insertMistakeImages(created.id, [
+        {
+          type: 'question',
+          uri: `file://dev-sample/${created.id}/question-0.jpg`,
+          sort_order: 0,
+        },
+      ]);
       setCreatedMistakeId(created.id);
-      setStatusMessage(`示例错题插入成功：${created.id}`);
+      setStatusMessage(`Sample mistake inserted with one question image: ${created.id}`);
       resetPendingConfirmState();
     });
   }
@@ -449,19 +439,14 @@ export default function DevDatabasePage() {
       const rows = await MistakeRepository.listMistakes({
         limit: 10,
         offset: 0,
+        sortBy: 'created_at',
+        sortOrder: 'desc',
       });
 
       const items = await Promise.all(
         rows.map(async (row) => {
-          const questionImageHasValue = hasNonEmptyText(row.question_image_uri);
-          const answerImageHasValue = hasNonEmptyText(row.answer_image_uri);
-          const questionImageExists = questionImageHasValue
-            ? (await getImageInfo(row.question_image_uri!)).exists
-            : null;
-          const answerImageExists = answerImageHasValue
-            ? (await getImageInfo(row.answer_image_uri!)).exists
-            : null;
-
+          const images = await MistakeImageRepository.getImagesByMistakeId(row.id);
+          const cover = await MistakeImageRepository.getCoverImageForMistake(row.id);
           return {
             id: row.id,
             title: row.title,
@@ -471,20 +456,21 @@ export default function DevDatabasePage() {
             review_count: row.review_count,
             status: row.status,
             next_review_at: row.next_review_at,
-            question_image_uri: row.question_image_uri,
-            answer_image_uri: row.answer_image_uri,
-            question_image_has_value: questionImageHasValue,
-            answer_image_has_value: answerImageHasValue,
-            question_image_exists: questionImageExists,
-            answer_image_exists: answerImageExists,
+            last_review_at: row.last_review_at,
+            last_review_result: row.last_review_result ?? null,
             created_at: row.created_at,
             updated_at: row.updated_at,
+            question_count: countImagesByType(images, 'question'),
+            my_solution_count: countImagesByType(images, 'my_solution'),
+            answer_count: countImagesByType(images, 'answer'),
+            review_solution_count: countImagesByType(images, 'review_solution'),
+            cover_uri: cover?.uri ?? null,
           };
         }),
       );
 
       setRecentMistakes(items);
-      setStatusMessage(`已查询最近 ${rows.length} 条错题`);
+      setStatusMessage(`Loaded ${rows.length} mistake(s)`);
       resetPendingConfirmState();
     });
   }
@@ -511,12 +497,12 @@ export default function DevDatabasePage() {
 
   async function handleLoadImagesByMistakeId(mistakeId: string) {
     await runAction('images', async () => {
-      const rows = await MistakeImageRepository.listImagesByMistakeId(mistakeId);
+      const rows = await MistakeImageRepository.getImagesByMistakeId(mistakeId);
       const items = await buildMistakeImageDebugItems(rows);
 
       setSelectedMistakeId(mistakeId);
       setMistakeImages(items);
-      setStatusMessage(`已查询错题 ${mistakeId} 的 ${items.length} 条图片记录`);
+      setStatusMessage(`Loaded ${items.length} image record(s) for ${mistakeId}`);
       resetPendingConfirmState();
     });
   }
@@ -525,12 +511,12 @@ export default function DevDatabasePage() {
     await runAction('consistency', async () => {
       const mistake = await MistakeRepository.getMistakeById(mistakeId);
       if (!mistake) {
-        throw new Error('没有找到该错题，无法执行一致性检查');
+        throw new Error('Mistake not found');
       }
 
       const [reviewRecordsRaw, mistakeImagesRaw] = await Promise.all([
         ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId),
-        MistakeImageRepository.listImagesByMistakeId(mistakeId),
+        MistakeImageRepository.getImagesByMistakeId(mistakeId),
       ]);
 
       const [reviewRecords, mistakeImageItems] = await Promise.all([
@@ -538,7 +524,7 @@ export default function DevDatabasePage() {
         buildMistakeImageDebugItems(mistakeImagesRaw),
       ]);
 
-      const imageChecks = await buildImageExistenceChecks(mistake, reviewRecords, mistakeImageItems);
+      const imageChecks = await buildImageExistenceChecks(mistakeImageItems);
       const checks = buildConsistencyChecks(mistake, reviewRecords, mistakeImageItems, imageChecks);
 
       const report: MistakeConsistencyReport = {
@@ -556,7 +542,7 @@ export default function DevDatabasePage() {
 
       const failCount = checks.filter((item) => item.level === 'fail').length;
       const warnCount = checks.filter((item) => item.level === 'warn').length;
-      setStatusMessage(`一致性检查完成：失败 ${failCount}，警告 ${warnCount}`);
+      setStatusMessage(`Consistency checks completed: fail ${failCount}, warn ${warnCount}`);
       resetPendingConfirmState();
     });
   }
@@ -565,7 +551,7 @@ export default function DevDatabasePage() {
     await runAction('stats', async () => {
       const result = await MistakeRepository.getMistakeStats();
       setStats(result);
-      setStatusMessage('统计查询完成');
+      setStatusMessage('Stats loaded');
       resetPendingConfirmState();
     });
   }
@@ -573,7 +559,7 @@ export default function DevDatabasePage() {
   async function handleResetDatabase() {
     if (!pendingResetConfirm) {
       setPendingResetConfirm(true);
-      setStatusMessage('请再次点击“清空开发数据”确认操作');
+      setStatusMessage('Click "Reset Development Data" again to confirm');
       return;
     }
 
@@ -589,22 +575,22 @@ export default function DevDatabasePage() {
       setStats(null);
       setConsistencyReport(null);
       setPendingResetConfirm(false);
-      setStatusMessage('数据库已清空并重新初始化');
+      setStatusMessage('Development database reset completed');
     });
   }
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      <Stack.Screen options={{ title: '数据库健康检查', headerShown: false }} />
+      <Stack.Screen options={{ title: 'Database Debug', headerShown: false }} />
       <ScrollView contentContainerStyle={styles.container}>
         <View style={styles.headerRow}>
           <Pressable onPress={() => router.back()} style={styles.backButton}>
-            <Text style={styles.backButtonText}>返回</Text>
+            <Text style={styles.backButtonText}>Back</Text>
           </Pressable>
-          <Text style={styles.pageTitle}>数据库健康检查</Text>
+          <Text style={styles.pageTitle}>Database Debug</Text>
         </View>
 
-        <Text style={styles.devOnlyText}>仅开发调试使用</Text>
+        <Text style={styles.devOnlyText}>Development only</Text>
 
         {isBusy ? (
           <View style={styles.loadingRow}>
@@ -615,29 +601,23 @@ export default function DevDatabasePage() {
 
         <View style={styles.buttonGroup}>
           <Pressable style={styles.actionButton} onPress={handleInitDatabase} disabled={isBusy}>
-            <Text style={styles.actionButtonText}>初始化数据库</Text>
+            <Text style={styles.actionButtonText}>Init Database</Text>
           </Pressable>
 
           <Pressable style={styles.actionButton} onPress={handleHealthCheck} disabled={isBusy}>
-            <Text style={styles.actionButtonText}>健康检查</Text>
+            <Text style={styles.actionButtonText}>Health Check</Text>
           </Pressable>
 
-          <Pressable
-            style={styles.actionButton}
-            onPress={handleInsertSampleMistake}
-            disabled={isBusy}>
-            <Text style={styles.actionButtonText}>插入示例错题</Text>
+          <Pressable style={styles.actionButton} onPress={handleInsertSampleMistake} disabled={isBusy}>
+            <Text style={styles.actionButtonText}>Insert Sample Mistake</Text>
           </Pressable>
 
-          <Pressable
-            style={styles.actionButton}
-            onPress={handleListRecentMistakes}
-            disabled={isBusy}>
-            <Text style={styles.actionButtonText}>查询最近 10 条错题</Text>
+          <Pressable style={styles.actionButton} onPress={handleListRecentMistakes} disabled={isBusy}>
+            <Text style={styles.actionButtonText}>Load Recent 10 Mistakes</Text>
           </Pressable>
 
           <Pressable style={styles.actionButton} onPress={handleGetStats} disabled={isBusy}>
-            <Text style={styles.actionButtonText}>查询统计</Text>
+            <Text style={styles.actionButtonText}>Load Stats</Text>
           </Pressable>
 
           <Pressable
@@ -649,40 +629,40 @@ export default function DevDatabasePage() {
             onPress={handleResetDatabase}
             disabled={isBusy}>
             <Text style={styles.actionButtonText}>
-              {pendingResetConfirm ? '再次点击确认清空' : '清空开发数据'}
+              {pendingResetConfirm ? 'Confirm Reset Development Data' : 'Reset Development Data'}
             </Text>
           </Pressable>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>状态</Text>
+          <Text style={styles.sectionTitle}>Status</Text>
           <Text style={styles.monoText}>{statusMessage}</Text>
-          {errorMessage ? <Text style={styles.errorText}>错误：{errorMessage}</Text> : null}
+          {errorMessage ? <Text style={styles.errorText}>Error: {errorMessage}</Text> : null}
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>健康检查结果</Text>
+          <Text style={styles.sectionTitle}>Health Report</Text>
           {healthReport ? (
             <>
               <Text style={styles.monoText}>ok: {String(healthReport.ok)}</Text>
               <Text style={styles.monoText}>version: {healthReport.version}</Text>
-              <Text style={styles.monoText}>tables: {healthReport.tables.join(', ') || '(空)'}</Text>
+              <Text style={styles.monoText}>tables: {healthReport.tables.join(', ') || '(empty)'}</Text>
               <Text style={styles.monoText}>message: {healthReport.message}</Text>
             </>
           ) : (
-            <Text style={styles.placeholderText}>尚未执行健康检查</Text>
+            <Text style={styles.placeholderText}>No health report yet</Text>
           )}
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>最近插入的示例错题 ID</Text>
-          <Text style={styles.monoText}>{createdMistakeId ?? '(暂无)'}</Text>
+          <Text style={styles.sectionTitle}>Latest Inserted Sample Mistake ID</Text>
+          <Text style={styles.monoText}>{createdMistakeId ?? '(none)'}</Text>
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>最近错题（10 条）</Text>
+          <Text style={styles.sectionTitle}>Recent Mistakes (10)</Text>
           {recentMistakes.length === 0 ? (
-            <Text style={styles.placeholderText}>暂无数据</Text>
+            <Text style={styles.placeholderText}>No data</Text>
           ) : (
             recentMistakes.map((item) => (
               <View key={item.id} style={styles.listItem}>
@@ -694,24 +674,13 @@ export default function DevDatabasePage() {
                 <Text style={styles.monoText}>review_count: {formatNullable(item.review_count)}</Text>
                 <Text style={styles.monoText}>status: {formatNullable(item.status)}</Text>
                 <Text style={styles.monoText}>next_review_at: {formatNullable(item.next_review_at)}</Text>
-                <Text style={styles.monoText}>
-                  question_image_uri_has_value: {String(item.question_image_has_value)}
-                </Text>
-                <Text style={styles.monoText}>
-                  answer_image_uri_has_value: {String(item.answer_image_has_value)}
-                </Text>
-                <Text style={styles.monoText}>
-                  question_image_exists:{' '}
-                  {item.question_image_exists === null ? '(无题目图)' : String(item.question_image_exists)}
-                </Text>
-                <Text style={styles.monoText}>
-                  answer_image_exists:{' '}
-                  {item.answer_image_exists === null ? '(无答案图)' : String(item.answer_image_exists)}
-                </Text>
-                <Text style={styles.monoText}>
-                  question_image_uri: {toShortUri(item.question_image_uri)}
-                </Text>
-                <Text style={styles.monoText}>answer_image_uri: {toShortUri(item.answer_image_uri)}</Text>
+                <Text style={styles.monoText}>last_review_at: {formatNullable(item.last_review_at)}</Text>
+                <Text style={styles.monoText}>last_review_result: {formatNullable(item.last_review_result)}</Text>
+                <Text style={styles.monoText}>question_count: {item.question_count}</Text>
+                <Text style={styles.monoText}>my_solution_count: {item.my_solution_count}</Text>
+                <Text style={styles.monoText}>answer_count: {item.answer_count}</Text>
+                <Text style={styles.monoText}>review_solution_count: {item.review_solution_count}</Text>
+                <Text style={styles.monoText}>cover_uri: {toShortUri(item.cover_uri)}</Text>
                 <Text style={styles.monoText}>created_at: {formatNullable(item.created_at)}</Text>
                 <Text style={styles.monoText}>updated_at: {formatNullable(item.updated_at)}</Text>
 
@@ -719,14 +688,14 @@ export default function DevDatabasePage() {
                   style={styles.secondaryButton}
                   onPress={() => handleOpenMistakeDetail(item.id)}
                   disabled={isBusy}>
-                  <Text style={styles.secondaryButtonText}>打开详情页</Text>
+                  <Text style={styles.secondaryButtonText}>Open Detail</Text>
                 </Pressable>
 
                 <Pressable
                   style={styles.secondaryButton}
                   onPress={() => handleOpenReviewPage(item.id)}
                   disabled={isBusy}>
-                  <Text style={styles.secondaryButtonText}>打开复做页</Text>
+                  <Text style={styles.secondaryButtonText}>Open Review</Text>
                 </Pressable>
 
                 <Pressable
@@ -735,7 +704,7 @@ export default function DevDatabasePage() {
                     void handleLoadImagesByMistakeId(item.id);
                   }}
                   disabled={isBusy}>
-                  <Text style={styles.secondaryButtonText}>查看该错题图片记录</Text>
+                  <Text style={styles.secondaryButtonText}>Load Mistake Images</Text>
                 </Pressable>
 
                 <Pressable
@@ -744,7 +713,7 @@ export default function DevDatabasePage() {
                     void handleCheckMistakeConsistency(item.id);
                   }}
                   disabled={isBusy}>
-                  <Text style={styles.secondaryButtonText}>检查该错题一致性</Text>
+                  <Text style={styles.secondaryButtonText}>Run Consistency Check</Text>
                 </Pressable>
               </View>
             ))
@@ -753,86 +722,95 @@ export default function DevDatabasePage() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>
-            图片记录{selectedMistakeId ? `（mistake_id: ${selectedMistakeId}）` : ''}
+            Image Records{selectedMistakeId ? ` (mistake_id: ${selectedMistakeId})` : ''}
           </Text>
           {!selectedMistakeId ? (
-            <Text style={styles.placeholderText}>请先在上方错题列表中选择一个错题</Text>
+            <Text style={styles.placeholderText}>Select a mistake above first</Text>
           ) : mistakeImages.length === 0 ? (
-            <Text style={styles.placeholderText}>该错题暂无图片记录</Text>
+            <Text style={styles.placeholderText}>No image records for this mistake</Text>
           ) : (
             mistakeImages.map((item) => (
               <View key={item.id} style={styles.listItem}>
                 <Text style={styles.monoText}>id: {item.id}</Text>
                 <Text style={styles.monoText}>type: {item.type}</Text>
+                <Text style={styles.monoText}>review_record_id: {formatNullable(item.review_record_id)}</Text>
                 <Text style={styles.monoText}>uri: {toShortUri(item.uri)}</Text>
+                <Text style={styles.monoText}>sort_order: {item.sort_order}</Text>
                 <Text style={styles.monoText}>created_at: {item.created_at}</Text>
                 <Text style={styles.monoText}>exists: {String(item.exists)}</Text>
-                <Text style={styles.monoText}>size: {item.fileSize ?? '(未知)'}</Text>
+                <Text style={styles.monoText}>size: {item.fileSize ?? '(unknown)'}</Text>
               </View>
             ))
           )}
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>单题一致性检查</Text>
+          <Text style={styles.sectionTitle}>Single Mistake Consistency Report</Text>
           {!consistencyReport ? (
-            <Text style={styles.placeholderText}>请在最近错题区域点击“检查该错题一致性”</Text>
+            <Text style={styles.placeholderText}>Run Consistency Check from a mistake card above</Text>
           ) : (
             <>
               <Text style={styles.monoText}>generated_at: {consistencyReport.generatedAt}</Text>
 
               <View style={styles.subSection}>
-                <Text style={styles.subSectionTitle}>1) mistakes 当前状态</Text>
+                <Text style={styles.subSectionTitle}>1) mistakes row</Text>
                 <Text style={styles.monoText}>id: {consistencyReport.mistake.id}</Text>
                 <Text style={styles.monoText}>review_count: {consistencyReport.mistake.review_count}</Text>
                 <Text style={styles.monoText}>status: {consistencyReport.mistake.status}</Text>
                 <Text style={styles.monoText}>
                   next_review_at: {formatNullable(consistencyReport.mistake.next_review_at)}
                 </Text>
+                <Text style={styles.monoText}>
+                  last_review_at: {formatNullable(consistencyReport.mistake.last_review_at)}
+                </Text>
+                <Text style={styles.monoText}>
+                  last_review_result: {formatNullable(consistencyReport.mistake.last_review_result)}
+                </Text>
               </View>
 
               <View style={styles.subSection}>
-                <Text style={styles.subSectionTitle}>2) review_records 列表</Text>
+                <Text style={styles.subSectionTitle}>2) review_records list</Text>
                 {consistencyReport.reviewRecords.length === 0 ? (
-                  <Text style={styles.placeholderText}>无复做记录</Text>
+                  <Text style={styles.placeholderText}>No review records</Text>
                 ) : (
                   consistencyReport.reviewRecords.map((item) => (
                     <View key={item.id} style={styles.listItem}>
+                      <Text style={styles.monoText}>id: {item.id}</Text>
                       <Text style={styles.monoText}>review_index: {item.review_index}</Text>
-                      <Text style={styles.monoText}>solution_image_uri: {toShortUri(item.solution_image_uri)}</Text>
                       <Text style={styles.monoText}>result: {item.result}</Text>
+                      <Text style={styles.monoText}>note: {formatNullable(item.note)}</Text>
                       <Text style={styles.monoText}>created_at: {item.created_at}</Text>
                       <Text style={styles.monoText}>
-                        solution_exists:{' '}
-                        {item.solution_exists === null ? '(无 solution_image_uri)' : String(item.solution_exists)}
+                        review_solution_count: {item.review_solution_count}
                       </Text>
-                      <Text style={styles.monoText}>solution_size: {item.solution_file_size ?? '(未知)'}</Text>
                     </View>
                   ))
                 )}
               </View>
 
               <View style={styles.subSection}>
-                <Text style={styles.subSectionTitle}>3) mistake_images 列表</Text>
+                <Text style={styles.subSectionTitle}>3) mistake_images list</Text>
                 {consistencyReport.mistakeImages.length === 0 ? (
-                  <Text style={styles.placeholderText}>无图片记录</Text>
+                  <Text style={styles.placeholderText}>No image records</Text>
                 ) : (
                   consistencyReport.mistakeImages.map((item) => (
                     <View key={item.id} style={styles.listItem}>
                       <Text style={styles.monoText}>type: {item.type}</Text>
+                      <Text style={styles.monoText}>review_record_id: {formatNullable(item.review_record_id)}</Text>
                       <Text style={styles.monoText}>uri: {toShortUri(item.uri)}</Text>
+                      <Text style={styles.monoText}>sort_order: {item.sort_order}</Text>
                       <Text style={styles.monoText}>created_at: {item.created_at}</Text>
                       <Text style={styles.monoText}>exists: {String(item.exists)}</Text>
-                      <Text style={styles.monoText}>size: {item.fileSize ?? '(未知)'}</Text>
+                      <Text style={styles.monoText}>size: {item.fileSize ?? '(unknown)'}</Text>
                     </View>
                   ))
                 )}
               </View>
 
               <View style={styles.subSection}>
-                <Text style={styles.subSectionTitle}>4) 图片文件存在性</Text>
+                <Text style={styles.subSectionTitle}>4) image file existence</Text>
                 {consistencyReport.imageChecks.length === 0 ? (
-                  <Text style={styles.placeholderText}>无可检查图片 URI</Text>
+                  <Text style={styles.placeholderText}>No image URIs to check</Text>
                 ) : (
                   consistencyReport.imageChecks.map((item, index) => (
                     <View key={`${item.source}-${item.label}-${index}`} style={styles.listItem}>
@@ -840,18 +818,19 @@ export default function DevDatabasePage() {
                       <Text style={styles.monoText}>label: {item.label}</Text>
                       <Text style={styles.monoText}>uri: {toShortUri(item.uri)}</Text>
                       <Text style={styles.monoText}>exists: {String(item.exists)}</Text>
-                      <Text style={styles.monoText}>size: {item.size ?? '(未知)'}</Text>
+                      <Text style={styles.monoText}>size: {item.size ?? '(unknown)'}</Text>
                     </View>
                   ))
                 )}
               </View>
 
               <View style={styles.subSection}>
-                <Text style={styles.subSectionTitle}>5) 一致性规则检查结果</Text>
+                <Text style={styles.subSectionTitle}>5) rule checks</Text>
                 {consistencyReport.checks.map((item) => (
                   <View key={item.key} style={styles.checkItem}>
                     <Text style={[styles.checkLabel, { color: getCheckTextColor(item.level) }]}>
-                      {item.level === 'pass' ? '通过' : item.level === 'warn' ? '警告' : '失败'} - {item.label}
+                      {item.level === 'pass' ? 'PASS' : item.level === 'warn' ? 'WARN' : 'FAIL'} -{' '}
+                      {item.label}
                     </Text>
                     <Text style={[styles.monoText, { color: getCheckTextColor(item.level) }]}>
                       {item.message}
@@ -864,7 +843,7 @@ export default function DevDatabasePage() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>统计</Text>
+          <Text style={styles.sectionTitle}>Stats</Text>
           {stats ? (
             <>
               <Text style={styles.monoText}>total: {stats.total}</Text>
@@ -873,7 +852,7 @@ export default function DevDatabasePage() {
               <Text style={styles.monoText}>dueToday: {stats.dueToday}</Text>
             </>
           ) : (
-            <Text style={styles.placeholderText}>尚未查询统计</Text>
+            <Text style={styles.placeholderText}>No stats loaded yet</Text>
           )}
         </View>
       </ScrollView>

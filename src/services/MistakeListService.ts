@@ -1,5 +1,5 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
-import type { Mistake, MistakeStatus, ReviewResult } from '@/src/models/Mistake';
+import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type {
   MistakeListFilter,
   MistakeListItem,
@@ -171,25 +171,6 @@ function buildSubtitle(mistake: Mistake): string {
   return subtitleParts.join(' · ');
 }
 
-function toResultPriority(result?: ReviewResult | null): number {
-  if (result === 'wrong') {
-    return 0;
-  }
-  if (result === 'unsure') {
-    return 1;
-  }
-  return 2;
-}
-
-function toDateOrNull(value?: string | null): Date | null {
-  return parseLocalDateTime(value ?? null);
-}
-
-function normalizeDateOrMaxTime(value?: string | null): number {
-  const parsed = toDateOrNull(value);
-  return parsed ? parsed.getTime() : Number.MAX_SAFE_INTEGER;
-}
-
 function clampNextReviewIndex(reviewCount: number): number {
   return Math.max(1, Math.min(MAX_REVIEW_COUNT, Math.floor(reviewCount) + 1));
 }
@@ -226,21 +207,6 @@ async function mapMistakeWithCoverToListItem(mistake: Mistake): Promise<MistakeL
     createdAt: mistake.created_at,
     updatedAt: mistake.updated_at,
   };
-}
-
-async function listAllActiveMistakesForSchedule(): Promise<Mistake[]> {
-  const totalActive = await MistakeRepository.countMistakes({ status: REVIEW_STATUS.ACTIVE });
-  if (totalActive <= 0) {
-    return [];
-  }
-
-  return MistakeRepository.listMistakes({
-    status: REVIEW_STATUS.ACTIVE,
-    sortBy: 'next_review_at',
-    sortOrder: 'asc',
-    limit: totalActive,
-    offset: 0,
-  });
 }
 
 export function mapMistakeToListItem(mistake: Mistake, thumbnailUri?: string | null): MistakeListItem {
@@ -316,55 +282,10 @@ export async function getTodayReviewQueue(): Promise<MistakeListItem[]> {
   try {
     const now = new Date();
     const { start: todayStart, end: todayEnd } = getLocalDayRange(now, 0);
-
-    const [activeMistakes, todayReviewRecords] = await Promise.all([
-      listAllActiveMistakesForSchedule(),
-      ReviewRecordRepository.listReviewRecordsByCreatedAtRange(
-        todayStart.toISOString(),
-        todayEnd.toISOString(),
-      ),
-    ]);
-
-    const reviewedTodayByMistakeId = new Map<string, Set<number>>();
-    for (const record of todayReviewRecords) {
-      const indexSet = reviewedTodayByMistakeId.get(record.mistake_id) ?? new Set<number>();
-      indexSet.add(record.review_index);
-      reviewedTodayByMistakeId.set(record.mistake_id, indexSet);
-    }
-
-    const dueMistakes = activeMistakes
-      .filter((mistake) => mistake.status === REVIEW_STATUS.ACTIVE)
-      .filter((mistake) => {
-        const nextReview = toDateOrNull(mistake.next_review_at);
-        if (!nextReview) {
-          return false;
-        }
-        return nextReview.getTime() <= todayEnd.getTime();
-      })
-      .filter((mistake) => {
-        const todayIndexes = reviewedTodayByMistakeId.get(mistake.id);
-        if (!todayIndexes || todayIndexes.size <= 0) {
-          return true;
-        }
-        const currentReviewIndex = clampNextReviewIndex(mistake.review_count);
-        return !todayIndexes.has(currentReviewIndex);
-      })
-      .sort((a, b) => {
-        const nextReviewDiff =
-          normalizeDateOrMaxTime(a.next_review_at) - normalizeDateOrMaxTime(b.next_review_at);
-        if (nextReviewDiff !== 0) {
-          return nextReviewDiff;
-        }
-
-        const resultPriorityDiff =
-          toResultPriority(a.last_review_result) - toResultPriority(b.last_review_result);
-        if (resultPriorityDiff !== 0) {
-          return resultPriorityDiff;
-        }
-
-        return normalizeDateOrMaxTime(a.created_at) - normalizeDateOrMaxTime(b.created_at);
-      });
-
+    const dueMistakes = await MistakeRepository.listTodayReviewQueue({
+      todayStartIso: todayStart.toISOString(),
+      todayEndIso: todayEnd.toISOString(),
+    });
     return Promise.all(dueMistakes.map(mapMistakeWithCoverToListItem));
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getTodayReviewQueue failed.', error);
@@ -376,47 +297,52 @@ export async function getUpcomingReviewPlan(days = 3): Promise<UpcomingReviewPla
   try {
     const now = new Date();
     const normalizedDays = Number.isFinite(days) ? Math.max(1, Math.floor(days)) : 3;
-    const activeMistakes = await listAllActiveMistakesForSchedule();
-    const dayBuckets: UpcomingReviewPlanDay[] = [];
+    const firstDayRange = getLocalDayRange(now, 1);
+    const lastDayRange = getLocalDayRange(now, normalizedDays);
+    const upcomingMistakes = await MistakeRepository.listActiveMistakesByNextReviewRange({
+      startInclusiveIso: firstDayRange.start.toISOString(),
+      endInclusiveIso: lastDayRange.end.toISOString(),
+    });
 
-    for (let dayOffset = 1; dayOffset <= normalizedDays; dayOffset += 1) {
+    const dayRanges = Array.from({ length: normalizedDays }, (_, index) => {
+      const dayOffset = index + 1;
       const range = getLocalDayRange(now, dayOffset);
-      const dayMistakes = activeMistakes
-        .filter((mistake) => mistake.status === REVIEW_STATUS.ACTIVE)
-        .filter((mistake) => {
-          const nextReview = toDateOrNull(mistake.next_review_at);
-          if (!nextReview) {
-            return false;
-          }
-          const time = nextReview.getTime();
-          return time >= range.start.getTime() && time <= range.end.getTime();
-        })
-        .sort((a, b) => {
-          const nextReviewDiff =
-            normalizeDateOrMaxTime(a.next_review_at) - normalizeDateOrMaxTime(b.next_review_at);
-          if (nextReviewDiff !== 0) {
-            return nextReviewDiff;
-          }
-          return normalizeDateOrMaxTime(a.created_at) - normalizeDateOrMaxTime(b.created_at);
-        });
-
-      dayBuckets.push({
+      return {
         dayOffset,
-        dayLabel: buildUpcomingDayLabel(dayOffset),
-        date: toDateOnlyString(range.start),
-        totalCount: dayMistakes.length,
-        remainingCount: Math.max(0, dayMistakes.length - UPCOMING_MAX_PER_DAY),
-        items: dayMistakes.slice(0, UPCOMING_MAX_PER_DAY).map((mistake) => ({
-          mistakeId: mistake.id,
-          title: buildTitle(mistake.module, mistake.title),
-          module: mistake.module,
-          reviewCount: mistake.review_count,
-          nextReviewIndex: clampNextReviewIndex(mistake.review_count),
-        })),
-      });
+        start: range.start,
+        end: range.end,
+        items: [] as Mistake[],
+      };
+    });
+
+    for (const mistake of upcomingMistakes) {
+      const nextReviewDate = parseLocalDateTime(mistake.next_review_at ?? null);
+      if (!nextReviewDate) {
+        continue;
+      }
+      const nextReviewTime = nextReviewDate.getTime();
+      const targetDay = dayRanges.find(
+        (day) => nextReviewTime >= day.start.getTime() && nextReviewTime <= day.end.getTime(),
+      );
+      if (targetDay) {
+        targetDay.items.push(mistake);
+      }
     }
 
-    return dayBuckets;
+    return dayRanges.map((day) => ({
+      dayOffset: day.dayOffset,
+      dayLabel: buildUpcomingDayLabel(day.dayOffset),
+      date: toDateOnlyString(day.start),
+      totalCount: day.items.length,
+      remainingCount: Math.max(0, day.items.length - UPCOMING_MAX_PER_DAY),
+      items: day.items.slice(0, UPCOMING_MAX_PER_DAY).map((mistake) => ({
+        mistakeId: mistake.id,
+        title: buildTitle(mistake.module, mistake.title),
+        module: mistake.module,
+        reviewCount: mistake.review_count,
+        nextReviewIndex: clampNextReviewIndex(mistake.review_count),
+      })),
+    }));
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getUpcomingReviewPlan failed.', { days, error });
     throw error;
@@ -439,14 +365,14 @@ export async function getTodayCompletedStats(): Promise<TodayCompletedStats> {
 
 export async function getHomeTaskSummary(): Promise<HomeTaskSummary> {
   try {
-    const [mistakeStats, todayQueue, todayCompletedStats, upcomingPlan] = await Promise.all([
-      MistakeRepository.getMistakeStats(),
+    const [mistakeCount, todayQueue, todayCompletedStats, upcomingPlan] = await Promise.all([
+      MistakeRepository.countMistakes(),
       getTodayReviewQueue(),
       getTodayCompletedStats(),
       getUpcomingReviewPlan(3),
     ]);
 
-    const hasAnyMistake = mistakeStats.total > 0;
+    const hasAnyMistake = mistakeCount > 0;
     const todayDueCount = todayQueue.length;
     let homeStatus: HomeStatus = 'noDueToday';
 

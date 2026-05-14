@@ -70,6 +70,20 @@ export interface MistakeStats {
   dueToday: number;
 }
 
+export interface TodayReviewQueueQuery {
+  todayStartIso: string;
+  todayEndIso: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NextReviewRangeQuery {
+  startInclusiveIso: string;
+  endInclusiveIso: string;
+  limit?: number;
+  offset?: number;
+}
+
 export interface UpdateReviewProgressParams {
   mistakeId: string;
   reviewCount: number;
@@ -215,6 +229,20 @@ function normalizeDueCutoff(todayIsoDate?: string): string {
   if (!trimmed.includes('T')) {
     return `${trimmed}T23:59:59.999Z`;
   }
+  return trimmed;
+}
+
+function normalizeIsoDateTime(value: string, fieldName: string): string {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) {
+    throw new Error(`${fieldName} must be a non-empty ISO datetime string.`);
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new Error(`${fieldName} must be a valid datetime string.`);
+  }
+
   return trimmed;
 }
 
@@ -544,6 +572,111 @@ ORDER BY next_review_at ASC, created_at ASC;`,
       return rows.map(mapMistakeRow);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'listDueMistakes failed.', { todayIsoDate, error });
+      throw error;
+    }
+  },
+
+  async listTodayReviewQueue(query: TodayReviewQueueQuery): Promise<Mistake[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedStart = normalizeIsoDateTime(query.todayStartIso, 'todayStartIso');
+      const normalizedEnd = normalizeIsoDateTime(query.todayEndIso, 'todayEndIso');
+      const limit = normalizeLimit(query.limit);
+      const offset = normalizeOffset(query.offset);
+      let paginationSql = '';
+      const paginationParams: number[] = [];
+      if (limit !== undefined) {
+        paginationSql = '\nLIMIT ?';
+        paginationParams.push(limit);
+        if (offset !== undefined) {
+          paginationSql += '\nOFFSET ?';
+          paginationParams.push(offset);
+        }
+      } else if (offset !== undefined) {
+        paginationSql = '\nLIMIT -1\nOFFSET ?';
+        paginationParams.push(offset);
+      }
+
+      const rows = await db.getAllAsync<Mistake>(
+        `${SELECT_MISTAKE_FIELDS_SQL} m
+WHERE m.status = ?
+  AND m.next_review_at IS NOT NULL
+  AND m.next_review_at <= ?
+  AND NOT EXISTS (
+    SELECT 1
+    FROM review_records r
+    WHERE r.mistake_id = m.id
+      AND r.created_at >= ?
+      AND r.created_at <= ?
+      AND r.review_index = CASE
+        WHEN m.review_count + 1 > ? THEN ?
+        ELSE m.review_count + 1
+      END
+  )
+ORDER BY
+  m.next_review_at ASC,
+  CASE m.last_review_result
+    WHEN 'wrong' THEN 0
+    WHEN 'unsure' THEN 1
+    ELSE 2
+  END ASC,
+  m.created_at ASC${paginationSql};`,
+        REVIEW_STATUS.ACTIVE,
+        normalizedEnd,
+        normalizedStart,
+        normalizedEnd,
+        MAX_REVIEW_COUNT,
+        MAX_REVIEW_COUNT,
+        ...paginationParams,
+      );
+
+      return rows.map(mapMistakeRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listTodayReviewQueue failed.', { query, error });
+      throw error;
+    }
+  },
+
+  async listActiveMistakesByNextReviewRange(query: NextReviewRangeQuery): Promise<Mistake[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedStart = normalizeIsoDateTime(query.startInclusiveIso, 'startInclusiveIso');
+      const normalizedEnd = normalizeIsoDateTime(query.endInclusiveIso, 'endInclusiveIso');
+      const limit = normalizeLimit(query.limit);
+      const offset = normalizeOffset(query.offset);
+      let paginationSql = '';
+      const paginationParams: number[] = [];
+      if (limit !== undefined) {
+        paginationSql = '\nLIMIT ?';
+        paginationParams.push(limit);
+        if (offset !== undefined) {
+          paginationSql += '\nOFFSET ?';
+          paginationParams.push(offset);
+        }
+      } else if (offset !== undefined) {
+        paginationSql = '\nLIMIT -1\nOFFSET ?';
+        paginationParams.push(offset);
+      }
+
+      const rows = await db.getAllAsync<Mistake>(
+        `${SELECT_MISTAKE_FIELDS_SQL}
+WHERE status = ?
+  AND next_review_at IS NOT NULL
+  AND next_review_at >= ?
+  AND next_review_at <= ?
+ORDER BY next_review_at ASC, created_at ASC
+${paginationSql};`,
+        REVIEW_STATUS.ACTIVE,
+        normalizedStart,
+        normalizedEnd,
+        ...paginationParams,
+      );
+
+      return rows.map(mapMistakeRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listActiveMistakesByNextReviewRange failed.', { query, error });
       throw error;
     }
   },
