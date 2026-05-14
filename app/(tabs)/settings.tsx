@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandHeader, CardContainer, ScreenContainer, SectionTitle } from '@/src/components';
 import { MistakeImageRepository, ReviewRecordRepository } from '@/src/repositories';
@@ -12,7 +13,7 @@ type InfoRow = {
   value: string;
 };
 
-type DevRoute = '/dev/db' | '/dev/images';
+type DevRoute = '/dev/db' | '/dev/images' | '/dev/logs';
 
 type DevEntry = {
   title: string;
@@ -28,11 +29,15 @@ type DataOverviewStats = {
   imageRecordCount: number;
 };
 
+type ToastType = 'success' | 'info' | 'warning' | 'error';
+
 const DEV_UNLOCK_TAP_TARGET = 7;
-const DEV_TAP_HINT_START = 3;
 const DEV_TAP_WINDOW_MS = 3000;
+const DEV_TAP_HINT_THRESHOLD = 2;
+const TOAST_DURATION_DEFAULT = 1800;
 const VERSION_LABEL = '版本';
 const VERSION_VALUE = '0.1.0 MVP';
+
 const DEFAULT_DATA_OVERVIEW_STATS: DataOverviewStats = {
   totalMistakes: 0,
   dueMistakes: 0,
@@ -51,12 +56,12 @@ const CORE_FLOW_ITEMS = [
   '拍照录入错题',
   '每题复做 7 次',
   '做满 7 次后标记已掌握',
-  '所有数据只保存在本机',
+  '所有数据仅保存在本机',
 ];
 
 const LOCAL_DATA_ITEMS = [
-  '错题信息保存在 SQLite',
-  '图片保存在 App 本地目录',
+  '错题信息保存到 SQLite',
+  '图片保存到 App 本地目录',
   '当前版本不支持云同步',
   '卸载 App 可能会删除本地数据',
 ];
@@ -74,52 +79,140 @@ const DEV_ENTRIES: DevEntry[] = [
     description: '测试拍照、图片持久化、图片删除和文件存在性。',
     href: '/dev/images',
   },
+  {
+    title: '运行日志',
+    description: '查看 App 运行时日志，便于问题排查。',
+    href: '/dev/logs',
+  },
 ];
+
+let isDevModeUnlockedInSession = false;
+
+function getToastBackgroundColor(type: ToastType): string {
+  if (type === 'success') {
+    return '#138a3f';
+  }
+  if (type === 'warning') {
+    return '#b45309';
+  }
+  if (type === 'error') {
+    return '#b42318';
+  }
+  return '#222222';
+}
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
 
-  const [devTapCount, setDevTapCount] = useState(0);
-  const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(false);
-  const [devHintMessage, setDevHintMessage] = useState<string | null>(null);
+  const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(isDevModeUnlockedInSession);
   const [dataOverview, setDataOverview] = useState<DataOverviewStats>(DEFAULT_DATA_OVERVIEW_STATS);
   const [isOverviewLoading, setIsOverviewLoading] = useState(true);
   const [isOverviewRefreshing, setIsOverviewRefreshing] = useState(false);
   const [overviewErrorMessage, setOverviewErrorMessage] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<ToastType>('info');
+  const [toastVisible, setToastVisible] = useState(false);
 
   const lastTapAtRef = useRef<number | null>(null);
   const tapCountRef = useRef(0);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
+
+  const hideToast = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 8,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  }, [toastOpacity, toastTranslateY]);
+
+  const showToast = useCallback(
+    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
+      const normalized = message.trim();
+      if (!normalized) {
+        return;
+      }
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      setToastMessage(normalized);
+      setToastType(type);
+      setToastVisible(true);
+      toastOpacity.setValue(0);
+      toastTranslateY.setValue(8);
+
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 160,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 0,
+          duration: 160,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      toastTimerRef.current = setTimeout(() => {
+        hideToast();
+        toastTimerRef.current = null;
+      }, duration);
+    },
+    [hideToast, toastOpacity, toastTranslateY],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const handleVersionTap = useCallback(() => {
     if (isDevModeUnlocked) {
-      setDevHintMessage('已开启开发调试入口');
       return;
     }
 
     const now = Date.now();
     const shouldReset =
       lastTapAtRef.current !== null && now - lastTapAtRef.current > DEV_TAP_WINDOW_MS;
-    const baseCount = shouldReset ? 0 : Math.max(tapCountRef.current, devTapCount);
+    const baseCount = shouldReset ? 0 : tapCountRef.current;
     const nextCount = baseCount + 1;
 
     lastTapAtRef.current = now;
     tapCountRef.current = nextCount;
-    setDevTapCount(nextCount);
 
     if (nextCount >= DEV_UNLOCK_TAP_TARGET) {
+      tapCountRef.current = 0;
+      isDevModeUnlockedInSession = true;
       setIsDevModeUnlocked(true);
-      setDevHintMessage('已开启开发调试入口');
+      showToast('开发调试入口已开启', 'success');
       return;
     }
 
-    if (nextCount >= DEV_TAP_HINT_START) {
-      const remaining = DEV_UNLOCK_TAP_TARGET - nextCount;
-      setDevHintMessage(`再点 ${remaining} 次开启开发调试入口`);
-      return;
+    const remaining = DEV_UNLOCK_TAP_TARGET - nextCount;
+    if (remaining > 0 && remaining <= DEV_TAP_HINT_THRESHOLD) {
+      showToast(`再点 ${remaining} 次开启开发调试入口`, 'info');
     }
-
-    setDevHintMessage(null);
-  }, [devTapCount, isDevModeUnlocked]);
+  }, [isDevModeUnlocked, showToast]);
 
   const loadDataOverview = useCallback(async (mode: 'initial' | 'refresh') => {
     if (mode === 'initial') {
@@ -158,7 +251,11 @@ export default function SettingsScreen() {
 
   return (
     <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
-      <BrandHeader title="设置" subtitle="离线运行，本地保存错题和复做记录" offlineLabel="• 离线" />
+      <BrandHeader
+        title="设置"
+        subtitle="离线运行，本地保存错题和复做记录"
+        offlineLabel="离线"
+      />
 
       <View style={styles.sectionBlock}>
         <SectionTitle title="App 信息" />
@@ -179,9 +276,6 @@ export default function SettingsScreen() {
               <Text style={styles.infoValue}>{row.value}</Text>
             </View>
           ))}
-          {devHintMessage ? (
-            <Text style={styles.devHintText}>{devHintMessage}</Text>
-          ) : null}
         </CardContainer>
       </View>
 
@@ -253,7 +347,7 @@ export default function SettingsScreen() {
         <CardContainer style={styles.card} padding={spacing.md}>
           {CORE_FLOW_ITEMS.map((item) => (
             <Text key={item} style={styles.listText}>
-              • {item}
+              - {item}
             </Text>
           ))}
         </CardContainer>
@@ -264,7 +358,7 @@ export default function SettingsScreen() {
         <CardContainer style={styles.card} padding={spacing.md}>
           {LOCAL_DATA_ITEMS.map((item) => (
             <Text key={item} style={styles.listText}>
-              • {item}
+              - {item}
             </Text>
           ))}
         </CardContainer>
@@ -275,7 +369,7 @@ export default function SettingsScreen() {
         <CardContainer style={styles.card} padding={spacing.md}>
           {ROADMAP_ITEMS.map((item) => (
             <Text key={item} style={styles.listText}>
-              • {item}
+              - {item}
             </Text>
           ))}
         </CardContainer>
@@ -285,7 +379,9 @@ export default function SettingsScreen() {
         <View style={styles.sectionBlock}>
           <SectionTitle title="开发调试" />
           <CardContainer style={[styles.card, styles.devCard]} padding={spacing.md}>
-            <Text style={styles.devNoticeText}>调试入口默认隐藏，仅用于排查问题，请谨慎使用。</Text>
+            <Text style={styles.devNoticeText}>
+              调试入口默认隐藏，仅用于排查问题，请谨慎使用。
+            </Text>
 
             {DEV_ENTRIES.map((entry) => (
               <View key={entry.href} style={styles.devEntryBlock}>
@@ -299,12 +395,27 @@ export default function SettingsScreen() {
                 </Pressable>
               </View>
             ))}
-
-            <Text style={styles.devHintText}>
-              已开启开发调试入口
-            </Text>
           </CardContainer>
         </View>
+      ) : null}
+
+      {toastVisible ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.toastContainer,
+            {
+              bottom: toastBottomOffset,
+              opacity: toastOpacity,
+              transform: [{ translateY: toastTranslateY }],
+            },
+          ]}>
+          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
+              {toastMessage}
+            </Text>
+          </View>
+        </Animated.View>
       ) : null}
     </ScreenContainer>
   );
@@ -360,11 +471,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: spacing.md,
-  },
-  devHintText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '700',
   },
   devCard: {
     borderColor: '#f2dec0',
@@ -457,5 +563,26 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
     lineHeight: 22,
+  },
+  toastContainer: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    alignItems: 'center',
+    zIndex: 99,
+  },
+  toastBubble: {
+    maxWidth: '100%',
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });

@@ -1,0 +1,656 @@
+import * as Clipboard from 'expo-clipboard';
+import { Stack, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+
+import {
+  clearRuntimeLogs,
+  getRuntimeLogs,
+  Logger,
+  subscribeRuntimeLogs,
+  type RuntimeLogItem,
+} from '@/src/services/Logger';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
+
+const PAGE_SCOPE = 'DevLogsPage';
+const TOAST_DURATION_DEFAULT = 1800;
+const TOAST_DURATION_LONG = 2600;
+const METADATA_PREVIEW_LIMIT = 1000;
+const METADATA_COPY_LIMIT = 1000;
+
+type ToastType = 'success' | 'info' | 'warning' | 'error';
+type LogLevelFilter = 'all' | RuntimeLogItem['level'];
+type LogTimeOrder = 'desc' | 'asc';
+
+const LOG_LEVEL_FILTERS: { key: LogLevelFilter; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'error', label: 'ERROR' },
+  { key: 'warn', label: 'WARN' },
+  { key: 'info', label: 'INFO' },
+  { key: 'debug', label: 'DEBUG' },
+];
+
+const LOG_TIME_ORDERS: { key: LogTimeOrder; label: string }[] = [
+  { key: 'desc', label: '时间倒序' },
+  { key: 'asc', label: '时间正序' },
+];
+
+const LOG_COUNT_SCOPES: { key: 'all' | 'recent50'; label: string }[] = [
+  { key: 'all', label: '全部日志' },
+  { key: 'recent50', label: '仅看最近 50 条' },
+];
+
+function getToastBackgroundColor(type: ToastType): string {
+  if (type === 'success') {
+    return '#138a3f';
+  }
+  if (type === 'warning') {
+    return '#b45309';
+  }
+  if (type === 'error') {
+    return '#b42318';
+  }
+  return '#222222';
+}
+
+function getLevelBadgeStyle(level: RuntimeLogItem['level']): {
+  text: string;
+  color: string;
+  backgroundColor: string;
+} {
+  switch (level) {
+    case 'debug':
+      return { text: 'DEBUG', color: '#4f46e5', backgroundColor: '#eef2ff' };
+    case 'info':
+      return { text: 'INFO', color: '#0f766e', backgroundColor: '#ecfeff' };
+    case 'warn':
+      return { text: 'WARN', color: '#b45309', backgroundColor: '#fff7ed' };
+    case 'error':
+      return { text: 'ERROR', color: '#b42318', backgroundColor: '#fee2e2' };
+    default:
+      return { text: 'INFO', color: '#0f766e', backgroundColor: '#ecfeff' };
+  }
+}
+
+function truncateText(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+
+  return `${value.slice(0, maxLength)}...[truncated ${value.length - maxLength} chars]`;
+}
+
+function stringifyMetadata(metadata: unknown, maxLength: number): string {
+  if (metadata === undefined || metadata === null) {
+    return '';
+  }
+
+  if (typeof metadata === 'string') {
+    return truncateText(metadata, maxLength);
+  }
+
+  if (metadata instanceof Error) {
+    return truncateText(`${metadata.name}: ${metadata.message}`, maxLength);
+  }
+
+  try {
+    const seen = new WeakSet<object>();
+    const stringified = JSON.stringify(metadata, (_key, value: unknown) => {
+      if (typeof value === 'object' && value !== null) {
+        if (seen.has(value as object)) {
+          return '[Circular]';
+        }
+        seen.add(value as object);
+      }
+
+      if (typeof value === 'string') {
+        return truncateText(value, maxLength);
+      }
+
+      return value;
+    });
+
+    if (typeof stringified !== 'string') {
+      return truncateText(String(metadata), maxLength);
+    }
+
+    return truncateText(stringified, maxLength);
+  } catch (error) {
+    try {
+      return truncateText(String(error instanceof Error ? error.message : metadata), maxLength);
+    } catch {
+      return '[Unserializable metadata]';
+    }
+  }
+}
+
+function formatCopyLine(log: RuntimeLogItem): string {
+  const level = log.level.toUpperCase();
+  const scopePart = log.scope ? ` ${log.scope}` : '';
+  const metadataText = stringifyMetadata(log.metadata, METADATA_COPY_LIMIT);
+  const metadataPart = metadataText ? ` ${metadataText}` : '';
+  return `[${log.timestamp}] ${level}${scopePart} ${log.message}${metadataPart}`;
+}
+
+export default function RuntimeLogsPage() {
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+
+  const [logs, setLogs] = useState<RuntimeLogItem[]>(() => getRuntimeLogs());
+  const [levelFilter, setLevelFilter] = useState<LogLevelFilter>('all');
+  const [timeOrder, setTimeOrder] = useState<LogTimeOrder>('desc');
+  const [countScope, setCountScope] = useState<'all' | 'recent50'>('all');
+  const [keyword, setKeyword] = useState('');
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<ToastType>('info');
+  const [toastVisible, setToastVisible] = useState(false);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const toastBottomOffset = Math.max(insets.bottom + spacing.lg, layout.bottomTabHeight * 0.2);
+
+  const refreshLogs = useCallback(() => {
+    setLogs(getRuntimeLogs());
+  }, []);
+
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  const logsForRender = useMemo(() => {
+    let orderedLogs = logs.slice();
+    if (countScope === 'recent50' && orderedLogs.length > 50) {
+      orderedLogs = orderedLogs.slice(-50);
+    }
+
+    if (timeOrder === 'desc') {
+      orderedLogs.reverse();
+    }
+
+    return orderedLogs
+      .map((item) => {
+        const metadataText = stringifyMetadata(item.metadata, METADATA_PREVIEW_LIMIT);
+        return {
+          item,
+          metadataText,
+        };
+      })
+      .filter(({ item, metadataText }) => {
+        if (levelFilter !== 'all' && item.level !== levelFilter) {
+          return false;
+        }
+
+        if (!normalizedKeyword) {
+          return true;
+        }
+
+        const haystack = `${item.timestamp} ${item.level} ${item.scope ?? ''} ${item.message} ${metadataText}`
+          .toLowerCase();
+        return haystack.includes(normalizedKeyword);
+      });
+  }, [countScope, levelFilter, logs, normalizedKeyword, timeOrder]);
+
+  const hideToast = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 8,
+        duration: 140,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  }, [toastOpacity, toastTranslateY]);
+
+  const showToast = useCallback(
+    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
+      const normalized = message.trim();
+      if (!normalized) {
+        return;
+      }
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      setToastMessage(normalized);
+      setToastType(type);
+      setToastVisible(true);
+      toastOpacity.setValue(0);
+      toastTranslateY.setValue(8);
+
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 160,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 0,
+          duration: 160,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      toastTimerRef.current = setTimeout(() => {
+        hideToast();
+        toastTimerRef.current = null;
+      }, duration);
+    },
+    [hideToast, toastOpacity, toastTranslateY],
+  );
+
+  useEffect(() => {
+    refreshLogs();
+    const unsubscribe = subscribeRuntimeLogs(() => {
+      refreshLogs();
+    });
+    return unsubscribe;
+  }, [refreshLogs]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleRefreshPress = useCallback(() => {
+    refreshLogs();
+    showToast('日志已刷新', 'info');
+  }, [refreshLogs, showToast]);
+
+  const handleClearPress = useCallback(() => {
+    clearRuntimeLogs();
+    refreshLogs();
+    showToast('日志已清空', 'success');
+  }, [refreshLogs, showToast]);
+
+  const handleCopyPress = useCallback(async () => {
+    const snapshot = getRuntimeLogs();
+    if (snapshot.length === 0) {
+      showToast('暂无运行日志', 'info');
+      return;
+    }
+
+    if (typeof Clipboard.setStringAsync !== 'function') {
+      showToast('当前环境暂不支持复制，请截图反馈', 'warning', TOAST_DURATION_LONG);
+      return;
+    }
+
+    const payload = snapshot.map((item) => formatCopyLine(item)).join('\n');
+
+    try {
+      await Clipboard.setStringAsync(payload);
+      showToast('日志已复制', 'success');
+    } catch (error) {
+      Logger.warn(PAGE_SCOPE, 'Copy runtime logs failed.', { error });
+      showToast('复制失败，请截图反馈', 'error', TOAST_DURATION_LONG);
+    }
+  }, [showToast]);
+
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <Stack.Screen options={{ title: '运行日志', headerShown: false }} />
+      <ScrollView contentContainerStyle={styles.container}>
+        <View style={styles.headerRow}>
+          <Pressable onPress={() => router.back()} style={styles.backButton}>
+            <Text style={styles.backButtonText}>返回</Text>
+          </Pressable>
+          <Text style={styles.pageTitle}>运行日志</Text>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.descriptionText}>用于排查 App 运行问题，普通用户无需关注。</Text>
+          <Text style={styles.summaryText}>
+            当前日志条数：{logs.length}，筛选后：{logsForRender.length}
+          </Text>
+        </View>
+
+        <View style={styles.section}>
+          <Text style={styles.filterTitle}>级别筛选</Text>
+          <View style={styles.filterRow}>
+            {LOG_LEVEL_FILTERS.map((filterItem) => {
+              const selected = levelFilter === filterItem.key;
+              return (
+                <Pressable
+                  key={filterItem.key}
+                  accessibilityRole="button"
+                  onPress={() => setLevelFilter(filterItem.key)}
+                  style={[styles.filterChip, selected && styles.filterChipSelected]}>
+                  <Text style={[styles.filterChipText, selected && styles.filterChipTextSelected]}>
+                    {filterItem.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <Text style={styles.filterTitle}>关键字搜索</Text>
+          <Text style={styles.filterTitle}>时间顺序</Text>
+          <View style={styles.filterRow}>
+            {LOG_TIME_ORDERS.map((orderItem) => {
+              const selected = timeOrder === orderItem.key;
+              return (
+                <Pressable
+                  key={orderItem.key}
+                  accessibilityRole="button"
+                  onPress={() => setTimeOrder(orderItem.key)}
+                  style={[styles.filterChip, selected && styles.filterChipSelected]}>
+                  <Text style={[styles.filterChipText, selected && styles.filterChipTextSelected]}>
+                    {orderItem.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <Text style={styles.filterTitle}>显示范围</Text>
+          <View style={styles.filterRow}>
+            {LOG_COUNT_SCOPES.map((scopeItem) => {
+              const selected = countScope === scopeItem.key;
+              return (
+                <Pressable
+                  key={scopeItem.key}
+                  accessibilityRole="button"
+                  onPress={() => setCountScope(scopeItem.key)}
+                  style={[styles.filterChip, selected && styles.filterChipSelected]}>
+                  <Text style={[styles.filterChipText, selected && styles.filterChipTextSelected]}>
+                    {scopeItem.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <TextInput
+            value={keyword}
+            onChangeText={setKeyword}
+            placeholder="搜索 message / scope / metadata"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.searchInput}
+          />
+          {keyword ? (
+            <Pressable accessibilityRole="button" onPress={() => setKeyword('')} style={styles.clearSearchButton}>
+              <Text style={styles.clearSearchButtonText}>清空搜索</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        <View style={styles.buttonRow}>
+          <Pressable style={styles.actionButton} onPress={handleRefreshPress}>
+            <Text style={styles.actionButtonText}>刷新</Text>
+          </Pressable>
+          <Pressable style={styles.actionButton} onPress={handleClearPress}>
+            <Text style={styles.actionButtonText}>清空日志</Text>
+          </Pressable>
+          <Pressable style={styles.actionButton} onPress={() => void handleCopyPress()}>
+            <Text style={styles.actionButtonText}>复制全部日志</Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.section}>
+          {logsForRender.length === 0 ? (
+            <Text style={styles.emptyText}>暂无运行日志</Text>
+          ) : (
+            logsForRender.map(({ item, metadataText }) => {
+              const levelStyle = getLevelBadgeStyle(item.level);
+              return (
+                <View key={item.id} style={styles.logCard}>
+                  <View style={styles.logHeadRow}>
+                    <Text style={styles.logTimestamp}>{item.timestamp}</Text>
+                    <View
+                      style={[
+                        styles.levelBadge,
+                        {
+                          backgroundColor: levelStyle.backgroundColor,
+                          borderColor: levelStyle.color,
+                        },
+                      ]}>
+                      <Text style={[styles.levelBadgeText, { color: levelStyle.color }]}>
+                        {levelStyle.text}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.logScopeText}>scope: {item.scope ?? 'unknown'}</Text>
+                  <Text style={styles.logMessageText}>{item.message}</Text>
+                  {metadataText ? <Text style={styles.logMetadataText}>{metadataText}</Text> : null}
+                </View>
+              );
+            })
+          )}
+        </View>
+      </ScrollView>
+
+      {toastVisible ? (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            styles.toastContainer,
+            {
+              bottom: toastBottomOffset,
+              opacity: toastOpacity,
+              transform: [{ translateY: toastTranslateY }],
+            },
+          ]}>
+          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
+              {toastMessage}
+            </Text>
+          </View>
+        </Animated.View>
+      ) : null}
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  container: {
+    padding: spacing.lg,
+    gap: spacing.sm,
+    paddingBottom: spacing.xxl,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  backButton: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  backButtonText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  pageTitle: {
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
+  },
+  section: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: spacing.xs,
+  },
+  descriptionText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+  },
+  summaryText: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
+  filterTitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  filterChip: {
+    minHeight: 34,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  filterChipSelected: {
+    borderColor: '#2a6ff1',
+    backgroundColor: '#e9f1ff',
+  },
+  filterChipText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  filterChipTextSelected: {
+    color: '#1f5ed0',
+  },
+  searchInput: {
+    minHeight: 40,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+  },
+  clearSearchButton: {
+    alignSelf: 'flex-start',
+    minHeight: 34,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+  },
+  clearSearchButtonText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  actionButton: {
+    minHeight: 38,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  actionButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  emptyText: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+  },
+  logCard: {
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceMuted,
+    padding: spacing.sm,
+    gap: spacing.xs,
+  },
+  logHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  logTimestamp: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontFamily: 'monospace',
+    flexShrink: 1,
+  },
+  levelBadge: {
+    borderWidth: 1,
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  levelBadgeText: {
+    ...typography.caption,
+    fontWeight: '700',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  logScopeText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontFamily: 'monospace',
+  },
+  logMessageText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '600',
+  },
+  logMetadataText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontFamily: 'monospace',
+  },
+  toastContainer: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    alignItems: 'center',
+    zIndex: 99,
+  },
+  toastBubble: {
+    maxWidth: '100%',
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+});
