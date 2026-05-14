@@ -5,6 +5,7 @@ import type {
   MistakeListItem,
   MistakeListStatus,
 } from '@/src/models/MistakeListItem';
+import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
 import {
   MistakeImageRepository,
   MistakeRepository,
@@ -76,6 +77,14 @@ function normalizeModule(module: string | null | undefined): string | null {
     return null;
   }
   const trimmed = module.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeOptionalText(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 
@@ -173,6 +182,28 @@ function buildSubtitle(mistake: Mistake): string {
 
 function clampNextReviewIndex(reviewCount: number): number {
   return Math.max(1, Math.min(MAX_REVIEW_COUNT, Math.floor(reviewCount) + 1));
+}
+
+function resolveExportBaseDate(date?: string): Date {
+  const parsed = parseLocalDateTime(normalizeOptionalText(date));
+  if (parsed) {
+    return parsed;
+  }
+
+  if (normalizeOptionalText(date)) {
+    Logger.warn(SERVICE_SCOPE, 'Invalid export date input, fallback to current date.', {
+      inputDate: date,
+    });
+  }
+  return new Date();
+}
+
+function resolveDueDateForExport(nextReviewAt: string | null | undefined, fallbackDate: Date): string {
+  const parsedDueDate = parseLocalDateTime(nextReviewAt ?? null);
+  if (parsedDueDate) {
+    return toDateOnlyString(parsedDueDate);
+  }
+  return toDateOnlyString(fallbackDate);
 }
 
 function buildUpcomingDayLabel(dayOffset: number): string {
@@ -290,6 +321,47 @@ export async function getTodayReviewQueue(): Promise<MistakeListItem[]> {
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getTodayReviewQueue failed.', error);
     throw error;
+  }
+}
+
+export async function getTodayReviewExportItems(date?: string): Promise<TodayReviewExportItem[]> {
+  try {
+    const baseDate = resolveExportBaseDate(date);
+    const { start: todayStart, end: todayEnd } = getLocalDayRange(baseDate, 0);
+    const dueMistakes = await MistakeRepository.listTodayReviewQueue({
+      todayStartIso: todayStart.toISOString(),
+      todayEndIso: todayEnd.toISOString(),
+    });
+
+    if (dueMistakes.length <= 0) {
+      return [];
+    }
+
+    const items = await Promise.all(
+      dueMistakes.map(async (mistake): Promise<TodayReviewExportItem> => {
+        const questionImages = await MistakeImageRepository.getImagesByMistakeIdAndType(
+          mistake.id,
+          'question',
+        );
+        const questionImageUri = normalizeOptionalText(questionImages[0]?.uri ?? null);
+
+        return {
+          mistakeId: mistake.id,
+          title: buildTitle(mistake.module, mistake.title),
+          module: mistake.module,
+          difficulty: Number.isFinite(mistake.difficulty) ? mistake.difficulty : null,
+          currentReviewIndex: clampNextReviewIndex(mistake.review_count),
+          totalReviewCount: MAX_REVIEW_COUNT,
+          questionImageUri,
+          dueDate: resolveDueDateForExport(mistake.next_review_at ?? null, todayStart),
+        };
+      }),
+    );
+
+    return items;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'getTodayReviewExportItems failed.', { date, error });
+    return [];
   }
 }
 
