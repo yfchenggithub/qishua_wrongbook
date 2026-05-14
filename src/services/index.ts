@@ -8,4 +8,5 @@ export * as MistakeDetailService from "./MistakeDetailService";
 export * as ReviewFlowService from "./ReviewFlowService";
 export * as ReviewScheduleService from "./ReviewScheduleService";
 export * as CompleteReviewService from "./CompleteReviewService";
+export * as TodayReviewPdfExportService from "./TodayReviewPdfExportService";
 export { Logger } from "./Logger";
