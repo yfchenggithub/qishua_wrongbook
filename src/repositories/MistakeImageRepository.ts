@@ -1,4 +1,4 @@
-import { getDatabase, initDatabase } from '@/src/db';
+import { getDatabase, initDatabase, withDatabaseTransaction } from '@/src/db';
 import type { ImageType, MistakeImageType } from '@/src/models/Mistake';
 import type { CreateMistakeImageInput, MistakeImage } from '@/src/models/MistakeImage';
 import { Logger } from '@/src/services/Logger';
@@ -160,6 +160,24 @@ function buildMistakeImage(
 
 async function getImageByIdInternal(id: string): Promise<MistakeImage | null> {
   const db = await getDatabase();
+  const row = await db.getFirstAsync<MistakeImage>(
+    `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+WHERE id = ?
+LIMIT 1;`,
+    id,
+  );
+
+  if (!row) {
+    return null;
+  }
+
+  return mapMistakeImageRow(row);
+}
+
+async function getImageByIdInDatabase(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+): Promise<MistakeImage | null> {
   const row = await db.getFirstAsync<MistakeImage>(
     `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
 WHERE id = ?
@@ -480,6 +498,107 @@ WHERE review_record_id = ?
       return result.changes;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'deleteImagesByReviewRecordId failed.', { reviewRecordId, error });
+      throw error;
+    }
+  },
+
+  async deleteMistakeImagesByType(mistakeId: string, type: InsertableMistakeImageType): Promise<number> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedMistakeId = normalizeRequiredText(mistakeId, 'mistakeId');
+      const result = await db.runAsync(
+        `DELETE FROM mistake_images
+WHERE mistake_id = ?
+  AND type = ?;`,
+        normalizedMistakeId,
+        type,
+      );
+      return result.changes;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'deleteMistakeImagesByType failed.', { mistakeId, type, error });
+      throw error;
+    }
+  },
+
+  async updateMistakeImageUri(id: string, newUri: string): Promise<MistakeImage | null> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedId = normalizeRequiredText(id, 'id');
+      const normalizedUri = normalizeRequiredText(newUri, 'newUri');
+      const result = await db.runAsync(
+        `UPDATE mistake_images
+SET uri = ?
+WHERE id = ?;`,
+        normalizedUri,
+        normalizedId,
+      );
+
+      if (result.changes <= 0) {
+        return null;
+      }
+
+      return getImageByIdInDatabase(db, normalizedId);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateMistakeImageUri failed.', { id, error });
+      throw error;
+    }
+  },
+
+  async upsertMistakeImage(
+    mistakeId: string,
+    type: InsertableMistakeImageType,
+    uri: string,
+  ): Promise<MistakeImage> {
+    try {
+      await ensureDatabaseReady();
+      const normalizedMistakeId = normalizeRequiredText(mistakeId, 'mistakeId');
+      const normalizedUri = normalizeRequiredText(uri, 'uri');
+
+      return withDatabaseTransaction(async (db) => {
+        const existingRows = await db.getAllAsync<MistakeImage>(
+          `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+WHERE mistake_id = ?
+  AND type = ?
+ORDER BY sort_order ASC, created_at ASC;`,
+          normalizedMistakeId,
+          type,
+        );
+        const existing = existingRows.map(mapMistakeImageRow);
+
+        if (existing.length <= 0) {
+          return MistakeImageRepository.createMistakeImageInTransaction(db, {
+            mistake_id: normalizedMistakeId,
+            review_record_id: null,
+            type,
+            uri: normalizedUri,
+            sort_order: 0,
+          });
+        }
+
+        const primary = existing[0];
+        await db.runAsync(
+          `UPDATE mistake_images
+SET uri = ?, sort_order = ?
+WHERE id = ?;`,
+          normalizedUri,
+          0,
+          primary.id,
+        );
+
+        for (const staleImage of existing.slice(1)) {
+          await db.runAsync('DELETE FROM mistake_images WHERE id = ?;', staleImage.id);
+        }
+
+        const updated = await getImageByIdInDatabase(db, primary.id);
+        if (!updated) {
+          throw new Error('Failed to load upserted mistake image.');
+        }
+        return updated;
+      });
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'upsertMistakeImage failed.', { mistakeId, type, error });
       throw error;
     }
   },

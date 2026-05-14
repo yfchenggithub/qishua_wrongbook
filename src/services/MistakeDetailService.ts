@@ -1,8 +1,8 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type {
-  DetailReviewResult,
   DetailImageSlot,
   DetailReviewRecordItem,
+  DetailReviewResult,
   MistakeDetailViewModel,
 } from '@/src/models/MistakeDetailViewModel';
 import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
@@ -14,6 +14,8 @@ import { formatDateShort } from '@/src/utils/date';
 
 const SERVICE_SCOPE = 'MistakeDetailService';
 const FALLBACK_ERROR_MESSAGE = '读取错题详情失败，请稍后重试。';
+
+export type ManagedDetailImageType = Exclude<DetailImageSlot['type'], 'review_solution'>;
 
 type GetMistakeDetailResult = {
   ok: boolean;
@@ -29,6 +31,34 @@ export type SaveOptionalDetailImageParams = {
 };
 
 type SaveOptionalDetailImageResult = {
+  ok: boolean;
+  errorMessage?: string;
+};
+
+export type UpsertDetailImageParams = {
+  mistakeId: string;
+  imageType: ManagedDetailImageType;
+  imageUri: string;
+};
+
+export type UpsertDetailImageResult = {
+  ok: boolean;
+  imageId?: string;
+  errorMessage?: string;
+};
+
+export type DeleteDetailImageResult = {
+  ok: boolean;
+  deletedCount?: number;
+  errorMessage?: string;
+};
+
+export type UpdateDetailImageUriParams = {
+  imageId: string;
+  newUri: string;
+};
+
+export type UpdateDetailImageUriResult = {
   ok: boolean;
   errorMessage?: string;
 };
@@ -59,6 +89,21 @@ function normalizeOptionalText(value?: string | null): string | null {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function toShortUri(uri: string | null | undefined): string | null {
+  const normalized = normalizeOptionalText(uri);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= 64) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 28)}...${normalized.slice(-20)}`;
+}
+
+function isManagedDetailImageType(value: string): value is ManagedDetailImageType {
+  return value === 'question' || value === 'my_solution' || value === 'answer';
 }
 
 function normalizeDetailReviewResult(result: string | null | undefined): DetailReviewResult {
@@ -142,7 +187,7 @@ async function enrichSlotWithLocalFileInfo(slot: DetailImageSlot): Promise<Detai
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Image file check failed, fallback to exists=false.', {
-      uri,
+      uriShort: toShortUri(uri),
       error,
     });
     return {
@@ -164,19 +209,19 @@ async function buildImageSlots(_mistake: Mistake, images: MistakeImage[]): Promi
       type: 'question',
       title: '题目',
       uri: questionUri,
-      emptyText: '暂无题目图片',
+      emptyText: '还没有题目图片',
     },
     {
       type: 'my_solution',
       title: '我的做法',
       uri: mySolutionUri,
-      emptyText: '暂无我的做法图片',
+      emptyText: '还没有添加做法图片',
     },
     {
       type: 'answer',
       title: '答案解析',
       uri: answerUri,
-      emptyText: '暂无答案解析图片',
+      emptyText: '还没有添加答案解析图片',
     },
   ];
 
@@ -251,6 +296,7 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
     Logger.info(SERVICE_SCOPE, 'Start loading mistake detail.', {
       mistakeId,
     });
+
     const mistake = await MistakeRepository.getMistakeById(mistakeId);
     if (!mistake) {
       Logger.warn(SERVICE_SCOPE, 'Mistake detail not found.', {
@@ -293,6 +339,21 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
 export async function saveOptionalDetailImage(
   params: SaveOptionalDetailImageParams,
 ): Promise<SaveOptionalDetailImageResult> {
+  const upsertResult = await upsertMistakeDetailImage({
+    mistakeId: params.mistakeId,
+    imageType: params.imageType,
+    imageUri: params.imageUri,
+  });
+
+  return {
+    ok: upsertResult.ok,
+    errorMessage: upsertResult.errorMessage,
+  };
+}
+
+export async function upsertMistakeDetailImage(
+  params: UpsertDetailImageParams,
+): Promise<UpsertDetailImageResult> {
   const mistakeId = normalizeMistakeId(params.mistakeId);
   const imageUri = normalizeOptionalText(params.imageUri);
 
@@ -310,27 +371,130 @@ export async function saveOptionalDetailImage(
     };
   }
 
-  try {
-    const imagesOfType = await MistakeImageRepository.getImagesByMistakeIdAndType(mistakeId, params.imageType);
-    const nextSortOrder = imagesOfType.length;
-    await MistakeImageRepository.insertMistakeImages(mistakeId, [
-      {
-        type: params.imageType,
-        uri: imageUri,
-        sort_order: nextSortOrder,
-      },
-    ]);
+  if (!isManagedDetailImageType(params.imageType)) {
+    return {
+      ok: false,
+      errorMessage: 'Unsupported image type.',
+    };
+  }
 
-    Logger.info(SERVICE_SCOPE, 'Saved optional detail image successfully.', {
+  try {
+    const upsertedImage = await MistakeImageRepository.upsertMistakeImage(
+      mistakeId,
+      params.imageType,
+      imageUri,
+    );
+
+    Logger.info(SERVICE_SCOPE, 'Upserted detail image successfully.', {
       mistakeId,
       imageType: params.imageType,
+      imageId: upsertedImage.id,
+      imageUriShort: toShortUri(upsertedImage.uri),
     });
 
-    return { ok: true };
+    return {
+      ok: true,
+      imageId: upsertedImage.id,
+    };
   } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'saveOptionalDetailImage failed.', {
+    Logger.error(SERVICE_SCOPE, 'upsertMistakeDetailImage failed.', {
       mistakeId,
       imageType: params.imageType,
+      imageUriShort: toShortUri(imageUri),
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function deleteMistakeDetailImage(
+  mistakeIdInput: string,
+  imageType: ManagedDetailImageType,
+): Promise<DeleteDetailImageResult> {
+  const mistakeId = normalizeMistakeId(mistakeIdInput);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  if (!isManagedDetailImageType(imageType)) {
+    return {
+      ok: false,
+      errorMessage: 'Unsupported image type.',
+    };
+  }
+
+  try {
+    const deletedCount = await MistakeImageRepository.deleteMistakeImagesByType(mistakeId, imageType);
+    Logger.info(SERVICE_SCOPE, 'Deleted detail image by type successfully.', {
+      mistakeId,
+      imageType,
+      deletedCount,
+    });
+    return {
+      ok: true,
+      deletedCount,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'deleteMistakeDetailImage failed.', {
+      mistakeId,
+      imageType,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function updateMistakeDetailImageUri(
+  params: UpdateDetailImageUriParams,
+): Promise<UpdateDetailImageUriResult> {
+  const imageId = normalizeOptionalText(params.imageId);
+  const newUri = normalizeOptionalText(params.newUri);
+
+  if (!imageId) {
+    return {
+      ok: false,
+      errorMessage: 'Image id cannot be empty.',
+    };
+  }
+
+  if (!newUri) {
+    return {
+      ok: false,
+      errorMessage: 'Image uri cannot be empty.',
+    };
+  }
+
+  try {
+    const updatedImage = await MistakeImageRepository.updateMistakeImageUri(imageId, newUri);
+    if (!updatedImage) {
+      return {
+        ok: false,
+        errorMessage: 'Image not found.',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Updated detail image uri successfully.', {
+      imageId: updatedImage.id,
+      imageType: updatedImage.type,
+      imageUriShort: toShortUri(updatedImage.uri),
+    });
+
+    return {
+      ok: true,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'updateMistakeDetailImageUri failed.', {
+      imageId,
+      imageUriShort: toShortUri(newUri),
       error,
     });
     return {
