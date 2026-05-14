@@ -417,7 +417,7 @@ export default function TodayScreen() {
       }
 
       if (result.reason === 'empty') {
-        showToast('今天暂无可导出的复做题', 'info');
+        showToast('今天没有待复做题，无需导出练习卷', 'info');
         return;
       }
 
