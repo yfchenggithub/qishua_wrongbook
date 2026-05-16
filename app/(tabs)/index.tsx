@@ -216,6 +216,7 @@ export default function TodayScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isStartingSession, setIsStartingSession] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -395,13 +396,28 @@ export default function TodayScreen() {
     [router],
   );
 
-  const handleStartTodayReview = useCallback(() => {
-    const nextId = normalizeMistakeId(priorityItem?.id ?? '');
-    if (!nextId) {
+  const handleStartTodayReview = useCallback(async () => {
+    if (isStartingSession) {
       return;
     }
-    router.push(`/review/${nextId}` as never);
-  }, [priorityItem?.id, router]);
+
+    setIsStartingSession(true);
+    try {
+      const todayQueue = await MistakeListService.getTodayReviewQueue();
+      if (todayQueue.length <= 0) {
+        showToast('今天没有需要复做的错题', 'info');
+        void loadHomeData('refresh');
+        return;
+      }
+
+      router.push('/review/session' as never);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to start today review session.', { error });
+      showToast('读取今日复做队列失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+    } finally {
+      setIsStartingSession(false);
+    }
+  }, [isStartingSession, loadHomeData, router, showToast]);
 
   const handleExportTodayWorksheet = useCallback(async () => {
     if (isExportingPdf) {
@@ -443,6 +459,7 @@ export default function TodayScreen() {
   }, [isExportingPdf, showToast]);
 
   const exportButtonText = isExportingPdf ? '正在生成练习卷…' : '导出今日练习卷';
+  const startTodayReviewButtonText = isStartingSession ? '正在进入今日复做…' : '开始今日复做';
   const canShowExportButton =
     summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
@@ -489,8 +506,14 @@ export default function TodayScreen() {
           {summary.homeStatus === 'dueToday' && priorityItem ? (
             <View style={styles.todayEntryWrap}>
               <MistakeCard item={priorityItem} pressable={() => handleOpenDetail(priorityItem.id)} />
-              <Pressable onPress={handleStartTodayReview} style={styles.primaryActionButton}>
-                <Text style={styles.primaryActionButtonText}>开始今日复做</Text>
+              <Pressable
+                onPress={() => void handleStartTodayReview()}
+                disabled={isStartingSession}
+                style={[
+                  styles.primaryActionButton,
+                  isStartingSession ? styles.primaryActionButtonDisabled : null,
+                ]}>
+                <Text style={styles.primaryActionButtonText}>{startTodayReviewButtonText}</Text>
               </Pressable>
               <Pressable
                 onPress={() => void handleExportTodayWorksheet()}
@@ -694,6 +717,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.black,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+  },
+  primaryActionButtonDisabled: {
+    opacity: 0.6,
   },
   primaryActionButtonText: {
     ...typography.caption,

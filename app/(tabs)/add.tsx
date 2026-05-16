@@ -1021,8 +1021,6 @@ export default function AddScreen() {
       setSaveErrorMessage(null);
       showToast(normalizedErrors[0] ?? '校验未通过', 'warning');
       return true;
-      showToast(normalizedErrors[0] ?? '校验未通过', 'warning');
-      return true;
     }
 
     setValidationErrors([]);
