@@ -1,4 +1,4 @@
-import { getDatabase, initDatabase } from '@/src/db';
+import { getDatabase, initDatabase, withDatabaseTransaction } from '@/src/db';
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type {
   CreateMistakeInput,
@@ -115,6 +115,14 @@ type CountRow = {
   total: number | null;
 };
 
+type ModuleQuestionCounterRow = {
+  last_question_no: number | null;
+};
+
+type MistakeTitleRow = {
+  title: string | null;
+};
+
 type QueryConditions = {
   whereSql: string;
   bindParams: (string | number)[];
@@ -218,6 +226,113 @@ function normalizeLimitOrDefault(value: number | undefined, defaultValue: number
 function normalizeOffsetOrDefault(value: number | undefined, defaultValue: number): number {
   const normalized = normalizeOffset(value);
   return normalized ?? defaultValue;
+}
+
+function normalizePositiveInteger(value: number, fieldName: string): number {
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    throw new Error(`${fieldName} must be a positive integer.`);
+  }
+  return normalized;
+}
+
+function normalizeRequiredModule(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) {
+    throw new Error('module must be a non-empty string.');
+  }
+  return normalized;
+}
+
+function parseQuestionNoFromTitle(title: string | null | undefined): number | null {
+  if (typeof title !== 'string') {
+    return null;
+  }
+  const normalized = title.trim();
+  if (!normalized) {
+    return null;
+  }
+  const matched = normalized.match(/第\s*(\d+)\s*题\s*$/u);
+  if (!matched) {
+    return null;
+  }
+  const parsed = Number.parseInt(matched[1], 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+async function resolveBootstrapLastQuestionNoByModule(
+  db: SQLite.SQLiteDatabase,
+  moduleName: string,
+): Promise<number> {
+  const countRow = await db.getFirstAsync<CountRow>(
+    `SELECT COUNT(*) AS total
+FROM mistakes
+WHERE module = ?;`,
+    moduleName,
+  );
+  const totalCount = Number(countRow?.total ?? 0);
+
+  const titleRows = await db.getAllAsync<MistakeTitleRow>(
+    `SELECT title
+FROM mistakes
+WHERE module = ?;`,
+    moduleName,
+  );
+
+  let maxTitleQuestionNo = 0;
+  for (const row of titleRows) {
+    const parsedQuestionNo = parseQuestionNoFromTitle(row.title);
+    if (!parsedQuestionNo) {
+      continue;
+    }
+    if (parsedQuestionNo > maxTitleQuestionNo) {
+      maxTitleQuestionNo = parsedQuestionNo;
+    }
+  }
+
+  return Math.max(totalCount, maxTitleQuestionNo);
+}
+
+async function reserveQuestionNumbersByModuleInTransactionInternal(
+  db: SQLite.SQLiteDatabase,
+  moduleInput: string,
+  countInput: number,
+): Promise<number[]> {
+  const moduleName = normalizeRequiredModule(moduleInput);
+  const count = normalizePositiveInteger(countInput, 'count');
+  const now = nowIso();
+
+  const counterRow = await db.getFirstAsync<ModuleQuestionCounterRow>(
+    `SELECT last_question_no
+FROM module_question_counters
+WHERE module = ?
+LIMIT 1;`,
+    moduleName,
+  );
+
+  let currentLastQuestionNo: number;
+  if (counterRow && typeof counterRow.last_question_no === 'number') {
+    currentLastQuestionNo = Math.max(0, Math.floor(counterRow.last_question_no));
+  } else {
+    currentLastQuestionNo = await resolveBootstrapLastQuestionNoByModule(db, moduleName);
+  }
+
+  const nextLastQuestionNo = currentLastQuestionNo + count;
+  await db.runAsync(
+    `INSERT INTO module_question_counters (module, last_question_no, updated_at)
+VALUES (?, ?, ?)
+ON CONFLICT(module) DO UPDATE
+SET last_question_no = excluded.last_question_no,
+    updated_at = excluded.updated_at;`,
+    moduleName,
+    nextLastQuestionNo,
+    now,
+  );
+
+  return Array.from({ length: count }, (_, index) => currentLastQuestionNo + index + 1);
 }
 
 function normalizeDueCutoff(todayIsoDate?: string): string {
@@ -379,6 +494,42 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
 }
 
 export const MistakeRepository = {
+  async reserveNextQuestionNumbersByModule(
+    moduleName: string,
+    count = 1,
+  ): Promise<number[]> {
+    try {
+      await ensureDatabaseReady();
+      return await withDatabaseTransaction(async (db) =>
+        reserveQuestionNumbersByModuleInTransactionInternal(db, moduleName, count),
+      );
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'reserveNextQuestionNumbersByModule failed.', {
+        moduleName,
+        count,
+        error,
+      });
+      throw error;
+    }
+  },
+
+  async reserveNextQuestionNumbersByModuleInTransaction(
+    db: SQLite.SQLiteDatabase,
+    moduleName: string,
+    count = 1,
+  ): Promise<number[]> {
+    try {
+      return await reserveQuestionNumbersByModuleInTransactionInternal(db, moduleName, count);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'reserveNextQuestionNumbersByModuleInTransaction failed.', {
+        moduleName,
+        count,
+        error,
+      });
+      throw error;
+    }
+  },
+
   async createMistake(input: CreateMistakeInput): Promise<Mistake> {
     try {
       await ensureDatabaseReady();

@@ -63,6 +63,17 @@ export type UpdateDetailImageUriResult = {
   errorMessage?: string;
 };
 
+export type UpdateMistakeTitleParams = {
+  mistakeId: string;
+  title: string;
+};
+
+export type UpdateMistakeTitleResult = {
+  ok: boolean;
+  detail?: MistakeDetailViewModel;
+  errorMessage?: string;
+};
+
 type SlotSeed = {
   type: DetailImageSlot['type'];
   title: string;
@@ -495,6 +506,65 @@ export async function updateMistakeDetailImageUri(
     Logger.error(SERVICE_SCOPE, 'updateMistakeDetailImageUri failed.', {
       imageId,
       imageUriShort: toShortUri(newUri),
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function updateMistakeTitle(
+  params: UpdateMistakeTitleParams,
+): Promise<UpdateMistakeTitleResult> {
+  const mistakeId = normalizeMistakeId(params.mistakeId);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  const nextTitle = normalizeOptionalText(params.title);
+  if (!nextTitle) {
+    return {
+      ok: false,
+      errorMessage: '题目名字不能为空。',
+    };
+  }
+
+  try {
+    const updated = await MistakeRepository.updateMistake(mistakeId, {
+      title: nextTitle,
+    });
+    if (!updated) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Updated mistake title successfully.', {
+      mistakeId,
+      titleLength: nextTitle.length,
+    });
+
+    const detailResult = await getMistakeDetail(mistakeId);
+    if (!detailResult.ok || !detailResult.detail) {
+      return {
+        ok: false,
+        errorMessage: detailResult.errorMessage ?? '标题已更新，但刷新详情失败。',
+      };
+    }
+
+    return {
+      ok: true,
+      detail: detailResult.detail,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'updateMistakeTitle failed.', {
+      mistakeId,
       error,
     });
     return {

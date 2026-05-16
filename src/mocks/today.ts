@@ -21,7 +21,7 @@ export interface TodayMistakeMock {
 export const todayMock = {
   brand: {
     title: '七刷错题本',
-    subtitle: '只记录错题、做法、答案和 7 次复做',
+    subtitle: '巩固薄弱，帮你把错题变成分数',
   },
   taskSummary: {
     title: '今日任务',
@@ -78,4 +78,3 @@ export const todayMock = {
     },
   ] satisfies TodayMistakeMock[],
 } as const;
-

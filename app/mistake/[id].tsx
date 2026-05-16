@@ -8,6 +8,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -283,6 +284,9 @@ export default function MistakeDetailScreen() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
+  const [isTitleEditing, setIsTitleEditing] = useState(false);
+  const [titleInput, setTitleInput] = useState('');
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
@@ -476,6 +480,16 @@ export default function MistakeDetailScreen() {
     [],
   );
 
+  useEffect(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+    if (isTitleEditing) {
+      return;
+    }
+    setTitleInput(state.detail.title);
+  }, [isTitleEditing, state]);
+
   const detailSlots = state.kind === 'success' ? state.detail.imageSlots : [];
 
   const {
@@ -562,6 +576,71 @@ export default function MistakeDetailScreen() {
     [router, state],
   );
 
+  const handleStartTitleEdit = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+    setTitleInput(state.detail.title);
+    setIsTitleEditing(true);
+  }, [state]);
+
+  const handleCancelTitleEdit = useCallback(() => {
+    if (state.kind === 'success') {
+      setTitleInput(state.detail.title);
+    }
+    setIsTitleEditing(false);
+  }, [state]);
+
+  const handleSaveTitle = useCallback(async () => {
+    if (state.kind !== 'success' || isSavingTitle) {
+      return;
+    }
+
+    const normalizedTitle = titleInput.trim();
+    if (!normalizedTitle) {
+      showToast('题目名字不能为空。', 'error');
+      return;
+    }
+
+    if (normalizedTitle === state.detail.title.trim()) {
+      setIsTitleEditing(false);
+      showToast('题目名字未变化。', 'info');
+      return;
+    }
+
+    setIsSavingTitle(true);
+    try {
+      const result = await MistakeDetailService.updateMistakeTitle({
+        mistakeId: state.detail.id,
+        title: normalizedTitle,
+      });
+
+      if (!result.ok || !result.detail) {
+        showToast(result.errorMessage ?? '更新题目名字失败，请重试。', 'error');
+        return;
+      }
+
+      setState({
+        kind: 'success',
+        detail: result.detail,
+      });
+      setTitleInput(result.detail.title);
+      setIsTitleEditing(false);
+      showToast('题目名字已更新。', 'success');
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Unexpected error while updating title.', {
+        routeId,
+        error,
+      });
+      showToast(
+        error instanceof Error ? error.message : '更新题目名字失败，请重试。',
+        'error',
+      );
+    } finally {
+      setIsSavingTitle(false);
+    }
+  }, [isSavingTitle, routeId, showToast, state, titleInput]);
+
   return (
     <View style={styles.pageRoot}>
       <ScreenContainer scroll contentStyle={styles.screenContent}>
@@ -601,7 +680,56 @@ export default function MistakeDetailScreen() {
           <>
             <CardContainer style={styles.summaryCard} padding={spacing.xl}>
               <Text style={styles.summaryMeta}>{state.detail.module}</Text>
-              <Text style={styles.summaryTitle}>{state.detail.title}</Text>
+              <View style={styles.summaryTitleRow}>
+                {isTitleEditing ? (
+                  <TextInput
+                    value={titleInput}
+                    onChangeText={setTitleInput}
+                    editable={!isSavingTitle}
+                    placeholder="请输入题目名字"
+                    placeholderTextColor={colors.textMuted}
+                    style={styles.summaryTitleInput}
+                    maxLength={80}
+                    autoFocus
+                    returnKeyType="done"
+                    onSubmitEditing={() => {
+                      void handleSaveTitle();
+                    }}
+                  />
+                ) : (
+                  <Text style={styles.summaryTitle}>{state.detail.title}</Text>
+                )}
+                <Pressable
+                  onPress={isTitleEditing ? handleCancelTitleEdit : handleStartTitleEdit}
+                  disabled={isSavingTitle}
+                  style={({ pressed }) => [
+                    styles.titleEditButton,
+                    pressed && styles.titleEditButtonPressed,
+                    isSavingTitle && styles.titleEditButtonDisabled,
+                  ]}>
+                  <Text style={styles.titleEditButtonText}>
+                    {isTitleEditing ? '取消' : '编辑'}
+                  </Text>
+                </Pressable>
+              </View>
+              {isTitleEditing ? (
+                <View style={styles.summaryTitleActionRow}>
+                  <Pressable
+                    onPress={() => {
+                      void handleSaveTitle();
+                    }}
+                    disabled={isSavingTitle}
+                    style={({ pressed }) => [
+                      styles.titleSaveButton,
+                      pressed && styles.titleSaveButtonPressed,
+                      isSavingTitle && styles.titleSaveButtonDisabled,
+                    ]}>
+                    <Text style={styles.titleSaveButtonText}>
+                      {isSavingTitle ? '保存中...' : '保存题目名字'}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
               <Text style={styles.summarySubtitle}>{state.detail.subtitle}</Text>
 
               <View style={styles.summaryBottomRow}>
@@ -806,9 +934,70 @@ const styles = StyleSheet.create({
   },
   summaryTitle: {
     ...typography.titleMedium,
-    marginTop: spacing.xs,
     fontSize: 32,
     lineHeight: 40,
+    flex: 1,
+  },
+  summaryTitleRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  summaryTitleInput: {
+    ...typography.titleMedium,
+    flex: 1,
+    fontSize: 28,
+    lineHeight: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    color: colors.textPrimary,
+  },
+  titleEditButton: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  titleEditButtonPressed: {
+    opacity: 0.86,
+  },
+  titleEditButtonDisabled: {
+    opacity: 0.6,
+  },
+  titleEditButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  summaryTitleActionRow: {
+    marginTop: spacing.sm,
+  },
+  titleSaveButton: {
+    alignSelf: 'flex-start',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  titleSaveButtonPressed: {
+    opacity: 0.88,
+  },
+  titleSaveButtonDisabled: {
+    opacity: 0.6,
+  },
+  titleSaveButtonText: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '700',
   },
   summarySubtitle: {
     ...typography.body,

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -20,7 +21,6 @@ import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExpor
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
-const QUEUE_LIMIT = 3;
 const UPCOMING_DAYS = 3;
 const TOAST_DURATION_DEFAULT = 2200;
 const TOAST_DURATION_LONG = 3200;
@@ -101,6 +101,10 @@ function ThumbnailPlaceholder() {
       <View style={styles.thumbCurve} />
     </View>
   );
+}
+
+function getNextReviewIndex(reviewCount: number, maxReviewCount: number): number {
+  return Math.max(1, Math.min(maxReviewCount, reviewCount + 1));
 }
 
 function MistakeCard({
@@ -204,6 +208,34 @@ function UpcomingPlanCard({
       {day.remainingCount > 0 ? (
         <Text style={styles.upcomingRemainText}>还有 {day.remainingCount} 道未展示</Text>
       ) : null}
+    </CardContainer>
+  );
+}
+
+function TodayQueueListCard({
+  items,
+  onOpenDetail,
+}: {
+  items: MistakeListItem[];
+  onOpenDetail: (id: string) => void;
+}) {
+  return (
+    <CardContainer padding={spacing.md} style={styles.upcomingCard}>
+      <Text style={styles.upcomingDayTitle}>今天 · {items.length} 道</Text>
+      <View style={styles.upcomingItemList}>
+        {items.map((item) => (
+          <Pressable key={item.id} onPress={() => onOpenDetail(item.id)}>
+            <View style={styles.upcomingItemRow}>
+              <Text numberOfLines={1} style={styles.upcomingItemTitle}>
+                {item.title}
+              </Text>
+              <Text style={styles.upcomingItemMeta}>
+                第 {getNextReviewIndex(item.reviewCount, item.maxReviewCount)} / {item.maxReviewCount} 刷
+              </Text>
+            </View>
+          </Pressable>
+        ))}
+      </View>
     </CardContainer>
   );
 }
@@ -347,12 +379,7 @@ export default function TodayScreen() {
     [],
   );
 
-  const todayQueuePreview = useMemo(
-    () => summary.todayQueue.slice(0, QUEUE_LIMIT),
-    [summary.todayQueue],
-  );
-
-  const priorityItem = todayQueuePreview[0] ?? null;
+  const todayQueueList = useMemo(() => summary.todayQueue, [summary.todayQueue]);
 
   const upcomingDays = useMemo(
     () => summary.upcomingPlan.filter((day) => day.totalCount > 0).slice(0, UPCOMING_DAYS),
@@ -501,11 +528,9 @@ export default function TodayScreen() {
       </CardContainer>
 
       <View style={styles.sectionBlock}>
-        <SectionTitle title="今日入口" />
         <View style={styles.sectionContent}>
-          {summary.homeStatus === 'dueToday' && priorityItem ? (
+          {summary.homeStatus === 'dueToday' ? (
             <View style={styles.todayEntryWrap}>
-              <MistakeCard item={priorityItem} pressable={() => handleOpenDetail(priorityItem.id)} />
               <Pressable
                 onPress={() => void handleStartTodayReview()}
                 disabled={isStartingSession}
@@ -513,13 +538,19 @@ export default function TodayScreen() {
                   styles.primaryActionButton,
                   isStartingSession ? styles.primaryActionButtonDisabled : null,
                 ]}>
-                <Text style={styles.primaryActionButtonText}>{startTodayReviewButtonText}</Text>
+                <View style={styles.actionButtonContent}>
+                  <MaterialIcons name="task-alt" size={20} color={colors.white} />
+                  <Text style={styles.primaryActionButtonText}>{startTodayReviewButtonText}</Text>
+                </View>
               </Pressable>
               <Pressable
                 onPress={() => void handleExportTodayWorksheet()}
                 disabled={isExportingPdf}
                 style={[styles.secondaryActionButton, isExportingPdf ? styles.secondaryActionButtonDisabled : null]}>
-                <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+                <View style={styles.actionButtonContent}>
+                  <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
+                  <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+                </View>
               </Pressable>
             </View>
           ) : errorMessage && !isLoading ? (
@@ -539,7 +570,10 @@ export default function TodayScreen() {
                     styles.secondaryActionButton,
                     isExportingPdf ? styles.secondaryActionButtonDisabled : null,
                   ]}>
-                  <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+                  <View style={styles.actionButtonContent}>
+                    <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
+                    <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+                  </View>
                 </Pressable>
               ) : null}
             </View>
@@ -550,10 +584,8 @@ export default function TodayScreen() {
       <View style={styles.sectionBlock}>
         <SectionTitle title="今日复做队列" />
         <View style={styles.queueList}>
-          {summary.homeStatus === 'dueToday' && todayQueuePreview.length > 0 ? (
-            todayQueuePreview.map((item) => (
-              <MistakeCard key={item.id} item={item} pressable={() => handleOpenDetail(item.id)} />
-            ))
+          {summary.homeStatus === 'dueToday' && todayQueueList.length > 0 ? (
+            <TodayQueueListCard items={todayQueueList} onOpenDetail={handleOpenDetail} />
           ) : isLoading ? (
             <SectionStateCard message="正在加载今日复做队列..." />
           ) : (
@@ -709,37 +741,47 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontWeight: '700',
   },
+  actionButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
   primaryActionButton: {
-    alignSelf: 'flex-start',
-    borderRadius: radius.lg,
+    width: '100%',
+    minHeight: 56,
+    borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: colors.black,
-    backgroundColor: colors.black,
+    borderColor: '#04070D',
+    backgroundColor: '#04070D',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+    ...shadows.card,
   },
   primaryActionButtonDisabled: {
     opacity: 0.6,
   },
   primaryActionButtonText: {
-    ...typography.caption,
+    ...typography.sectionTitle,
     color: colors.white,
     fontWeight: '700',
   },
   secondaryActionButton: {
-    alignSelf: 'flex-start',
-    borderRadius: radius.lg,
+    width: '100%',
+    minHeight: 56,
+    borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: '#C9CBD2',
     backgroundColor: '#FFFFFF',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
+    ...shadows.card,
   },
   secondaryActionButtonDisabled: {
     opacity: 0.6,
   },
   secondaryActionButtonText: {
-    ...typography.caption,
+    ...typography.sectionTitle,
     color: '#141519',
     fontWeight: '700',
   },

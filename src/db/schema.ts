@@ -48,6 +48,14 @@ CREATE TABLE IF NOT EXISTS mistake_images (
 );
 `;
 
+export const CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS module_question_counters (
+  module TEXT PRIMARY KEY,
+  last_question_no INTEGER NOT NULL CHECK (last_question_no >= 0),
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const CREATE_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
 CREATE INDEX IF NOT EXISTS idx_mistakes_next_review_at ON mistakes(next_review_at);
@@ -67,5 +75,6 @@ export const CREATE_SCHEMA_SQL = `
 ${CREATE_MISTAKES_TABLE_SQL}
 ${CREATE_REVIEW_RECORDS_TABLE_SQL}
 ${CREATE_MISTAKE_IMAGES_TABLE_SQL}
+${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
 ${CREATE_INDEXES_SQL}
 `;

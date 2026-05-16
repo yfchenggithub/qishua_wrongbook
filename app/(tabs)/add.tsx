@@ -105,19 +105,6 @@ function hasValue(value: string | null | undefined): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function pad2(value: number): string {
-  return value < 10 ? `0${value}` : String(value);
-}
-
-function formatDateTimeForTitle(date: Date): string {
-  const year = date.getFullYear();
-  const month = pad2(date.getMonth() + 1);
-  const day = pad2(date.getDate());
-  const hour = pad2(date.getHours());
-  const minute = pad2(date.getMinutes());
-  return `${year}-${month}-${day} ${hour}:${minute}`;
-}
-
 function getModuleLabel(moduleValue: string | null): string {
   if (!moduleValue) {
     return '数学';
@@ -125,6 +112,13 @@ function getModuleLabel(moduleValue: string | null): string {
 
   const option = MODULE_OPTIONS.find((item) => item.value === moduleValue);
   return option?.label ?? moduleValue;
+}
+
+function buildCanonicalQuestionTitle(moduleValue: string | null, questionNo: number): string {
+  const normalizedQuestionNo = Number.isFinite(questionNo) && questionNo > 0
+    ? Math.floor(questionNo)
+    : 1;
+  return `${getModuleLabel(moduleValue)} · 第 ${normalizedQuestionNo} 题`;
 }
 
 function getToastBackgroundColor(type: ToastType): string {
@@ -227,12 +221,7 @@ function buildDraftForQueuedPhoto(
 ): AddMistakeDraft {
   const isSingle = totalCount === 1;
   const now = new Date();
-  const autoTitle = `${getModuleLabel(baseDraft.module)}错题 ${formatDateTimeForTitle(now)}`;
-  const title = hasValue(baseDraft.title)
-    ? baseDraft.title.trim()
-    : totalCount > 1
-      ? `${autoTitle} #${index + 1}`
-      : autoTitle;
+  const title = buildCanonicalQuestionTitle(baseDraft.module, index + 1);
 
   return {
     ...baseDraft,

@@ -4,12 +4,13 @@ import type { ImageType } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
 import { validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
 import { Logger } from '@/src/services/Logger';
+import type * as SQLite from 'expo-sqlite';
 
 const SERVICE_SCOPE = 'CreateMistakeService';
 const DEFAULT_SUBJECT = 'math';
 const FALLBACK_ERROR_MESSAGE = '保存错题失败，请稍后重试。';
 
-type TransactionCapableDatabase = {
+type TransactionCapableDatabase = SQLite.SQLiteDatabase & {
   withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
 };
 
@@ -17,6 +18,10 @@ type CreateMistakeFromDraftResult = {
   ok: boolean;
   mistakeId?: string;
   errorMessage?: string;
+};
+
+type CreateMistakeFromDraftOptions = {
+  questionNo?: number;
 };
 
 type MistakeImageInput = {
@@ -44,6 +49,19 @@ function normalizeOptionalText(value: string | null | undefined): string | undef
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeQuestionNo(questionNo: number | undefined): number {
+  if (typeof questionNo !== 'number' || !Number.isFinite(questionNo)) {
+    return 1;
+  }
+  const normalized = Math.floor(questionNo);
+  return normalized > 0 ? normalized : 1;
+}
+
+function buildCanonicalQuestionTitle(moduleName: string, questionNo: number | undefined): string {
+  const normalizedQuestionNo = normalizeQuestionNo(questionNo);
+  return `${moduleName} · 第 ${normalizedQuestionNo} 题`;
 }
 
 function toShortUri(uri: string | null | undefined): string | null {
@@ -105,6 +123,7 @@ function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
 async function persistDraft(
   draft: AddMistakeDraft,
   mistakeId: string,
+  questionNo: number | undefined,
   onMistakeCreated?: () => void,
 ): Promise<number> {
   const moduleName = draft.module?.trim();
@@ -133,7 +152,7 @@ async function persistDraft(
     id: mistakeId,
     subject: draft.subject?.trim() || DEFAULT_SUBJECT,
     module: moduleName,
-    title: normalizeOptionalText(draft.title),
+    title: buildCanonicalQuestionTitle(moduleName, questionNo),
     error_reason: normalizeOptionalText(draft.errorReason),
     difficulty: draft.difficulty,
     note: normalizeOptionalText(draft.note),
@@ -157,8 +176,31 @@ async function persistDraft(
   return imageInputs.length;
 }
 
+async function resolveQuestionNoForDraft(
+  db: SQLite.SQLiteDatabase,
+  draft: AddMistakeDraft,
+  options?: CreateMistakeFromDraftOptions,
+): Promise<number> {
+  if (typeof options?.questionNo === 'number') {
+    return normalizeQuestionNo(options.questionNo);
+  }
+
+  const moduleName = draft.module?.trim();
+  if (!moduleName) {
+    throw new Error('模块不能为空。');
+  }
+
+  const reservedQuestionNumbers = await MistakeRepository.reserveNextQuestionNumbersByModuleInTransaction(
+    db,
+    moduleName,
+    1,
+  );
+  return normalizeQuestionNo(reservedQuestionNumbers[0]);
+}
+
 export async function createMistakeFromDraft(
   draft: AddMistakeDraft,
+  options?: CreateMistakeFromDraftOptions,
 ): Promise<CreateMistakeFromDraftResult> {
   const imagePresence = getDraftImagePresence(draft);
   Logger.info(SERVICE_SCOPE, 'Start saving mistake draft.', {
@@ -196,7 +238,8 @@ export async function createMistakeFromDraft(
   try {
     const db = (await getDatabase()) as TransactionCapableDatabase;
     const runPersistFlow = async () => {
-      mistakeImageCount = await persistDraft(draft, mistakeId, () => {
+      const questionNo = await resolveQuestionNoForDraft(db, draft, options);
+      mistakeImageCount = await persistDraft(draft, mistakeId, questionNo, () => {
         mistakeCreated = true;
       });
     };

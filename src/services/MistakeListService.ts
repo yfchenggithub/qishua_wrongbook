@@ -160,11 +160,12 @@ function buildStatusLabel(mistake: Mistake): string {
 }
 
 function buildTitle(module: string, title?: string | null): string {
-  const normalizedTitle = typeof title === 'string' ? title.trim() : '';
-  if (normalizedTitle.length > 0) {
+  const normalizedTitle = normalizeOptionalText(title);
+  if (normalizedTitle) {
     return normalizedTitle;
   }
-  return `${module}错题`;
+  const normalizedModule = normalizeOptionalText(module) ?? '未分类';
+  return `${normalizedModule} · 第 1 题`;
 }
 
 function buildSubtitle(mistake: Mistake): string {
