@@ -218,7 +218,7 @@ export default function ReviewSessionPage() {
   );
 
   const navigateHome = useCallback(() => {
-    router.replace('/(tabs)/index' as never);
+    router.replace('/(tabs)' as never);
   }, [router]);
 
   const handleRequestExit = useCallback(() => {
@@ -320,7 +320,7 @@ export default function ReviewSessionPage() {
     setCurrentQuestionSlot(undefined);
 
     const loadCurrent = async () => {
-      const result = await ReviewSessionService.loadSessionMistake(currentQueueItem.id);
+      const result = await ReviewSessionService.loadTodayReviewItem(currentQueueItem.id);
       if (requestId !== currentRequestIdRef.current) {
         return;
       }
@@ -368,7 +368,7 @@ export default function ReviewSessionPage() {
 
       setIsSubmitting(true);
       try {
-        const submitResult = await ReviewSessionService.submitSessionReviewResult({
+        const submitResult = await ReviewSessionService.submitTodayReviewResult({
           mistakeId: currentQueueItem.id,
           reviewIndex: currentMeta.nextReviewIndex,
           result,

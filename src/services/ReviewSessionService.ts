@@ -17,7 +17,7 @@ export interface ReviewSessionQueueItem {
   maxReviewCount: number;
 }
 
-export type LoadSessionMistakeResult =
+export type LoadTodayReviewItemResult =
   | {
       ok: true;
       data: ReviewPageData;
@@ -56,7 +56,7 @@ export async function getTodayReviewSessionQueue(): Promise<ReviewSessionQueueIt
   }
 }
 
-export async function loadSessionMistake(mistakeId: string): Promise<LoadSessionMistakeResult> {
+export async function loadTodayReviewItem(mistakeId: string): Promise<LoadTodayReviewItemResult> {
   const normalizedId = typeof mistakeId === 'string' ? mistakeId.trim() : '';
   if (!normalizedId) {
     return {
@@ -89,7 +89,7 @@ export async function loadSessionMistake(mistakeId: string): Promise<LoadSession
       data: result.data,
     };
   } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'loadSessionMistake failed unexpectedly.', {
+    Logger.error(SERVICE_SCOPE, 'loadTodayReviewItem failed unexpectedly.', {
       mistakeId: normalizedId,
       error,
     });
@@ -101,7 +101,7 @@ export async function loadSessionMistake(mistakeId: string): Promise<LoadSession
   }
 }
 
-export async function submitSessionReviewResult(input: {
+export async function submitTodayReviewResult(input: {
   mistakeId: string;
   reviewIndex: number;
   result: ReviewResult;
@@ -114,4 +114,3 @@ export async function submitSessionReviewResult(input: {
     cleanupImageOnFailure: false,
   });
 }
-

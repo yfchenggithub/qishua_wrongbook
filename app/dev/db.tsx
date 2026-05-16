@@ -485,16 +485,6 @@ export default function DevDatabasePage() {
     router.push(`/mistake/${routeId}` as never);
   }
 
-  function handleOpenReviewPage(mistakeId: string) {
-    const routeId = normalizeMistakeId(mistakeId);
-    if (!routeId) {
-      Logger.warn(PAGE_SCOPE, 'Skip opening review because mistake id is empty.', { mistakeId });
-      return;
-    }
-
-    router.push(`/review/${routeId}` as never);
-  }
-
   async function handleLoadImagesByMistakeId(mistakeId: string) {
     await runAction('images', async () => {
       const rows = await MistakeImageRepository.getImagesByMistakeId(mistakeId);
@@ -689,13 +679,6 @@ export default function DevDatabasePage() {
                   onPress={() => handleOpenMistakeDetail(item.id)}
                   disabled={isBusy}>
                   <Text style={styles.secondaryButtonText}>Open Detail</Text>
-                </Pressable>
-
-                <Pressable
-                  style={styles.secondaryButton}
-                  onPress={() => handleOpenReviewPage(item.id)}
-                  disabled={isBusy}>
-                  <Text style={styles.secondaryButtonText}>Open Review</Text>
                 </Pressable>
 
                 <Pressable

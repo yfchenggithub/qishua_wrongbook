@@ -17,7 +17,6 @@ import {
   CardContainer,
   ImagePreviewModal,
   MistakeImageSection,
-  PrimaryButton,
   ProgressDots,
   ScreenContainer,
   SectionTitle,
@@ -95,24 +94,6 @@ function buildCurrentReviewIndex(detail: MistakeDetailViewModel): number | undef
     return undefined;
   }
   return Math.min(detail.maxReviewCount, detail.reviewCount + 1);
-}
-
-function buildReviewButtonTitle(detail: MistakeDetailViewModel): string {
-  if (detail.status === 'mastered') {
-    return '已完成七刷';
-  }
-  if (detail.status === 'archived') {
-    return '已归档';
-  }
-  const nextReview = Math.min(detail.maxReviewCount, detail.reviewCount + 1);
-  return `开始第 ${nextReview} 刷`;
-}
-
-function isReviewButtonDisabled(detail: MistakeDetailViewModel): boolean {
-  if (detail.status !== 'active') {
-    return true;
-  }
-  return detail.reviewCount >= detail.maxReviewCount;
 }
 
 function formatReviewResultLabel(result: DetailReviewRecordItem['result']): string {
@@ -318,19 +299,6 @@ export default function MistakeDetailScreen() {
     }
     router.replace('/(tabs)/library' as never);
   }, [router]);
-
-  const handleStartReview = useCallback(
-    (detail: MistakeDetailViewModel) => {
-      if (detail.status !== 'active') {
-        return;
-      }
-      if (detail.reviewCount >= detail.maxReviewCount) {
-        return;
-      }
-      router.push(`/review/${detail.id}` as never);
-    },
-    [router],
-  );
 
   const hideToast = useCallback(() => {
     Animated.parallel([
@@ -724,11 +692,6 @@ export default function MistakeDetailScreen() {
               )}
             </CardContainer>
 
-            <PrimaryButton
-              title={buildReviewButtonTitle(state.detail)}
-              disabled={isReviewButtonDisabled(state.detail)}
-              onPress={() => handleStartReview(state.detail)}
-            />
           </>
         ) : null}
 

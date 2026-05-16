@@ -48,7 +48,6 @@ export default function RootLayout() {
           <Stack.Screen name="mistake/[id]" options={{ headerShown: false }} />
           <Stack.Screen name="mistake/[id]/image-edit" options={{ headerShown: false }} />
           <Stack.Screen name="review/session" options={{ headerShown: false }} />
-          <Stack.Screen name="review/[id]" options={{ headerShown: false }} />
           <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         </Stack>
         <StatusBar style="auto" />
