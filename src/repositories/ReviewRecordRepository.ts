@@ -36,6 +36,11 @@ export interface ReviewRecordResultStats {
   wrong: number;
 }
 
+export interface ListAllReviewRecordsOptions {
+  limit?: number;
+  offset?: number;
+}
+
 let databaseReady = false;
 let databaseInitPromise: Promise<void> | null = null;
 
@@ -119,6 +124,36 @@ function normalizeRangeIso(value: string, fieldName: string): string {
   }
 
   return trimmed;
+}
+
+function normalizeLimit(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('limit must be a finite number.');
+  }
+
+  const normalized = Math.floor(value);
+  if (normalized < 0) {
+    throw new Error('limit must be >= 0.');
+  }
+  return normalized;
+}
+
+function normalizeOffset(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('offset must be a finite number.');
+  }
+
+  const normalized = Math.floor(value);
+  if (normalized < 0) {
+    throw new Error('offset must be >= 0.');
+  }
+  return normalized;
 }
 
 function buildReviewRecord(
@@ -207,6 +242,40 @@ LIMIT 1;`,
       return mapReviewRecordRow(row);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'getLatestReviewRecord failed.', { mistakeId, error });
+      throw error;
+    }
+  },
+
+  async listAllReviewRecords(options?: ListAllReviewRecordsOptions): Promise<ReviewRecord[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const limit = normalizeLimit(options?.limit);
+      const offset = normalizeOffset(options?.offset);
+      let paginationSql = '';
+      const paginationParams: number[] = [];
+
+      if (limit !== undefined) {
+        paginationSql = '\nLIMIT ?';
+        paginationParams.push(limit);
+        if (offset !== undefined) {
+          paginationSql += '\nOFFSET ?';
+          paginationParams.push(offset);
+        }
+      } else if (offset !== undefined) {
+        paginationSql = '\nLIMIT -1\nOFFSET ?';
+        paginationParams.push(offset);
+      }
+
+      const rows = await db.getAllAsync<ReviewRecord>(
+        `${SELECT_REVIEW_RECORD_FIELDS_SQL}
+ORDER BY created_at ASC, id ASC${paginationSql};`,
+        ...paginationParams,
+      );
+
+      return rows.map(mapReviewRecordRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listAllReviewRecords failed.', { options, error });
       throw error;
     }
   },

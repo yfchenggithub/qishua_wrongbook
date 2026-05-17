@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import { Logger } from '@/src/services/Logger';
+import * as BackupService from '@/src/services/backup/BackupService';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
@@ -181,6 +182,7 @@ export default function SettingsScreen() {
   const [overviewErrorMessage, setOverviewErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
+  const [isBackingUp, setIsBackingUp] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
   const [isCleaningOrphanImages, setIsCleaningOrphanImages] = useState(false);
   const [reminderSettings, setReminderSettings] =
@@ -450,7 +452,53 @@ export default function SettingsScreen() {
     );
   }, [disableDeveloperMode]);
 
+  const startBackupToFile = useCallback(async () => {
+    if (isBackingUp) {
+      return;
+    }
+
+    setIsBackingUp(true);
+    Logger.info(PAGE_SCOPE, 'Start backup flow from settings.', { reason: 'manual' });
+    try {
+      showToast('正在整理备份文件…', 'info', TOAST_DURATION_LONG);
+      const result = await BackupService.createBackup({ reason: 'manual' });
+      await BackupService.shareBackup(result.fileUri);
+      showToast('备份文件已生成，请保存到安全位置。', 'success', TOAST_DURATION_LONG);
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      Logger.error(PAGE_SCOPE, 'Backup flow failed from settings.', {
+        errorName,
+        errorMessage,
+      });
+      Alert.alert('备份失败', '请稍后重试。如果仍然失败，请在设置页打开日志查看原因。');
+    } finally {
+      setIsBackingUp(false);
+    }
+  }, [isBackingUp, showToast]);
+
   const handleStartBackup = useCallback(() => {
+    if (typeof BackupService.createBackup === 'function') {
+      if (isBackingUp) {
+        return;
+      }
+
+      Alert.alert(
+        '备份当前数据？',
+        '将导出所有错题、复做记录和图片。备份文件可以保存到微信、网盘或文件管理器中。',
+        [
+          { text: '取消', style: 'cancel' },
+          {
+            text: '开始备份',
+            onPress: () => {
+              void startBackupToFile();
+            },
+          },
+        ],
+      );
+      return;
+    }
+
     Logger.info(PAGE_SCOPE, 'Start backup from settings.', { supported: false });
     try {
       showToast('备份功能即将支持', 'info');
@@ -464,7 +512,7 @@ export default function SettingsScreen() {
       Logger.error(PAGE_SCOPE, 'Backup action failed unexpectedly.', { error });
       showToast('备份功能暂不可用，请稍后重试', 'warning');
     }
-  }, [showToast]);
+  }, [isBackingUp, showToast, startBackupToFile]);
 
   const handleRestoreFromBackup = useCallback(() => {
     Alert.alert(
@@ -881,17 +929,28 @@ export default function SettingsScreen() {
               </Text>
               <View style={styles.actionRow}>
                 <Pressable
+                  accessibilityLabel={isBackingUp ? '正在整理备份文件…' : '备份到文件'}
                   accessibilityRole="button"
+                  disabled={isBackingUp}
                   onPress={handleStartBackup}
-                  style={[styles.actionButton, styles.actionButtonGreen]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
+                  style={[
+                    styles.actionButton,
+                    styles.actionButtonGreen,
+                    isBackingUp ? styles.disabledButton : null,
+                  ]}>
+                  <Text
+                    numberOfLines={1}
+                    style={[styles.actionButtonText, styles.actionButtonTextGreen, { fontSize: 0 }]}>
+                    <Text style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
+                      {isBackingUp ? '正在整理备份文件…' : '备份到文件'}
+                    </Text>
                     立即备份
                   </Text>
                 </Pressable>
                 <Pressable
                   accessibilityRole="button"
                   onPress={handleRestoreFromBackup}
-                  style={[styles.actionButton, styles.actionButtonGreen]}>
+                  style={[styles.actionButton, styles.actionButtonGreen, { display: 'none' }]}>
                   <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
                     从备份恢复
                   </Text>

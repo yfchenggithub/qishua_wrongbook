@@ -27,6 +27,8 @@ export interface BackupPackageManifest {
   warnings: string[];
 }
 
+export type BackupManifest = BackupPackageManifest;
+
 export type BackupMistakeRecord = Mistake;
 
 export interface BackupMistakeImageRecord {
@@ -49,6 +51,11 @@ export interface BackupDataPayload {
   extra: Record<string, unknown>;
 }
 
+export interface BackupImageArchiveFile {
+  backupRelativePath: string;
+  bytes: Uint8Array;
+}
+
 export interface BackupPackagePreview {
   packageUri: string;
   fileName: string;
@@ -63,6 +70,15 @@ export interface BackupCreateResult {
   warnings: string[];
 }
 
+export interface CreateBackupOptions {
+  reason: 'manual' | 'before_restore';
+}
+
+export interface CreateBackupServiceResult {
+  fileUri: string;
+  manifest: BackupManifest;
+}
+
 export interface RestoreSafetyBackupInfo {
   backupUri: string;
   fileName: string;
@@ -75,4 +91,3 @@ export interface BackupRestoreResult {
   safetyBackup: RestoreSafetyBackupInfo;
   warnings: string[];
 }
-

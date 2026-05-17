@@ -11,6 +11,11 @@ type MistakeImageUriRow = {
   uri: string | null;
 };
 
+export interface ListAllMistakeImagesOptions {
+  limit?: number;
+  offset?: number;
+}
+
 export interface InsertMistakeImageItem {
   type: InsertableMistakeImageType;
   uri: string;
@@ -113,6 +118,36 @@ function normalizeSortOrder(value: number | undefined, fallbackOrder: number): n
   const normalized = Math.floor(value);
   if (normalized < 0) {
     throw new Error('sort_order must be >= 0.');
+  }
+  return normalized;
+}
+
+function normalizeLimit(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('limit must be a finite number.');
+  }
+
+  const normalized = Math.floor(value);
+  if (normalized < 0) {
+    throw new Error('limit must be >= 0.');
+  }
+  return normalized;
+}
+
+function normalizeOffset(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value)) {
+    throw new Error('offset must be a finite number.');
+  }
+
+  const normalized = Math.floor(value);
+  if (normalized < 0) {
+    throw new Error('offset must be >= 0.');
   }
   return normalized;
 }
@@ -458,6 +493,41 @@ FROM mistake_images;`,
       return Number(row?.total ?? 0);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'countMistakeImages failed.', error);
+      throw error;
+    }
+  },
+
+  async listAllMistakeImages(options?: ListAllMistakeImagesOptions): Promise<MistakeImage[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+
+      const limit = normalizeLimit(options?.limit);
+      const offset = normalizeOffset(options?.offset);
+      let paginationSql = '';
+      const paginationParams: number[] = [];
+
+      if (limit !== undefined) {
+        paginationSql = '\nLIMIT ?';
+        paginationParams.push(limit);
+        if (offset !== undefined) {
+          paginationSql += '\nOFFSET ?';
+          paginationParams.push(offset);
+        }
+      } else if (offset !== undefined) {
+        paginationSql = '\nLIMIT -1\nOFFSET ?';
+        paginationParams.push(offset);
+      }
+
+      const rows = await db.getAllAsync<MistakeImage>(
+        `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+ORDER BY created_at ASC, id ASC${paginationSql};`,
+        ...paginationParams,
+      );
+
+      return rows.map(mapMistakeImageRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listAllMistakeImages failed.', { options, error });
       throw error;
     }
   },

@@ -1,27 +1,107 @@
-import { createNotImplementedBackupError } from '@/src/services/backup/BackupRestoreError';
+import { Directory, File, Paths } from 'expo-file-system';
+import { strToU8, zipSync } from 'fflate';
+
+import {
+  BACKUP_DATA_FILE_NAME,
+  BACKUP_IMAGES_DIR_NAME,
+  BACKUP_MANIFEST_FILE_NAME,
+} from '@/src/services/backup/BackupManifest';
+import {
+  BACKUP_FILE_EXTENSION,
+  type BackupDataPayload,
+  type BackupImageArchiveFile,
+  type BackupManifest,
+} from '@/src/services/backup/BackupTypes';
+import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
+
+const CACHE_BACKUP_DIR_NAME = 'qishua_wrongbook_backups';
+
+export interface CreateBackupPackageInput {
+  fileName: string;
+  manifest: BackupManifest;
+  data: BackupDataPayload;
+  images: BackupImageArchiveFile[];
+}
 
 export interface BackupZipAdapter {
-  createArchive(sourceDirectoryUri: string, targetArchiveUri: string): Promise<void>;
-  extractArchive(archiveUri: string, targetDirectoryUri: string): Promise<void>;
-  listArchiveEntries(archiveUri: string): Promise<string[]>;
+  createBackupPackage(input: CreateBackupPackageInput): Promise<{ fileUri: string; fileName: string }>;
 }
 
-export class PlaceholderBackupZipAdapter implements BackupZipAdapter {
-  async createArchive(sourceDirectoryUri: string, targetArchiveUri: string): Promise<void> {
-    void sourceDirectoryUri;
-    void targetArchiveUri;
-    throw createNotImplementedBackupError('createArchive');
+function normalizeArchivePath(relativePath: string): string {
+  const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
+  if (!normalized) {
+    throw new BackupRestoreError('FILE_IO_FAILED', 'Backup archive image path is empty.');
+  }
+  return normalized;
+}
+
+function normalizeBackupFileName(fileName: string): string {
+  const normalized = fileName.trim();
+  if (!normalized) {
+    throw new BackupRestoreError('FILE_IO_FAILED', 'Backup file name is empty.');
+  }
+  if (!normalized.toLowerCase().endsWith(BACKUP_FILE_EXTENSION)) {
+    throw new BackupRestoreError(
+      'FILE_IO_FAILED',
+      `Backup file name must end with ${BACKUP_FILE_EXTENSION}.`,
+    );
+  }
+  return normalized;
+}
+
+function buildArchiveEntries(input: CreateBackupPackageInput): Record<string, Uint8Array> {
+  const manifestText = JSON.stringify(input.manifest, null, 2);
+  const dataText = JSON.stringify(input.data, null, 2);
+
+  const entries: Record<string, Uint8Array> = {
+    [BACKUP_MANIFEST_FILE_NAME]: strToU8(manifestText),
+    [BACKUP_DATA_FILE_NAME]: strToU8(dataText),
+    [`${BACKUP_IMAGES_DIR_NAME}/`]: new Uint8Array(0),
+  };
+
+  for (const image of input.images) {
+    const imagePath = normalizeArchivePath(image.backupRelativePath);
+    entries[imagePath] = image.bytes;
   }
 
-  async extractArchive(archiveUri: string, targetDirectoryUri: string): Promise<void> {
-    void archiveUri;
-    void targetDirectoryUri;
-    throw createNotImplementedBackupError('extractArchive');
-  }
+  return entries;
+}
 
-  async listArchiveEntries(archiveUri: string): Promise<string[]> {
-    void archiveUri;
-    throw createNotImplementedBackupError('listArchiveEntries');
+function ensureCacheBackupDir(): Directory {
+  const backupDir = new Directory(Paths.cache, CACHE_BACKUP_DIR_NAME);
+  backupDir.create({ intermediates: true, idempotent: true });
+  return backupDir;
+}
+
+export class FflateBackupZipAdapter implements BackupZipAdapter {
+  async createBackupPackage(
+    input: CreateBackupPackageInput,
+  ): Promise<{ fileUri: string; fileName: string }> {
+    const normalizedFileName = normalizeBackupFileName(input.fileName);
+
+    const entries = buildArchiveEntries(input);
+
+    // The backup package uses a zipped container with a custom ".qsbk" extension.
+    const archiveBytes = zipSync(entries, { level: 6 });
+    const backupDir = ensureCacheBackupDir();
+    const file = new File(backupDir, normalizedFileName);
+    file.create({ intermediates: true, overwrite: true });
+    file.write(archiveBytes);
+
+    return {
+      fileUri: file.uri,
+      fileName: normalizedFileName,
+    };
   }
 }
 
+export function ensureBackupImageRelativePath(path: string): string {
+  const normalized = normalizeArchivePath(path);
+  if (!normalized.startsWith(`${BACKUP_IMAGES_DIR_NAME}/`)) {
+    throw new BackupRestoreError(
+      'FILE_IO_FAILED',
+      `Backup image path must start with "${BACKUP_IMAGES_DIR_NAME}/".`,
+    );
+  }
+  return normalized;
+}
