@@ -84,6 +84,13 @@ export interface InspectBackupResult {
   warnings: string[];
 }
 
+export interface RestoreFromBackupResult {
+  restoredMistakes: number;
+  restoredImages: number;
+  restoredReviewRecords: number;
+  beforeRestoreBackupUri?: string;
+}
+
 export interface RestoreSafetyBackupInfo {
   backupUri: string;
   fileName: string;

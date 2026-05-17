@@ -1,15 +1,17 @@
 import Constants from 'expo-constants';
-import { File } from 'expo-file-system';
+import { Directory, File, Paths } from 'expo-file-system';
 import { strFromU8, unzipSync } from 'fflate';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
+import { withDatabaseTransaction } from '@/src/db';
 import { DATABASE_VERSION } from '@/src/db/constants';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { ReviewRecord } from '@/src/models/ReviewRecord';
 import {
+  BACKUP_DATA_FILE_NAME,
   BACKUP_MANIFEST_FILE_NAME,
   BACKUP_IMAGES_DIR_NAME,
   createBackupManifest,
@@ -35,20 +37,76 @@ import {
   type CreateBackupOptions,
   type CreateBackupServiceResult,
   type InspectBackupResult,
+  type RestoreFromBackupResult,
 } from '@/src/services/backup/BackupTypes';
+import { ensureMistakeImageDir } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
 
 const SERVICE_SCOPE = 'BackupService';
 const BACKUP_QUERY_PAGE_SIZE = 200;
+const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
+const RESTORED_IMAGE_EXTENSION_FALLBACK = 'jpg';
 
-type RestoreFromBackupOptions = {
-  backupUri: string;
-  requireUserConfirmation: boolean;
-};
+const INSERT_MISTAKE_SQL = `
+INSERT INTO mistakes (
+  id,
+  subject,
+  module,
+  title,
+  error_reason,
+  difficulty,
+  note,
+  review_count,
+  status,
+  created_at,
+  updated_at,
+  next_review_at,
+  last_review_at,
+  last_review_result
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_REVIEW_RECORD_SQL = `
+INSERT INTO review_records (
+  id,
+  mistake_id,
+  review_index,
+  result,
+  note,
+  created_at
+) VALUES (?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_MISTAKE_IMAGE_SQL = `
+INSERT INTO mistake_images (
+  id,
+  mistake_id,
+  review_record_id,
+  type,
+  uri,
+  sort_order,
+  created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+`;
 
 type BackupCollectContext = {
   counts: BackupCounts;
   warningCount: number;
+};
+
+type RestoreCollectContext = {
+  counts: BackupCounts;
+  warningCount: number;
+};
+
+type ExtractedBackupArchive = {
+  tempDirectory: Directory;
+  entryMap: Map<string, File>;
+  data: BackupDataPayload;
+};
+
+type RestoredMistakeImageInsert = Omit<BackupMistakeImageRecord, 'backupRelativePath' | 'sourceUri'> & {
+  uri: string;
 };
 
 const EMPTY_COUNTS: BackupCounts = {
