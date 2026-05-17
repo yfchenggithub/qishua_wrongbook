@@ -1,8 +1,10 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
+import { optimizeImageForStorage } from '@/src/services/ImageOptimizeService';
 import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
@@ -12,6 +14,9 @@ const EXPORT_DIR_NAME = 'qishua_wrongbook';
 const EXPORT_SUB_DIR_NAME = 'exports';
 const PDF_MIME_TYPE = 'application/pdf';
 const PDF_FILE_PREFIX = 'qishua_today_review';
+const EXPORT_IMAGE_MAX_WIDTH = 1200;
+const EXPORT_IMAGE_MAX_HEIGHT = 1600;
+const EXPORT_IMAGE_QUALITY = 0.55;
 const FALLBACK_EXPORT_ERROR_MESSAGE = '导出失败，请稍后重试';
 const SHARE_UNAVAILABLE_MESSAGE = '当前设备暂不支持分享，请在文件管理中查看已导出的练习卷';
 const EMPTY_MESSAGE = '今天没有待复做题，无需导出练习卷';
@@ -34,7 +39,7 @@ export type ExportTodayReviewPdfResult =
 
 type TodayReviewPdfRenderItem = {
   raw: TodayReviewExportItem;
-  questionImageDataUri: string | null;
+  questionImageSrc: string | null;
 };
 
 function escapeHtml(value: string): string {
@@ -133,6 +138,35 @@ async function toImageDataUri(uri: string): Promise<string | null> {
   }
 }
 
+async function buildQuestionImageSrc(uri: string): Promise<string | null> {
+  const normalizedUri = normalizeOptionalText(uri);
+  if (!normalizedUri) {
+    return null;
+  }
+
+  const optimized = await optimizeImageForStorage({
+    uri: normalizedUri,
+    maxWidth: EXPORT_IMAGE_MAX_WIDTH,
+    maxHeight: EXPORT_IMAGE_MAX_HEIGHT,
+    quality: EXPORT_IMAGE_QUALITY,
+  });
+  const optimizedUri = normalizeOptionalText(optimized.uri);
+  const sourceUri = optimized.ok && optimizedUri ? optimizedUri : normalizedUri;
+
+  if (!optimized.ok) {
+    Logger.warn(SERVICE_SCOPE, 'Image optimization failed before PDF export, fallback to original image.', {
+      uriPreview: toSafeUriPreview(normalizedUri),
+      errorMessage: optimized.errorMessage ?? null,
+    });
+  }
+
+  if (Platform.OS === 'android') {
+    return sourceUri;
+  }
+
+  return toImageDataUri(sourceUri);
+}
+
 function formatDifficultyText(difficulty: number | null): string {
   if (typeof difficulty !== 'number' || !Number.isFinite(difficulty)) {
     return '-';
@@ -165,8 +199,9 @@ function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): s
   const progressText = escapeHtml(formatProgressText(item.raw));
   const difficultyText = escapeHtml(formatDifficultyText(item.raw.difficulty));
   const dueDate = escapeHtml(formatDueDateText(item.raw.dueDate));
-  const questionImageBlock = item.questionImageDataUri
-    ? `<img class="problem-image" src="${item.questionImageDataUri}" alt="题目图片" />`
+  const questionImageSrc = item.questionImageSrc ? escapeHtml(item.questionImageSrc) : null;
+  const questionImageBlock = questionImageSrc
+    ? `<img class="problem-image" src="${questionImageSrc}" alt="题目图片" />`
     : `<div class="image-fallback">题目图片暂时无法加载</div>`;
 
   return `
@@ -389,19 +424,21 @@ function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): st
 }
 
 async function buildRenderItems(items: TodayReviewExportItem[]): Promise<TodayReviewPdfRenderItem[]> {
-  return Promise.all(
-    items.map(async (item) => {
-      const questionImageUri = normalizeOptionalText(item.questionImageUri);
-      const questionImageDataUri = questionImageUri
-        ? await toImageDataUri(questionImageUri)
-        : null;
+  const renderItems: TodayReviewPdfRenderItem[] = [];
 
-      return {
-        raw: item,
-        questionImageDataUri,
-      };
-    }),
-  );
+  for (const item of items) {
+    const questionImageUri = normalizeOptionalText(item.questionImageUri);
+    const questionImageSrc = questionImageUri
+      ? await buildQuestionImageSrc(questionImageUri)
+      : null;
+
+    renderItems.push({
+      raw: item,
+      questionImageSrc,
+    });
+  }
+
+  return renderItems;
 }
 
 async function persistPdfToDocumentDirectory(
