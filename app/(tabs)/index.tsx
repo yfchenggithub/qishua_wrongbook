@@ -17,7 +17,7 @@ import { todayMock } from '@/src/mocks/today';
 import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { Logger } from '@/src/services/Logger';
-import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExportService';
+import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
@@ -453,30 +453,23 @@ export default function TodayScreen() {
 
     setIsExportingPdf(true);
     try {
-      const result = await TodayReviewPdfExportService.exportTodayReviewPdf();
-      if (result.success) {
-        showToast('今日练习卷已生成', 'success');
+      const result = await TodayWorksheetExportService.exportTodayWorksheet();
+      if (result.outcome === 'success') {
+        showToast(result.message, 'success');
         return;
       }
 
-      if (result.reason === 'empty') {
-        showToast('今天没有待复做题，无需导出练习卷', 'info');
+      if (result.outcome === 'empty') {
+        showToast(result.message, 'info');
         return;
       }
 
-      if (result.reason === 'share_unavailable') {
-        Logger.warn(PAGE_SCOPE, 'Sharing unavailable while exporting today worksheet.', {
-          message: result.message,
-        });
-        showToast('当前设备暂不支持分享，请在文件管理中查看已导出的练习卷', 'info');
+      if (result.outcome === 'share_unavailable') {
+        showToast(result.message, 'info');
         return;
       }
 
-      Logger.warn(PAGE_SCOPE, 'Today worksheet export finished without success.', {
-        reason: result.reason,
-        message: result.message,
-      });
-      showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+      showToast(result.message, 'error', TOAST_DURATION_LONG);
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Failed to export today worksheet.', { error });
       showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);

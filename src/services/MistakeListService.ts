@@ -199,6 +199,21 @@ function resolveExportBaseDate(date?: string): Date {
   return new Date();
 }
 
+function buildTodayReviewQueueQuery(baseDate = new Date()): {
+  todayStartIso: string;
+  todayEndIso: string;
+} {
+  const { start: todayStart, end: todayEnd } = getLocalDayRange(baseDate, 0);
+  return {
+    todayStartIso: todayStart.toISOString(),
+    todayEndIso: todayEnd.toISOString(),
+  };
+}
+
+async function listTodayReviewQueueMistakes(baseDate = new Date()): Promise<Mistake[]> {
+  return MistakeRepository.listTodayReviewQueue(buildTodayReviewQueueQuery(baseDate));
+}
+
 function resolveDueDateForExport(nextReviewAt: string | null | undefined, fallbackDate: Date): string {
   const parsedDueDate = parseLocalDateTime(nextReviewAt ?? null);
   if (parsedDueDate) {
@@ -312,12 +327,7 @@ export async function getMistakeListStats(): Promise<{
 
 export async function getTodayReviewQueue(): Promise<MistakeListItem[]> {
   try {
-    const now = new Date();
-    const { start: todayStart, end: todayEnd } = getLocalDayRange(now, 0);
-    const dueMistakes = await MistakeRepository.listTodayReviewQueue({
-      todayStartIso: todayStart.toISOString(),
-      todayEndIso: todayEnd.toISOString(),
-    });
+    const dueMistakes = await listTodayReviewQueueMistakes(new Date());
     return Promise.all(dueMistakes.map(mapMistakeWithCoverToListItem));
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getTodayReviewQueue failed.', error);
@@ -325,14 +335,21 @@ export async function getTodayReviewQueue(): Promise<MistakeListItem[]> {
   }
 }
 
+export async function getTodayReviewQueueCount(): Promise<number> {
+  try {
+    const dueMistakes = await listTodayReviewQueueMistakes(new Date());
+    return dueMistakes.length;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'getTodayReviewQueueCount failed.', error);
+    throw error;
+  }
+}
+
 export async function getTodayReviewExportItems(date?: string): Promise<TodayReviewExportItem[]> {
   try {
     const baseDate = resolveExportBaseDate(date);
-    const { start: todayStart, end: todayEnd } = getLocalDayRange(baseDate, 0);
-    const dueMistakes = await MistakeRepository.listTodayReviewQueue({
-      todayStartIso: todayStart.toISOString(),
-      todayEndIso: todayEnd.toISOString(),
-    });
+    const { start: todayStart } = getLocalDayRange(baseDate, 0);
+    const dueMistakes = await listTodayReviewQueueMistakes(baseDate);
 
     if (dueMistakes.length <= 0) {
       return [];

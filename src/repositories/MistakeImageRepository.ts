@@ -7,6 +7,9 @@ import type * as SQLite from 'expo-sqlite';
 const REPO_SCOPE = 'MistakeImageRepository';
 
 type InsertableMistakeImageType = Exclude<ImageType, 'review_solution'>;
+type MistakeImageUriRow = {
+  uri: string | null;
+};
 
 export interface InsertMistakeImageItem {
   type: InsertableMistakeImageType;
@@ -455,6 +458,24 @@ FROM mistake_images;`,
       return Number(row?.total ?? 0);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'countMistakeImages failed.', error);
+      throw error;
+    }
+  },
+
+  async listAllImageUris(): Promise<string[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const rows = await db.getAllAsync<MistakeImageUriRow>(
+        `SELECT uri
+FROM mistake_images;`,
+      );
+
+      return rows
+        .map((row) => normalizeOptionalText(row.uri))
+        .filter((uri): uri is string => typeof uri === 'string');
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listAllImageUris failed.', error);
       throw error;
     }
   },
