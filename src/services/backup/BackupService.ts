@@ -1,5 +1,6 @@
 import Constants from 'expo-constants';
 import { File } from 'expo-file-system';
+import { strFromU8, unzipSync } from 'fflate';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
@@ -9,8 +10,10 @@ import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { ReviewRecord } from '@/src/models/ReviewRecord';
 import {
+  BACKUP_MANIFEST_FILE_NAME,
   BACKUP_IMAGES_DIR_NAME,
   createBackupManifest,
+  validateBackupManifest,
 } from '@/src/services/backup/BackupManifest';
 import { BackupRestoreError, createNotImplementedBackupError } from '@/src/services/backup/BackupRestoreError';
 import {
@@ -21,6 +24,8 @@ import {
 import {
   BACKUP_FILE_EXTENSION,
   BACKUP_FILE_NAME_PREFIX,
+  BACKUP_FORMAT,
+  BACKUP_FORMAT_VERSION,
   type BackupCounts,
   type BackupDataPayload,
   type BackupDevicePlatform,
@@ -29,6 +34,7 @@ import {
   type BackupMistakeImageRecord,
   type CreateBackupOptions,
   type CreateBackupServiceResult,
+  type InspectBackupResult,
 } from '@/src/services/backup/BackupTypes';
 import { Logger } from '@/src/services/Logger';
 
@@ -155,6 +161,72 @@ function logBackupEvent(
     errorMessage: context?.errorMessage ?? null,
     reason: context?.reason ?? null,
   });
+}
+
+function getFileShortInfo(fileUri: string): string {
+  try {
+    const file = new File(fileUri);
+    const name = normalizeOptionalText(file.name) ?? 'unknown.qsbk';
+    return name.length <= 40 ? name : `${name.slice(0, 20)}...${name.slice(-16)}`;
+  } catch {
+    return 'unknown.qsbk';
+  }
+}
+
+function logRestoreInspectEvent(
+  message: string,
+  sessionId: string,
+  fileShortInfo: string,
+  context?: {
+    counts?: BackupCounts;
+    warningCount?: number;
+    errorName?: string | null;
+    errorMessage?: string | null;
+  },
+): void {
+  Logger.info(SERVICE_SCOPE, message, {
+    sessionId,
+    fileShortInfo,
+    counts: context?.counts ?? EMPTY_COUNTS,
+    warningCount: context?.warningCount ?? 0,
+    errorName: context?.errorName ?? null,
+    errorMessage: context?.errorMessage ?? null,
+  });
+}
+
+function buildFormatIncorrectError(): BackupRestoreError {
+  return new BackupRestoreError('UNSUPPORTED_FORMAT', '备份文件格式不正确');
+}
+
+function buildCorruptedBackupError(): BackupRestoreError {
+  return new BackupRestoreError('INVALID_MANIFEST', '备份文件已损坏');
+}
+
+function buildUnsupportedVersionError(): BackupRestoreError {
+  return new BackupRestoreError('UNSUPPORTED_FORMAT', '备份版本暂不支持');
+}
+
+function isPositiveOrZeroNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function ensureManifestRequiredFields(manifest: BackupManifest): BackupManifest {
+  if (!manifest.appName || !manifest.appVersion || !manifest.createdAt) {
+    throw buildCorruptedBackupError();
+  }
+
+  const counts = manifest.counts;
+  if (
+    !counts ||
+    !isPositiveOrZeroNumber(counts.mistakes) ||
+    !isPositiveOrZeroNumber(counts.mistakeImages) ||
+    !isPositiveOrZeroNumber(counts.reviewRecords) ||
+    !isPositiveOrZeroNumber(counts.imageFiles)
+  ) {
+    throw buildCorruptedBackupError();
+  }
+
+  return manifest;
 }
 
 async function listAllMistakes(): Promise<Mistake[]> {
@@ -391,6 +463,96 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       errorMessage: normalizedError.message,
       reason,
     });
+    throw normalizedError;
+  }
+}
+
+export async function inspectBackup(fileUri: string): Promise<InspectBackupResult> {
+  const sessionId = buildSessionId();
+  const fileShortInfo = getFileShortInfo(fileUri);
+
+  logRestoreInspectEvent('restore_inspect_start', sessionId, fileShortInfo);
+
+  try {
+    const normalizedUri = normalizeOptionalText(fileUri);
+    if (!normalizedUri) {
+      throw buildFormatIncorrectError();
+    }
+
+    const file = new File(normalizedUri);
+    const fileName = normalizeOptionalText(file.name)?.toLowerCase() ?? '';
+    if (!fileName.endsWith(BACKUP_FILE_EXTENSION)) {
+      throw buildFormatIncorrectError();
+    }
+    if (!file.exists) {
+      throw buildCorruptedBackupError();
+    }
+
+    const archiveBytes = await file.bytes();
+    let archiveEntries: Record<string, Uint8Array>;
+    try {
+      archiveEntries = unzipSync(archiveBytes);
+    } catch {
+      throw buildCorruptedBackupError();
+    }
+
+    const manifestBytes = archiveEntries[BACKUP_MANIFEST_FILE_NAME];
+    if (!manifestBytes) {
+      throw buildFormatIncorrectError();
+    }
+
+    let manifestRaw: unknown;
+    try {
+      manifestRaw = JSON.parse(strFromU8(manifestBytes));
+    } catch {
+      throw buildCorruptedBackupError();
+    }
+
+    const validated = validateBackupManifest(manifestRaw);
+    if (!validated.ok || !validated.manifest) {
+      if (validated.errors.some((error) => error.includes('format is invalid'))) {
+        throw buildFormatIncorrectError();
+      }
+      throw buildCorruptedBackupError();
+    }
+
+    const manifest = validated.manifest;
+    if (manifest.format !== BACKUP_FORMAT) {
+      throw buildFormatIncorrectError();
+    }
+    if (manifest.formatVersion !== BACKUP_FORMAT_VERSION) {
+      throw buildUnsupportedVersionError();
+    }
+
+    const normalizedManifest = ensureManifestRequiredFields(manifest);
+    const warnings = Array.isArray(normalizedManifest.warnings) ? normalizedManifest.warnings : [];
+
+    logRestoreInspectEvent('restore_inspect_done', sessionId, fileShortInfo, {
+      counts: normalizedManifest.counts,
+      warningCount: warnings.length,
+    });
+
+    return {
+      manifest: normalizedManifest,
+      warnings,
+    };
+  } catch (error) {
+    let normalizedError: Error;
+    if (error instanceof BackupRestoreError) {
+      normalizedError = error;
+    } else {
+      normalizedError = buildCorruptedBackupError();
+    }
+
+    Logger.error(SERVICE_SCOPE, 'restore_inspect_failed', {
+      sessionId,
+      fileShortInfo,
+      counts: EMPTY_COUNTS,
+      warningCount: 0,
+      errorName: normalizedError.name,
+      errorMessage: normalizedError.message,
+    });
+
     throw normalizedError;
   }
 }

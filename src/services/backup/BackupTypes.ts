@@ -3,7 +3,7 @@ import type { ReviewRecord } from '@/src/models/ReviewRecord';
 
 export const BACKUP_FILE_EXTENSION = '.qsbk' as const;
 export const BACKUP_FILE_NAME_PREFIX = 'qishua-backup' as const;
-export const BACKUP_FORMAT = 'qishua-backup' as const;
+export const BACKUP_FORMAT = 'qishua_backup' as const;
 export const BACKUP_FORMAT_VERSION = 1 as const;
 
 export type BackupDevicePlatform = 'android' | 'ios' | 'web' | 'unknown';
@@ -77,6 +77,11 @@ export interface CreateBackupOptions {
 export interface CreateBackupServiceResult {
   fileUri: string;
   manifest: BackupManifest;
+}
+
+export interface InspectBackupResult {
+  manifest: BackupManifest;
+  warnings: string[];
 }
 
 export interface RestoreSafetyBackupInfo {

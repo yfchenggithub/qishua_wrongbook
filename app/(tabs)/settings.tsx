@@ -1,5 +1,6 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -20,6 +21,7 @@ import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import { Logger } from '@/src/services/Logger';
 import * as BackupService from '@/src/services/backup/BackupService';
+import type { BackupManifest } from '@/src/services/backup/BackupTypes';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
@@ -36,6 +38,12 @@ const DEV_TAP_WINDOW_MS = 3000;
 const DEV_UNLOCK_HINT_FIRST = DEV_UNLOCK_TAP_TARGET - 2;
 const DEV_UNLOCK_HINT_SECOND = DEV_UNLOCK_TAP_TARGET - 1;
 const STATS_PLACEHOLDER = '--';
+const EMPTY_BACKUP_COUNTS: BackupManifest['counts'] = {
+  mistakes: 0,
+  mistakeImages: 0,
+  reviewRecords: 0,
+  imageFiles: 0,
+};
 
 type ToastType = 'success' | 'info' | 'warning' | 'error';
 
@@ -171,6 +179,49 @@ function formatReminderScheduleDateLabel(isoDateTime: string | null | undefined)
   return `${yearPrefix}${scheduledDate.getMonth() + 1}月${scheduledDate.getDate()}日 ${timeText}`;
 }
 
+function buildOperationSessionId(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)
+    .toString()
+    .padStart(5, '0')}`;
+}
+
+function formatBackupCreatedAt(isoDateTime: string): string {
+  const date = new Date(isoDateTime);
+  if (Number.isNaN(date.getTime())) {
+    return isoDateTime;
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(
+    date.getMinutes(),
+  ).padStart(2, '0')}`;
+}
+
+function toBackupFileShortInfo(name: string | null | undefined): string {
+  if (!name || !name.trim()) {
+    return 'unknown.qsbk';
+  }
+  const trimmed = name.trim();
+  return trimmed.length <= 48 ? trimmed : `${trimmed.slice(0, 24)}...${trimmed.slice(-18)}`;
+}
+
+function buildRestorePreviewMessage(manifest: BackupManifest, warnings: string[]): string {
+  const lines = [
+    `备份时间：${formatBackupCreatedAt(manifest.createdAt)}`,
+    `App 版本：${manifest.appVersion}`,
+    `错题数量：${manifest.counts.mistakes}`,
+    `图片数量：${manifest.counts.mistakeImages}`,
+    `复做记录数量：${manifest.counts.reviewRecords}`,
+  ];
+
+  if (warnings.length > 0) {
+    lines.push('该备份存在部分图片缺失记录');
+  }
+
+  return lines.join('\n');
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -183,6 +234,7 @@ export default function SettingsScreen() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isInspectingBackup, setIsInspectingBackup] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
   const [isCleaningOrphanImages, setIsCleaningOrphanImages] = useState(false);
   const [reminderSettings, setReminderSettings] =
@@ -515,35 +567,116 @@ export default function SettingsScreen() {
   }, [isBackingUp, showToast, startBackupToFile]);
 
   const handleRestoreFromBackup = useCallback(() => {
+    if (isInspectingBackup) {
+      return;
+    }
+
+    const sessionId = buildOperationSessionId('restore');
+
+    const pickAndInspectBackupFile = async () => {
+      setIsInspectingBackup(true);
+      let fileShortInfo = 'unknown.qsbk';
+
+      try {
+        const picked = await DocumentPicker.getDocumentAsync({
+          copyToCacheDirectory: true,
+          multiple: false,
+          type: '*/*',
+        });
+
+        if (picked.canceled || !picked.assets || picked.assets.length <= 0) {
+          Logger.info(PAGE_SCOPE, 'restore_pick_file', {
+            sessionId,
+            fileShortInfo,
+            counts: EMPTY_BACKUP_COUNTS,
+            warningCount: 0,
+            errorName: null,
+            errorMessage: null,
+          });
+          showToast('已取消选择备份文件', 'info');
+          return;
+        }
+
+        const selectedAsset = picked.assets[0];
+        fileShortInfo = toBackupFileShortInfo(selectedAsset.name);
+        Logger.info(PAGE_SCOPE, 'restore_pick_file', {
+          sessionId,
+          fileShortInfo,
+          counts: EMPTY_BACKUP_COUNTS,
+          warningCount: 0,
+          errorName: null,
+          errorMessage: null,
+        });
+
+        Logger.info(PAGE_SCOPE, 'restore_inspect_start', {
+          sessionId,
+          fileShortInfo,
+          counts: EMPTY_BACKUP_COUNTS,
+          warningCount: 0,
+          errorName: null,
+          errorMessage: null,
+        });
+
+        const inspected = await BackupService.inspectBackup(selectedAsset.uri);
+        Logger.info(PAGE_SCOPE, 'restore_inspect_done', {
+          sessionId,
+          fileShortInfo,
+          counts: inspected.manifest.counts,
+          warningCount: inspected.warnings.length,
+          errorName: null,
+          errorMessage: null,
+        });
+
+        Alert.alert(
+          '确认恢复这个备份？',
+          buildRestorePreviewMessage(inspected.manifest, inspected.warnings),
+          [
+            { text: '取消', style: 'cancel' },
+            {
+              text: '确认恢复',
+              style: 'destructive',
+              onPress: () => {
+                showToast('恢复功能将在下一阶段接入。', 'info', TOAST_DURATION_LONG);
+              },
+            },
+          ],
+        );
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : 'UnknownError';
+        const errorMessage =
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : '备份文件已损坏';
+
+        Logger.error(PAGE_SCOPE, 'restore_inspect_failed', {
+          sessionId,
+          fileShortInfo,
+          counts: EMPTY_BACKUP_COUNTS,
+          warningCount: 0,
+          errorName,
+          errorMessage,
+        });
+
+        showToast(errorMessage, 'warning', TOAST_DURATION_LONG);
+      } finally {
+        setIsInspectingBackup(false);
+      }
+    };
+
     Alert.alert(
-      '从备份恢复？',
-      '恢复会用备份内容覆盖当前本机数据，请确认后继续。',
+      '从备份恢复数据？',
+      '恢复会先备份当前数据，再用备份文件中的数据替换当前数据。恢复过程中请不要关闭 App。',
       [
         { text: '取消', style: 'cancel' },
         {
-          text: '继续恢复',
-          style: 'destructive',
+          text: '选择备份文件',
           onPress: () => {
-            Logger.info(PAGE_SCOPE, 'Start restore from backup in settings.', {
-              supported: false,
-            });
-            try {
-              showToast('恢复功能即将支持', 'info');
-              Logger.info(PAGE_SCOPE, 'Restore action finished with placeholder notice.', {
-                supported: false,
-              });
-              Logger.warn(PAGE_SCOPE, 'Restore from backup is not supported in current version.', {
-                reason: 'not_implemented',
-              });
-            } catch (error) {
-              Logger.error(PAGE_SCOPE, 'Restore action failed unexpectedly.', { error });
-              showToast('恢复功能暂不可用，请稍后重试', 'warning');
-            }
+            void pickAndInspectBackupFile();
           },
         },
       ],
     );
-  }, [showToast]);
+  }, [isInspectingBackup, showToast]);
 
   const handleExportTodayWorksheet = useCallback(async () => {
     if (isExportingWorksheet) {
@@ -938,24 +1071,26 @@ export default function SettingsScreen() {
                     styles.actionButtonGreen,
                     isBackingUp ? styles.disabledButton : null,
                   ]}>
-                  <Text
-                    numberOfLines={1}
-                    style={[styles.actionButtonText, styles.actionButtonTextGreen, { fontSize: 0 }]}>
-                    <Text style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                      {isBackingUp ? '正在整理备份文件…' : '备份到文件'}
-                    </Text>
-                    立即备份
+                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
+                    {isBackingUp ? '正在整理备份文件…' : '备份到文件'}
                   </Text>
                 </Pressable>
                 <Pressable
+                  accessibilityLabel={isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
                   accessibilityRole="button"
+                  disabled={isInspectingBackup}
                   onPress={handleRestoreFromBackup}
-                  style={[styles.actionButton, styles.actionButtonGreen, { display: 'none' }]}>
+                  style={[
+                    styles.actionButton,
+                    styles.actionButtonGreen,
+                    isInspectingBackup ? styles.disabledButton : null,
+                  ]}>
                   <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    从备份恢复
+                    {isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
                   </Text>
                 </Pressable>
               </View>
+              <Text style={styles.metaText}>选择之前导出的七刷备份文件，恢复到当前设备。</Text>
             </View>
           </View>
         </CardContainer>
