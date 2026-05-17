@@ -12,6 +12,7 @@ export * as ReviewFlowService from "./ReviewFlowService";
 export * as ReviewScheduleService from "./ReviewScheduleService";
 export * as CompleteReviewService from "./CompleteReviewService";
 export * as ReviewSessionService from "./ReviewSessionService";
+export * as ReviewReminderService from "./ReviewReminderService";
 export * as TodayReviewPdfExportService from "./TodayReviewPdfExportService";
 export * as TodayWorksheetExportService from "./TodayWorksheetExportService";
 export * as StorageMaintenanceService from "./StorageMaintenanceService";

@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack } from 'expo-router';
+import * as Notifications from 'expo-notifications';
+import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
@@ -8,6 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initDatabase } from '@/src/db';
 import { Logger } from '@/src/services/Logger';
+import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -15,6 +17,23 @@ export const unstable_settings = {
 
 const LAYOUT_SCOPE = 'RootLayout';
 let appDatabaseInitPromise: Promise<void> | null = null;
+let hasConfiguredNotificationHandler = false;
+
+function configureNotificationHandlerOnce(): void {
+  if (hasConfiguredNotificationHandler) {
+    return;
+  }
+
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+  hasConfiguredNotificationHandler = true;
+}
 
 function initializeDatabaseOnce(): Promise<void> {
   if (!appDatabaseInitPromise) {
@@ -33,12 +52,65 @@ function initializeDatabaseOnce(): Promise<void> {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const router = useRouter();
 
   useEffect(() => {
-    initializeDatabaseOnce().catch(() => {
-      // Initialization error is already logged by Logger.error.
-    });
+    configureNotificationHandlerOnce();
+
+    void initializeDatabaseOnce()
+      .then(async () => {
+        await ReviewReminderService.refreshReminderSchedule({ reason: 'app_start' });
+      })
+      .then(() => {
+        Logger.info(LAYOUT_SCOPE, 'Reminder schedule refreshed on app start.');
+      })
+      .catch((error: unknown) => {
+        // Database initialization errors are already logged in initializeDatabaseOnce.
+        Logger.warn(LAYOUT_SCOPE, 'Reminder schedule refresh on app start failed.', { error });
+      });
   }, []);
+
+  useEffect(() => {
+    const handleNotificationResponse = async (
+      response: Notifications.NotificationResponse | null,
+      source: 'listener' | 'last_response',
+    ) => {
+      if (!response) {
+        return;
+      }
+
+      try {
+        const handled = await ReviewReminderService.handleNotificationResponse(response);
+        if (!handled) {
+          return;
+        }
+
+        Logger.info(LAYOUT_SCOPE, 'Handled reminder notification response.', { source });
+        router.replace('/(tabs)' as never);
+        await Notifications.clearLastNotificationResponseAsync();
+        await ReviewReminderService.refreshReminderSchedule({ reason: 'notification_response' });
+      } catch (error) {
+        Logger.warn(LAYOUT_SCOPE, 'Failed handling reminder notification response.', {
+          source,
+          error,
+        });
+      }
+    };
+
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      void handleNotificationResponse(response, 'listener');
+    });
+
+    void Notifications.getLastNotificationResponseAsync()
+      .then((response) => handleNotificationResponse(response, 'last_response'))
+      .catch((error) => {
+        Logger.warn(LAYOUT_SCOPE, 'Failed to inspect last notification response.', { error });
+      });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [router]);
 
   return (
     <SafeAreaProvider>

@@ -1,10 +1,12 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +19,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import { Logger } from '@/src/services/Logger';
+import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
+import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
 import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
@@ -50,6 +54,16 @@ const DEFAULT_DATA_OVERVIEW_STATS: SettingsStats = {
   imageCount: 0,
   storageBytes: null,
   updatedAt: 0,
+};
+
+const DEFAULT_REMINDER_SETTINGS: ReviewReminderSettings = {
+  enabled: false,
+  hour: 20,
+  minute: 0,
+  notificationId: null,
+  scheduledDate: null,
+  lastReminderDate: null,
+  updatedAt: new Date(0).toISOString(),
 };
 
 const DEV_ENTRIES: DevEntry[] = [
@@ -114,6 +128,48 @@ function formatStorageSize(bytes?: number | null): string {
   return `${value.toFixed(digits)} ${units[unitIndex]}`;
 }
 
+function formatReminderTime(hour: number, minute: number): string {
+  const safeHour = Number.isFinite(hour) ? Math.max(0, Math.min(23, Math.floor(hour))) : 20;
+  const safeMinute = Number.isFinite(minute) ? Math.max(0, Math.min(59, Math.floor(minute))) : 0;
+  return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')}`;
+}
+
+function formatReminderScheduleDateLabel(isoDateTime: string | null | undefined): string | null {
+  if (typeof isoDateTime !== 'string' || !isoDateTime.trim()) {
+    return null;
+  }
+
+  const scheduledDate = new Date(isoDateTime);
+  if (Number.isNaN(scheduledDate.getTime())) {
+    return null;
+  }
+
+  const timeText = formatReminderTime(scheduledDate.getHours(), scheduledDate.getMinutes());
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const startScheduled = new Date(
+    scheduledDate.getFullYear(),
+    scheduledDate.getMonth(),
+    scheduledDate.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+  const dayDiff = Math.floor((startScheduled.getTime() - startToday.getTime()) / (24 * 60 * 60 * 1000));
+
+  if (dayDiff === 0) {
+    return `今天 ${timeText}`;
+  }
+  if (dayDiff === 1) {
+    return `明天 ${timeText}`;
+  }
+
+  const yearPrefix =
+    scheduledDate.getFullYear() !== now.getFullYear() ? `${scheduledDate.getFullYear()}年` : '';
+  return `${yearPrefix}${scheduledDate.getMonth() + 1}月${scheduledDate.getDate()}日 ${timeText}`;
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -127,7 +183,13 @@ export default function SettingsScreen() {
   const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
   const [isCleaningOrphanImages, setIsCleaningOrphanImages] = useState(false);
-  const [reminderEnabled, setReminderEnabled] = useState(false);
+  const [reminderSettings, setReminderSettings] =
+    useState<ReviewReminderSettings>(DEFAULT_REMINDER_SETTINGS);
+  const [isReminderLoading, setIsReminderLoading] = useState(true);
+  const [isReminderSwitchBusy, setIsReminderSwitchBusy] = useState(false);
+  const [isReminderTimeBusy, setIsReminderTimeBusy] = useState(false);
+  const [isReminderPermissionGranted, setIsReminderPermissionGranted] = useState(false);
+  const [showReminderPermissionHint, setShowReminderPermissionHint] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -221,6 +283,31 @@ export default function SettingsScreen() {
     };
   }, []);
 
+  const loadReminderState = useCallback(async () => {
+    Logger.info(PAGE_SCOPE, 'Start loading reminder settings.');
+    setIsReminderLoading(true);
+    try {
+      const [settings, hasPermission] = await Promise.all([
+        ReviewReminderService.getSettings(),
+        ReviewReminderService.checkPermission(),
+      ]);
+      setReminderSettings(settings);
+      setIsReminderPermissionGranted(hasPermission);
+      setShowReminderPermissionHint(settings.enabled && !hasPermission);
+      Logger.info(PAGE_SCOPE, 'Loaded reminder settings successfully.', {
+        enabled: settings.enabled,
+        hour: settings.hour,
+        minute: settings.minute,
+        hasPermission,
+      });
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to load reminder settings.', { error });
+      showToast('提醒设置读取失败，请稍后重试', 'warning');
+    } finally {
+      setIsReminderLoading(false);
+    }
+  }, [showToast]);
+
   const loadDataOverview = useCallback(async (mode: 'initial' | 'refresh') => {
     const startedAt = Date.now();
     Logger.info(PAGE_SCOPE, 'Start loading settings statistics.', { mode });
@@ -264,8 +351,9 @@ export default function SettingsScreen() {
       const mode: 'initial' | 'refresh' = hasFocusedRef.current ? 'refresh' : 'initial';
       hasFocusedRef.current = true;
       void loadDataOverview(mode);
+      void loadReminderState();
       return undefined;
-    }, [loadDataOverview]),
+    }, [loadDataOverview, loadReminderState]),
   );
 
   const disableDeveloperMode = useCallback(
@@ -456,6 +544,158 @@ export default function SettingsScreen() {
     }
   }, [dataOverview.dueToday, isExportingWorksheet, showToast]);
 
+  const handleToggleReminder = useCallback(
+    async (nextValue: boolean) => {
+      if (isReminderLoading || isReminderSwitchBusy) {
+        return;
+      }
+
+      setIsReminderSwitchBusy(true);
+      try {
+        if (nextValue) {
+          Logger.info(PAGE_SCOPE, 'Start enabling review reminder from settings.');
+          const granted = await ReviewReminderService.requestPermissionIfNeeded();
+          setIsReminderPermissionGranted(granted);
+          if (!granted) {
+            setShowReminderPermissionHint(true);
+            showToast('未获得通知权限，暂时无法提醒。', 'warning');
+            const disabled = await ReviewReminderService.setEnabled(false);
+            setReminderSettings(disabled);
+            return;
+          }
+
+          setShowReminderPermissionHint(false);
+          const enabledSettings = await ReviewReminderService.setEnabled(true);
+          setReminderSettings(enabledSettings);
+          const refreshResult = await ReviewReminderService.refreshReminderSchedule({
+            reason: 'settings_enable',
+          });
+          setReminderSettings(refreshResult.settings);
+
+          if (refreshResult.pendingTodayCount <= 0) {
+            showToast('今天暂无待复做题，不会提醒。', 'info');
+          } else {
+            showToast('已开启复做提醒，有待复做题时会提醒你。', 'success');
+          }
+          Logger.info(PAGE_SCOPE, 'Enabled review reminder from settings.', {
+            pendingTodayCount: refreshResult.pendingTodayCount,
+            scheduled: refreshResult.scheduled,
+          });
+          return;
+        }
+
+        Logger.info(PAGE_SCOPE, 'Start disabling review reminder from settings.');
+        const disabledSettings = await ReviewReminderService.setEnabled(false);
+        setReminderSettings(disabledSettings);
+        setShowReminderPermissionHint(false);
+        const refreshResult = await ReviewReminderService.refreshReminderSchedule({
+          reason: 'settings_disable',
+        });
+        setReminderSettings(refreshResult.settings);
+        showToast('已关闭复做提醒。', 'info');
+        Logger.info(PAGE_SCOPE, 'Disabled review reminder from settings.');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed toggling review reminder in settings.', { error });
+        showToast('提醒设置失败，请稍后重试', 'warning');
+        void loadReminderState();
+      } finally {
+        setIsReminderSwitchBusy(false);
+      }
+    },
+    [isReminderLoading, isReminderSwitchBusy, loadReminderState, showToast],
+  );
+
+  const handleSaveReminderTime = useCallback(
+    async (nextHour: number, nextMinute: number) => {
+      if (isReminderLoading || isReminderTimeBusy || isReminderSwitchBusy) {
+        return;
+      }
+
+      const currentTimeText = formatReminderTime(reminderSettings.hour, reminderSettings.minute);
+      const nextTimeText = formatReminderTime(nextHour, nextMinute);
+      if (currentTimeText === nextTimeText) {
+        return;
+      }
+
+      setIsReminderTimeBusy(true);
+      try {
+        const nextSettings = await ReviewReminderService.setTime(nextHour, nextMinute);
+        setReminderSettings(nextSettings);
+
+        if (nextSettings.enabled) {
+          const refreshResult = await ReviewReminderService.refreshReminderSchedule({
+            reason: 'settings_change_time',
+          });
+          setReminderSettings(refreshResult.settings);
+        }
+
+        showToast(`提醒时间已改为 ${nextTimeText}。`, 'success');
+        Logger.info(PAGE_SCOPE, 'Updated reminder time from settings.', {
+          hour: nextHour,
+          minute: nextMinute,
+          enabled: nextSettings.enabled,
+        });
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed updating reminder time in settings.', { error });
+        showToast('提醒时间更新失败，请稍后重试', 'warning');
+        void loadReminderState();
+      } finally {
+        setIsReminderTimeBusy(false);
+      }
+    },
+    [
+      isReminderLoading,
+      isReminderSwitchBusy,
+      isReminderTimeBusy,
+      loadReminderState,
+      showToast,
+      reminderSettings.hour,
+      reminderSettings.minute,
+    ],
+  );
+
+  const handleOpenReminderTimePicker = useCallback(() => {
+    if (isReminderLoading || isReminderSwitchBusy || isReminderTimeBusy) {
+      return;
+    }
+
+    if (Platform.OS !== 'android') {
+      showToast('当前平台暂不支持系统时间选择器', 'info');
+      return;
+    }
+
+    const currentValue = new Date();
+    currentValue.setHours(reminderSettings.hour, reminderSettings.minute, 0, 0);
+
+    DateTimePickerAndroid.open({
+      mode: 'time',
+      is24Hour: true,
+      value: currentValue,
+      onChange: (event, date) => {
+        if (event.type !== 'set' || !date) {
+          return;
+        }
+
+        void handleSaveReminderTime(date.getHours(), date.getMinutes());
+      },
+    });
+  }, [
+    handleSaveReminderTime,
+    isReminderLoading,
+    isReminderSwitchBusy,
+    isReminderTimeBusy,
+    reminderSettings.hour,
+    reminderSettings.minute,
+    showToast,
+  ]);
+
+  const handleOpenNotificationSettings = useCallback(() => {
+    void ReviewReminderService.openSystemNotificationSettings().catch((error) => {
+      Logger.warn(PAGE_SCOPE, 'Failed to open system notification settings.', { error });
+      showToast('无法打开系统设置，请手动开启通知权限', 'warning');
+    });
+  }, [showToast]);
+
   const isStatsBusy = isOverviewLoading || isOverviewRefreshing;
   const shouldMaskStats = isOverviewLoading && lastUpdatedAt === null;
   const statsUpdatedText = isStatsBusy ? '更新中...' : `更新于 ${formatClock(lastUpdatedAt)}`;
@@ -581,6 +821,36 @@ export default function SettingsScreen() {
   );
 
   const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages;
+  const isReminderBusy = isReminderLoading || isReminderSwitchBusy || isReminderTimeBusy;
+  const reminderTimeText = formatReminderTime(reminderSettings.hour, reminderSettings.minute);
+  const canEditReminderTime = !isReminderLoading && !isReminderTimeBusy && !isReminderSwitchBusy;
+  const shouldShowReminderPermissionNotice =
+    !isReminderPermissionGranted && (showReminderPermissionHint || reminderSettings.enabled);
+  const nextReminderText = useMemo(() => {
+    if (isReminderLoading) {
+      return '下次预计提醒：读取中...';
+    }
+
+    if (!reminderSettings.enabled) {
+      return '下次预计提醒：未开启';
+    }
+
+    if (!isReminderPermissionGranted) {
+      return '下次预计提醒：通知权限未开启';
+    }
+
+    const scheduledLabel = formatReminderScheduleDateLabel(reminderSettings.scheduledDate);
+    if (scheduledLabel) {
+      return `下次预计提醒：${scheduledLabel}`;
+    }
+
+    return '下次预计提醒：今天暂无待复做题，不会提醒';
+  }, [
+    isReminderLoading,
+    isReminderPermissionGranted,
+    reminderSettings.enabled,
+    reminderSettings.scheduledDate,
+  ]);
 
   return (
     <View style={styles.pageRoot}>
@@ -716,19 +986,53 @@ export default function SettingsScreen() {
               <View style={styles.titleRow}>
                 <Text style={styles.cardTitle}>复做提醒</Text>
                 <Switch
+                  disabled={isReminderBusy}
                   onValueChange={(nextValue) => {
-                    setReminderEnabled(nextValue);
-                    showToast('提醒功能即将支持', 'info');
+                    void handleToggleReminder(nextValue);
                   }}
                   thumbColor={colors.white}
                   trackColor={{ false: '#D5D8DE', true: '#9ED9B3' }}
-                  value={reminderEnabled}
+                  value={reminderSettings.enabled}
                 />
               </View>
               <Text style={styles.cardDescription}>
-                每天提醒我完成今日复做，养成坚持的好习惯。
+                有待复做错题时提醒我完成今日复做，避免遗漏。
               </Text>
-              <Text style={styles.metaText}>提醒时间：20:00</Text>
+              <View style={styles.reminderTimeWrap}>
+                <View style={styles.reminderTimeRow}>
+                  <Text style={styles.metaText}>提醒时间：{reminderTimeText}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!canEditReminderTime}
+                    onPress={handleOpenReminderTimePicker}
+                    style={[
+                      styles.reminderTimeButton,
+                      !canEditReminderTime ? styles.disabledButton : null,
+                    ]}>
+                    {isReminderTimeBusy ? (
+                      <ActivityIndicator color="#505863" size="small" />
+                    ) : (
+                      <>
+                        <MaterialIcons color="#505863" name="schedule" size={16} />
+                        <Text numberOfLines={1} style={styles.reminderTimeButtonText}>
+                          选择时间
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+                <Text style={styles.reminderScheduleText}>{nextReminderText}</Text>
+              </View>
+              {shouldShowReminderPermissionNotice ? (
+                <View style={styles.reminderPermissionNotice}>
+                  <Text style={styles.reminderPermissionText}>
+                    通知权限未开启，无法收到复做提醒
+                  </Text>
+                  <Pressable onPress={handleOpenNotificationSettings} style={styles.reminderSettingLink}>
+                    <Text style={styles.reminderSettingLinkText}>去设置</Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
           </View>
         </CardContainer>
@@ -1061,6 +1365,71 @@ const styles = StyleSheet.create({
   errorText: {
     ...typography.caption,
     color: colors.danger,
+    fontWeight: '700',
+  },
+  reminderTimeWrap: {
+    gap: spacing.xs,
+  },
+  reminderTimeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  reminderTimeButton: {
+    minHeight: 44,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#D4D9E0',
+    backgroundColor: '#F8F9FB',
+    paddingHorizontal: spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  reminderTimeButtonText: {
+    ...typography.caption,
+    color: '#505863',
+    fontWeight: '700',
+  },
+  reminderScheduleText: {
+    ...typography.caption,
+    color: '#6A717A',
+    fontWeight: '600',
+  },
+  reminderPermissionNotice: {
+    marginTop: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#F1D08F',
+    backgroundColor: '#FFF8E9',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  reminderPermissionText: {
+    ...typography.caption,
+    color: '#9C6B1A',
+    fontWeight: '700',
+    flex: 1,
+  },
+  reminderSettingLink: {
+    minHeight: 32,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#E2BF7B',
+    backgroundColor: '#FFF2D8',
+    paddingHorizontal: spacing.sm,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reminderSettingLinkText: {
+    ...typography.caption,
+    color: '#8B5E16',
     fontWeight: '700',
   },
   versionPressable: {

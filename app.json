@@ -26,7 +26,9 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.okshuxue.qishua_wrongbook",
-      "permissions": ["android.permission.RECORD_AUDIO"]
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -53,7 +55,9 @@
           "photosPermission": "Allow photo library access to pick mistake photos."
         }
       ],
-      "expo-sqlite"
+      "expo-notifications",
+      "expo-sqlite",
+      "@react-native-community/datetimepicker"
     ],
     "experiments": {
       "typedRoutes": true,

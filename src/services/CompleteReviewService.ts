@@ -5,6 +5,7 @@ import type { ReviewResult } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
+import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import {
   calculateNextReviewAt,
   canStartReview,
@@ -345,6 +346,12 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
       newReviewCount,
       newStatus,
       nextReviewAt: newStatus === REVIEW_STATUS.MASTERED ? null : nextReviewAt,
+    });
+    void ReviewReminderService.refreshReminderSchedule({ reason: 'complete_review' }).catch((error) => {
+      Logger.warn(SERVICE_SCOPE, 'Reminder schedule refresh failed after completing review.', {
+        mistakeId: normalizedInput.mistakeId,
+        error,
+      });
     });
 
     return {

@@ -335,14 +335,22 @@ export async function getTodayReviewQueue(): Promise<MistakeListItem[]> {
   }
 }
 
-export async function getTodayReviewQueueCount(): Promise<number> {
+export async function getPendingReviewCountByDate(date: Date): Promise<number> {
   try {
-    const dueMistakes = await listTodayReviewQueueMistakes(new Date());
+    const baseDate = date instanceof Date ? date : new Date();
+    const dueMistakes = await listTodayReviewQueueMistakes(baseDate);
     return dueMistakes.length;
   } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'getTodayReviewQueueCount failed.', error);
+    Logger.error(SERVICE_SCOPE, 'getPendingReviewCountByDate failed.', {
+      date: date instanceof Date ? date.toISOString() : null,
+      error,
+    });
     throw error;
   }
+}
+
+export async function getTodayReviewQueueCount(): Promise<number> {
+  return getPendingReviewCountByDate(new Date());
 }
 
 export async function getTodayReviewExportItems(date?: string): Promise<TodayReviewExportItem[]> {

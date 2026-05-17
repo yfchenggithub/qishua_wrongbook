@@ -4,6 +4,7 @@ import type { ImageType } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
 import { validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
 import { Logger } from '@/src/services/Logger';
+import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import type * as SQLite from 'expo-sqlite';
 
 const SERVICE_SCOPE = 'CreateMistakeService';
@@ -256,6 +257,12 @@ export async function createMistakeFromDraft(
       draftId: draft.draftId,
       mistakeId,
       mistakeImageCount,
+    });
+    void ReviewReminderService.refreshReminderSchedule({ reason: 'create_mistake' }).catch((error) => {
+      Logger.warn(SERVICE_SCOPE, 'Reminder schedule refresh failed after creating mistake.', {
+        mistakeId,
+        error,
+      });
     });
 
     return {
