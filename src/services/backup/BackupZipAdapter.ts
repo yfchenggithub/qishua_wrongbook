@@ -12,7 +12,7 @@ import {
   type BackupImageArchiveFile,
   type BackupManifest,
 } from '@/src/services/backup/BackupTypes';
-import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
+import { BackupRestoreError, getBackupErrorUserMessage } from '@/src/services/backup/BackupRestoreError';
 
 const CACHE_BACKUP_DIR_NAME = 'qishua_wrongbook_backups';
 
@@ -30,7 +30,7 @@ export interface BackupZipAdapter {
 function normalizeArchivePath(relativePath: string): string {
   const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '').trim();
   if (!normalized) {
-    throw new BackupRestoreError('FILE_IO_FAILED', 'Backup archive image path is empty.');
+    throw new BackupRestoreError('BACKUP_FAILED', getBackupErrorUserMessage('BACKUP_FAILED'));
   }
   return normalized;
 }
@@ -38,13 +38,10 @@ function normalizeArchivePath(relativePath: string): string {
 function normalizeBackupFileName(fileName: string): string {
   const normalized = fileName.trim();
   if (!normalized) {
-    throw new BackupRestoreError('FILE_IO_FAILED', 'Backup file name is empty.');
+    throw new BackupRestoreError('BACKUP_FAILED', getBackupErrorUserMessage('BACKUP_FAILED'));
   }
   if (!normalized.toLowerCase().endsWith(BACKUP_FILE_EXTENSION)) {
-    throw new BackupRestoreError(
-      'FILE_IO_FAILED',
-      `Backup file name must end with ${BACKUP_FILE_EXTENSION}.`,
-    );
+    throw new BackupRestoreError('BACKUP_FAILED', getBackupErrorUserMessage('BACKUP_FAILED'));
   }
   return normalized;
 }
@@ -98,10 +95,7 @@ export class FflateBackupZipAdapter implements BackupZipAdapter {
 export function ensureBackupImageRelativePath(path: string): string {
   const normalized = normalizeArchivePath(path);
   if (!normalized.startsWith(`${BACKUP_IMAGES_DIR_NAME}/`)) {
-    throw new BackupRestoreError(
-      'FILE_IO_FAILED',
-      `Backup image path must start with "${BACKUP_IMAGES_DIR_NAME}/".`,
-    );
+    throw new BackupRestoreError('BACKUP_FAILED', getBackupErrorUserMessage('BACKUP_FAILED'));
   }
   return normalized;
 }

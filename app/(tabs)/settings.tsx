@@ -235,6 +235,7 @@ export default function SettingsScreen() {
   const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
   const [isCleaningOrphanImages, setIsCleaningOrphanImages] = useState(false);
   const [reminderSettings, setReminderSettings] =
@@ -566,8 +567,68 @@ export default function SettingsScreen() {
     }
   }, [isBackingUp, showToast, startBackupToFile]);
 
+  const handleConfirmRestore = useCallback(
+    async (params: {
+      sessionId: string;
+      fileShortInfo: string;
+      backupUri: string;
+      previewWarningCount: number;
+    }) => {
+      if (isRestoring) {
+        return;
+      }
+
+      setIsRestoring(true);
+      const restoreStartedAt = Date.now();
+      showToast('正在恢复数据…', 'info', TOAST_DURATION_LONG);
+
+      try {
+        const restoreResult = await BackupService.restoreFromBackup(params.backupUri);
+        Logger.info(PAGE_SCOPE, 'restore_success', {
+          sessionId: params.sessionId,
+          fileShortInfo: params.fileShortInfo,
+          durationMs: Date.now() - restoreStartedAt,
+          counts: {
+            mistakes: restoreResult.restoredMistakes,
+            mistakeImages: restoreResult.restoredImages,
+            reviewRecords: restoreResult.restoredReviewRecords,
+            imageFiles: restoreResult.restoredImages,
+          },
+          warningCount: params.previewWarningCount,
+          errorName: null,
+          errorMessage: null,
+        });
+
+        showToast('恢复完成', 'success', TOAST_DURATION_LONG);
+        void loadDataOverview('refresh');
+        router.replace('/(tabs)/index' as never);
+      } catch (error) {
+        const errorName = error instanceof Error ? error.name : 'UnknownError';
+        const errorMessage = error instanceof Error ? error.message : String(error);
+
+        Logger.error(PAGE_SCOPE, 'restore_failed', {
+          sessionId: params.sessionId,
+          fileShortInfo: params.fileShortInfo,
+          durationMs: Date.now() - restoreStartedAt,
+          counts: EMPTY_BACKUP_COUNTS,
+          warningCount: params.previewWarningCount,
+          errorName,
+          errorMessage,
+        });
+
+        Alert.alert(
+          '恢复失败',
+          '恢复没有完成。当前数据已尽量保持不变，恢复前的安全备份已保留。你可以稍后重试，或在设置页查看日志。',
+        );
+      } finally {
+        setIsRestoring(false);
+      }
+    },
+    [isRestoring, loadDataOverview, router, showToast],
+  );
+
   const handleRestoreFromBackup = useCallback(() => {
-    if (isInspectingBackup) {
+    if (isInspectingBackup || isRestoring) {
       return;
     }
 
@@ -576,6 +637,7 @@ export default function SettingsScreen() {
     const pickAndInspectBackupFile = async () => {
       setIsInspectingBackup(true);
       let fileShortInfo = 'unknown.qsbk';
+      const inspectStartedAt = Date.now();
 
       try {
         const picked = await DocumentPicker.getDocumentAsync({
@@ -588,6 +650,7 @@ export default function SettingsScreen() {
           Logger.info(PAGE_SCOPE, 'restore_pick_file', {
             sessionId,
             fileShortInfo,
+            durationMs: Date.now() - inspectStartedAt,
             counts: EMPTY_BACKUP_COUNTS,
             warningCount: 0,
             errorName: null,
@@ -602,6 +665,7 @@ export default function SettingsScreen() {
         Logger.info(PAGE_SCOPE, 'restore_pick_file', {
           sessionId,
           fileShortInfo,
+          durationMs: Date.now() - inspectStartedAt,
           counts: EMPTY_BACKUP_COUNTS,
           warningCount: 0,
           errorName: null,
@@ -611,6 +675,7 @@ export default function SettingsScreen() {
         Logger.info(PAGE_SCOPE, 'restore_inspect_start', {
           sessionId,
           fileShortInfo,
+          durationMs: Date.now() - inspectStartedAt,
           counts: EMPTY_BACKUP_COUNTS,
           warningCount: 0,
           errorName: null,
@@ -621,6 +686,7 @@ export default function SettingsScreen() {
         Logger.info(PAGE_SCOPE, 'restore_inspect_done', {
           sessionId,
           fileShortInfo,
+          durationMs: Date.now() - inspectStartedAt,
           counts: inspected.manifest.counts,
           warningCount: inspected.warnings.length,
           errorName: null,
@@ -636,7 +702,12 @@ export default function SettingsScreen() {
               text: '确认恢复',
               style: 'destructive',
               onPress: () => {
-                showToast('恢复功能将在下一阶段接入。', 'info', TOAST_DURATION_LONG);
+                void handleConfirmRestore({
+                  sessionId,
+                  fileShortInfo,
+                  backupUri: selectedAsset.uri,
+                  previewWarningCount: inspected.warnings.length,
+                });
               },
             },
           ],
@@ -651,13 +722,14 @@ export default function SettingsScreen() {
         Logger.error(PAGE_SCOPE, 'restore_inspect_failed', {
           sessionId,
           fileShortInfo,
+          durationMs: Date.now() - inspectStartedAt,
           counts: EMPTY_BACKUP_COUNTS,
           warningCount: 0,
           errorName,
           errorMessage,
         });
 
-        showToast(errorMessage, 'warning', TOAST_DURATION_LONG);
+        Alert.alert('无法读取备份文件', errorMessage);
       } finally {
         setIsInspectingBackup(false);
       }
@@ -676,7 +748,7 @@ export default function SettingsScreen() {
         },
       ],
     );
-  }, [isInspectingBackup, showToast]);
+  }, [handleConfirmRestore, isInspectingBackup, isRestoring, showToast]);
 
   const handleExportTodayWorksheet = useCallback(async () => {
     if (isExportingWorksheet) {
@@ -1002,6 +1074,8 @@ export default function SettingsScreen() {
   );
 
   const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages;
+  const isRestoreBusy = isInspectingBackup || isRestoring;
+  const isBackupBusy = isBackingUp || isRestoreBusy;
   const isReminderBusy = isReminderLoading || isReminderSwitchBusy || isReminderTimeBusy;
   const reminderTimeText = formatReminderTime(reminderSettings.hour, reminderSettings.minute);
   const canEditReminderTime = !isReminderLoading && !isReminderTimeBusy && !isReminderSwitchBusy;
@@ -1062,31 +1136,35 @@ export default function SettingsScreen() {
               </Text>
               <View style={styles.actionRow}>
                 <Pressable
-                  accessibilityLabel={isBackingUp ? '正在整理备份文件…' : '备份到文件'}
+                  accessibilityLabel={
+                    isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'
+                  }
                   accessibilityRole="button"
-                  disabled={isBackingUp}
+                  disabled={isBackupBusy}
                   onPress={handleStartBackup}
                   style={[
                     styles.actionButton,
                     styles.actionButtonGreen,
-                    isBackingUp ? styles.disabledButton : null,
+                    isBackupBusy ? styles.disabledButton : null,
                   ]}>
                   <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    {isBackingUp ? '正在整理备份文件…' : '备份到文件'}
+                    {isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'}
                   </Text>
                 </Pressable>
                 <Pressable
-                  accessibilityLabel={isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
+                  accessibilityLabel={
+                    isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'
+                  }
                   accessibilityRole="button"
-                  disabled={isInspectingBackup}
+                  disabled={isRestoreBusy}
                   onPress={handleRestoreFromBackup}
                   style={[
                     styles.actionButton,
                     styles.actionButtonGreen,
-                    isInspectingBackup ? styles.disabledButton : null,
+                    isRestoreBusy ? styles.disabledButton : null,
                   ]}>
                   <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    {isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
+                    {isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
                   </Text>
                 </Pressable>
               </View>
