@@ -27,7 +27,10 @@ const PAGE_SCOPE = 'MistakeImageCropScreen';
 const PREVIEW_STAGE_MIN_HEIGHT = 420;
 const MIN_CROP_SIZE = 56;
 const HANDLE_SIZE = 26;
-const HANDLE_HIT_SLOP = 10;
+const HANDLE_HIT_SLOP = 18;
+const MOVE_AREA_INSET = 14;
+const CORNER_MARK_SIZE = 10;
+const CORNER_MARK_THICKNESS = 2;
 const SAVE_DELAY_MS = 180;
 
 type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
@@ -991,30 +994,34 @@ export default function MistakeImageEditScreen() {
                         width: cropBox.width,
                         height: cropBox.height,
                       },
-                    ]}
-                    {...moveResponder.panHandlers}>
-                    <View style={styles.cropCenterGuide} />
+                    ]}>
+                    <View style={styles.cropMoveArea} {...moveResponder.panHandlers} />
+                    <View pointerEvents="none" style={styles.cropCenterGuide} />
 
                     <View
                       style={[styles.handle, styles.handleTopLeft]}
                       hitSlop={HANDLE_HIT_SLOP}
-                      {...topLeftResponder.panHandlers}
-                    />
+                      {...topLeftResponder.panHandlers}>
+                      <View pointerEvents="none" style={[styles.cornerMark, styles.cornerMarkTopLeft]} />
+                    </View>
                     <View
                       style={[styles.handle, styles.handleTopRight]}
                       hitSlop={HANDLE_HIT_SLOP}
-                      {...topRightResponder.panHandlers}
-                    />
+                      {...topRightResponder.panHandlers}>
+                      <View pointerEvents="none" style={[styles.cornerMark, styles.cornerMarkTopRight]} />
+                    </View>
                     <View
                       style={[styles.handle, styles.handleBottomLeft]}
                       hitSlop={HANDLE_HIT_SLOP}
-                      {...bottomLeftResponder.panHandlers}
-                    />
+                      {...bottomLeftResponder.panHandlers}>
+                      <View pointerEvents="none" style={[styles.cornerMark, styles.cornerMarkBottomLeft]} />
+                    </View>
                     <View
                       style={[styles.handle, styles.handleBottomRight]}
                       hitSlop={HANDLE_HIT_SLOP}
-                      {...bottomRightResponder.panHandlers}
-                    />
+                      {...bottomRightResponder.panHandlers}>
+                      <View pointerEvents="none" style={[styles.cornerMark, styles.cornerMarkBottomRight]} />
+                    </View>
                   </View>
                 </>
               ) : null}
@@ -1190,8 +1197,15 @@ const styles = StyleSheet.create({
   cropBox: {
     position: 'absolute',
     borderWidth: 2,
-    borderColor: '#ffffff',
+    borderColor: colors.white,
     backgroundColor: 'transparent',
+  },
+  cropMoveArea: {
+    position: 'absolute',
+    left: MOVE_AREA_INSET,
+    top: MOVE_AREA_INSET,
+    right: MOVE_AREA_INSET,
+    bottom: MOVE_AREA_INSET,
   },
   cropCenterGuide: {
     ...StyleSheet.absoluteFillObject,
@@ -1203,26 +1217,55 @@ const styles = StyleSheet.create({
     position: 'absolute',
     width: HANDLE_SIZE,
     height: HANDLE_SIZE,
-    borderRadius: radius.pill,
-    borderWidth: 2,
-    borderColor: '#ffffff',
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderWidth: 0,
+    borderColor: 'transparent',
+    backgroundColor: 'transparent',
+  },
+  cornerMark: {
+    position: 'absolute',
+    width: CORNER_MARK_SIZE,
+    height: CORNER_MARK_SIZE,
+    borderColor: colors.success,
+  },
+  cornerMarkTopLeft: {
+    left: 4,
+    top: 4,
+    borderLeftWidth: CORNER_MARK_THICKNESS,
+    borderTopWidth: CORNER_MARK_THICKNESS,
+  },
+  cornerMarkTopRight: {
+    right: 4,
+    top: 4,
+    borderRightWidth: CORNER_MARK_THICKNESS,
+    borderTopWidth: CORNER_MARK_THICKNESS,
+  },
+  cornerMarkBottomLeft: {
+    left: 4,
+    bottom: 4,
+    borderLeftWidth: CORNER_MARK_THICKNESS,
+    borderBottomWidth: CORNER_MARK_THICKNESS,
+  },
+  cornerMarkBottomRight: {
+    right: 4,
+    bottom: 4,
+    borderRightWidth: CORNER_MARK_THICKNESS,
+    borderBottomWidth: CORNER_MARK_THICKNESS,
   },
   handleTopLeft: {
-    left: -HANDLE_SIZE / 2,
-    top: -HANDLE_SIZE / 2,
+    left: -HANDLE_SIZE / 4,
+    top: -HANDLE_SIZE / 4,
   },
   handleTopRight: {
-    right: -HANDLE_SIZE / 2,
-    top: -HANDLE_SIZE / 2,
+    right: -HANDLE_SIZE / 4,
+    top: -HANDLE_SIZE / 4,
   },
   handleBottomLeft: {
-    left: -HANDLE_SIZE / 2,
-    bottom: -HANDLE_SIZE / 2,
+    left: -HANDLE_SIZE / 4,
+    bottom: -HANDLE_SIZE / 4,
   },
   handleBottomRight: {
-    right: -HANDLE_SIZE / 2,
-    bottom: -HANDLE_SIZE / 2,
+    right: -HANDLE_SIZE / 4,
+    bottom: -HANDLE_SIZE / 4,
   },
   bottomBar: {
     paddingTop: spacing.sm,
