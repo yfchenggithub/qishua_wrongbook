@@ -85,10 +85,18 @@ export interface InspectBackupResult {
 }
 
 export interface RestoreFromBackupResult {
+  restoreSessionId: string;
   restoredMistakes: number;
   restoredImages: number;
   restoredReviewRecords: number;
+  warningCount: number;
+  errorCount: number;
+  hasBeforeRestoreBackup: boolean;
   beforeRestoreBackupUri?: string;
+}
+
+export interface RestoreFromBackupOptions {
+  restoreSessionId?: string;
 }
 
 export interface RestoreSafetyBackupInfo {

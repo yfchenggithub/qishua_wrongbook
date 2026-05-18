@@ -21,6 +21,7 @@ import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import { Logger } from '@/src/services/Logger';
 import * as BackupService from '@/src/services/backup/BackupService';
+import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
 import type { BackupManifest } from '@/src/services/backup/BackupTypes';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
@@ -204,6 +205,51 @@ function toBackupFileShortInfo(name: string | null | undefined): string {
   }
   const trimmed = name.trim();
   return trimmed.length <= 48 ? trimmed : `${trimmed.slice(0, 24)}...${trimmed.slice(-18)}`;
+}
+
+type RestoreWarningLogItem = {
+  code?: string;
+  stage?: string;
+  message?: string;
+  shortTarget?: string;
+  detail?: string;
+};
+
+type RestoreErrorLogItem = {
+  code?: string;
+  stage?: string;
+  message?: string;
+  shortTarget?: string;
+  rootCauseMessage?: string;
+};
+
+function getUriScheme(uri: string | null | undefined): string {
+  if (typeof uri !== 'string') {
+    return 'unknown';
+  }
+  const matched = uri.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):/);
+  return matched ? matched[1].toLowerCase() : 'unknown';
+}
+
+function getFileExtension(fileName: string | null | undefined): string | null {
+  if (typeof fileName !== 'string') {
+    return null;
+  }
+  const matched = fileName.trim().match(/\.([a-zA-Z0-9]{1,16})$/);
+  return matched ? matched[1].toLowerCase() : null;
+}
+
+function toBackupRestoreDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof BackupRestoreError && error.details && typeof error.details === 'object') {
+    return error.details;
+  }
+  if (error && typeof error === 'object' && 'details' in error) {
+    const candidate = (error as { details?: unknown }).details;
+    if (candidate && typeof candidate === 'object') {
+      return candidate as Record<string, unknown>;
+    }
+  }
+  return {};
 }
 
 function buildRestorePreviewMessage(manifest: BackupManifest, warnings: string[]): string {
@@ -571,7 +617,7 @@ export default function SettingsScreen() {
 
   const handleConfirmRestore = useCallback(
     async (params: {
-      sessionId: string;
+      restoreSessionId: string;
       fileShortInfo: string;
       backupUri: string;
       previewWarningCount: number;
@@ -585,9 +631,11 @@ export default function SettingsScreen() {
       showToast('正在恢复数据…', 'info', TOAST_DURATION_LONG);
 
       try {
-        const restoreResult = await BackupService.restoreFromBackup(params.backupUri);
+        const restoreResult = await BackupService.restoreFromBackup(params.backupUri, {
+          restoreSessionId: params.restoreSessionId,
+        });
         Logger.info(PAGE_SCOPE, 'restore_success', {
-          sessionId: params.sessionId,
+          restoreSessionId: params.restoreSessionId,
           fileShortInfo: params.fileShortInfo,
           durationMs: Date.now() - restoreStartedAt,
           counts: {
@@ -596,7 +644,9 @@ export default function SettingsScreen() {
             reviewRecords: restoreResult.restoredReviewRecords,
             imageFiles: restoreResult.restoredImages,
           },
-          warningCount: params.previewWarningCount,
+          warningCount: restoreResult.warningCount,
+          errorCount: restoreResult.errorCount,
+          hasBeforeRestoreBackup: restoreResult.hasBeforeRestoreBackup,
           errorName: null,
           errorMessage: null,
         });
@@ -607,15 +657,51 @@ export default function SettingsScreen() {
       } catch (error) {
         const errorName = error instanceof Error ? error.name : 'UnknownError';
         const errorMessage = error instanceof Error ? error.message : String(error);
+        const details = toBackupRestoreDetails(error);
+        const errorCode =
+          typeof details.errorCode === 'string'
+            ? details.errorCode
+            : error instanceof BackupRestoreError
+              ? error.code
+              : 'RESTORE_UNKNOWN_FAILED';
+        const stage = typeof details.stage === 'string' ? details.stage : 'unknown';
+        const step = typeof details.step === 'string' ? details.step : 'unknown';
+        const rootCauseMessage =
+          typeof details.rootCauseMessage === 'string' ? details.rootCauseMessage : errorMessage;
+        const countsParsed =
+          details.countsParsed && typeof details.countsParsed === 'object'
+            ? (details.countsParsed as BackupManifest['counts'])
+            : EMPTY_BACKUP_COUNTS;
+        const warningCount =
+          typeof details.warningCount === 'number' ? details.warningCount : params.previewWarningCount;
+        const firstWarnings = Array.isArray(details.firstWarnings)
+          ? (details.firstWarnings as RestoreWarningLogItem[]).slice(0, 5)
+          : [];
+        const errorCount = typeof details.errorCount === 'number' ? details.errorCount : 1;
+        const firstErrors = Array.isArray(details.firstErrors)
+          ? (details.firstErrors as RestoreErrorLogItem[]).slice(0, 5)
+          : [];
+        const rollbackAttempted = Boolean(details.rollbackAttempted);
+        const rollbackSuccess = Boolean(details.rollbackSuccess);
 
         Logger.error(PAGE_SCOPE, 'restore_failed', {
-          sessionId: params.sessionId,
+          restoreSessionId: params.restoreSessionId,
           fileShortInfo: params.fileShortInfo,
           durationMs: Date.now() - restoreStartedAt,
-          counts: EMPTY_BACKUP_COUNTS,
-          warningCount: params.previewWarningCount,
+          errorCode,
+          stage,
+          step,
           errorName,
+          errorMessageForUser: '恢复失败',
           errorMessage,
+          rootCauseMessage,
+          countsParsed,
+          warningCount,
+          firstWarnings,
+          errorCount,
+          firstErrors,
+          rollbackAttempted,
+          rollbackSuccess,
         });
 
         Alert.alert(
@@ -634,7 +720,7 @@ export default function SettingsScreen() {
       return;
     }
 
-    const sessionId = buildOperationSessionId('restore');
+    const restoreSessionId = buildOperationSessionId('restore');
 
     const pickAndInspectBackupFile = async () => {
       setIsInspectingBackup(true);
@@ -650,7 +736,7 @@ export default function SettingsScreen() {
 
         if (picked.canceled || !picked.assets || picked.assets.length <= 0) {
           Logger.info(PAGE_SCOPE, 'restore_pick_file', {
-            sessionId,
+            restoreSessionId,
             fileShortInfo,
             durationMs: Date.now() - inspectStartedAt,
             counts: EMPTY_BACKUP_COUNTS,
@@ -664,8 +750,18 @@ export default function SettingsScreen() {
 
         const selectedAsset = picked.assets[0];
         fileShortInfo = toBackupFileShortInfo(selectedAsset.name);
+        Logger.info(PAGE_SCOPE, 'restore_file_selected', {
+          restoreSessionId,
+          fileShortInfo,
+          uriScheme: getUriScheme(selectedAsset.uri),
+          fileName: selectedAsset.name ?? 'unknown.qsbk',
+          extension: getFileExtension(selectedAsset.name),
+          mimeType: selectedAsset.mimeType ?? null,
+          fileSizeBytes: typeof selectedAsset.size === 'number' ? selectedAsset.size : null,
+          startedAt: new Date(inspectStartedAt).toISOString(),
+        });
         Logger.info(PAGE_SCOPE, 'restore_pick_file', {
-          sessionId,
+          restoreSessionId,
           fileShortInfo,
           durationMs: Date.now() - inspectStartedAt,
           counts: EMPTY_BACKUP_COUNTS,
@@ -675,7 +771,7 @@ export default function SettingsScreen() {
         });
 
         Logger.info(PAGE_SCOPE, 'restore_inspect_start', {
-          sessionId,
+          restoreSessionId,
           fileShortInfo,
           durationMs: Date.now() - inspectStartedAt,
           counts: EMPTY_BACKUP_COUNTS,
@@ -684,9 +780,11 @@ export default function SettingsScreen() {
           errorMessage: null,
         });
 
-        const inspected = await BackupService.inspectBackup(selectedAsset.uri);
+        const inspected = await BackupService.inspectBackup(selectedAsset.uri, {
+          restoreSessionId,
+        });
         Logger.info(PAGE_SCOPE, 'restore_inspect_done', {
-          sessionId,
+          restoreSessionId,
           fileShortInfo,
           durationMs: Date.now() - inspectStartedAt,
           counts: inspected.manifest.counts,
@@ -705,7 +803,7 @@ export default function SettingsScreen() {
               style: 'destructive',
               onPress: () => {
                 void handleConfirmRestore({
-                  sessionId,
+                  restoreSessionId,
                   fileShortInfo,
                   backupUri: selectedAsset.uri,
                   previewWarningCount: inspected.warnings.length,
@@ -722,7 +820,7 @@ export default function SettingsScreen() {
             : '备份文件已损坏';
 
         Logger.error(PAGE_SCOPE, 'restore_inspect_failed', {
-          sessionId,
+          restoreSessionId,
           fileShortInfo,
           durationMs: Date.now() - inspectStartedAt,
           counts: EMPTY_BACKUP_COUNTS,
