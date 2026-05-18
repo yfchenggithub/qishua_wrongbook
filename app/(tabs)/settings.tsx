@@ -633,6 +633,7 @@ export default function SettingsScreen() {
       try {
         const restoreResult = await BackupService.restoreFromBackup(params.backupUri, {
           restoreSessionId: params.restoreSessionId,
+          fileShortInfo: params.fileShortInfo,
         });
         Logger.info(PAGE_SCOPE, 'restore_success', {
           restoreSessionId: params.restoreSessionId,
@@ -782,6 +783,7 @@ export default function SettingsScreen() {
 
         const inspected = await BackupService.inspectBackup(selectedAsset.uri, {
           restoreSessionId,
+          fileShortInfo,
         });
         Logger.info(PAGE_SCOPE, 'restore_inspect_done', {
           restoreSessionId,

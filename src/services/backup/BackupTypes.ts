@@ -97,6 +97,7 @@ export interface RestoreFromBackupResult {
 
 export interface RestoreFromBackupOptions {
   restoreSessionId?: string;
+  fileShortInfo?: string;
 }
 
 export interface RestoreSafetyBackupInfo {

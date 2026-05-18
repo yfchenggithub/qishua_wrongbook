@@ -402,20 +402,24 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
 
 function normalizeArchiveEntryPath(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '').trim();
-  if (!normalized) {
+  const isDirectoryPath = normalized.endsWith('/');
+  const normalizedWithoutTrailingSlash = isDirectoryPath ? normalized.slice(0, -1) : normalized;
+
+  if (!normalizedWithoutTrailingSlash) {
     throw new BackupRestoreError(
       'CORRUPTED_BACKUP_FILE',
       getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
     );
   }
-  const segments = normalized.split('/');
+
+  const segments = normalizedWithoutTrailingSlash.split('/');
   if (segments.some((segment) => segment.length <= 0 || segment === '..')) {
     throw new BackupRestoreError(
       'CORRUPTED_BACKUP_FILE',
       getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
     );
   }
-  return normalized;
+  return isDirectoryPath ? `${normalizedWithoutTrailingSlash}/` : normalizedWithoutTrailingSlash;
 }
 
 function getFileShortInfo(fileUri: string): string {
@@ -1460,10 +1464,10 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
 
 export async function inspectBackup(
   fileUri: string,
-  options?: { restoreSessionId?: string },
+  options?: { restoreSessionId?: string; fileShortInfo?: string },
 ): Promise<InspectBackupResult> {
   const restoreSessionId = normalizeOptionalText(options?.restoreSessionId) ?? createRestoreSessionId();
-  const fileShortInfo = getFileShortInfo(fileUri);
+  const fileShortInfo = normalizeOptionalText(options?.fileShortInfo) ?? getFileShortInfo(fileUri);
   const startedAt = nowMs();
 
   logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_inspect_start', {
@@ -1606,7 +1610,7 @@ export async function restoreFromBackup(
 ): Promise<RestoreFromBackupResult> {
   const restoreSessionId = normalizeOptionalText(options?.restoreSessionId) ?? createRestoreSessionId();
   const startedAt = nowMs();
-  const fileShortInfo = getFileShortInfo(fileUri);
+  const fileShortInfo = normalizeOptionalText(options?.fileShortInfo) ?? getFileShortInfo(fileUri);
   const warnings: RestoreWarningItem[] = [];
   const errors: RestoreErrorItem[] = [];
   const durations = createEmptyDurations();
@@ -1633,6 +1637,13 @@ export async function restoreFromBackup(
   let beforeRestoreBackupUri: string | undefined;
   let orphanImageSamples: string[] = [];
   let missingImageSamples: string[] = [];
+  let tempCopyStartedAt: number | null = null;
+  let packageReadStartedAt: number | null = null;
+  let validateStartedAt: number | null = null;
+  let beforeSnapshotStartedAt: number | null = null;
+  let dbImportStartedAt: number | null = null;
+  let imageRestoreStartedAt: number | null = null;
+  let verifyStartedAt: number | null = null;
 
   try {
     const normalizedUri = normalizeOptionalText(fileUri);
@@ -1659,6 +1670,8 @@ export async function restoreFromBackup(
       });
     }
 
+    failureContext.stage = 'file_stat';
+    failureContext.step = 'read_source_file_info';
     const fileInfo = selectedFile.info();
     if (!selectedFile.exists || fileInfo.exists === false) {
       throw buildRestoreError({
@@ -1676,12 +1689,16 @@ export async function restoreFromBackup(
     const currentCountsBeforeRestore = await readCurrentDatabaseCounts();
     failureContext.currentCounts = cloneCounts(currentCountsBeforeRestore);
 
-    const tempCopyStartedAt = nowMs();
+    failureContext.stage = 'temp_copy';
+    failureContext.step = 'copy_source_to_temp';
+    tempCopyStartedAt = nowMs();
     const copied = await copyBackupFileToTemp(normalizedUri, restoreSessionId, fileShortInfo);
     durations.tempCopyDurationMs = nowMs() - tempCopyStartedAt;
     tempDirectory = copied.tempDirectory;
 
-    const packageReadStartedAt = nowMs();
+    failureContext.stage = 'package_read';
+    failureContext.step = 'read_backup_package';
+    packageReadStartedAt = nowMs();
     const extracted = await readBackupPackageFromTemp({
       restoreSessionId,
       tempDirectory: copied.tempDirectory,
@@ -1698,7 +1715,9 @@ export async function restoreFromBackup(
       });
     }
 
-    const validateStartedAt = nowMs();
+    failureContext.stage = 'validate';
+    failureContext.step = 'validate_manifest_and_data';
+    validateStartedAt = nowMs();
     const validateResult = validateRestorePackage({
       restoreSessionId,
       manifest: extracted.manifest,
@@ -1715,7 +1734,9 @@ export async function restoreFromBackup(
       currentCountsBeforeRestore,
     });
 
-    const beforeSnapshotStartedAt = nowMs();
+    failureContext.stage = 'before_snapshot';
+    failureContext.step = 'create_before_restore_backup';
+    beforeSnapshotStartedAt = nowMs();
     let safetyBackup: CreateBackupServiceResult;
     try {
       safetyBackup = await createBackup({ reason: 'before_restore' });
@@ -1745,7 +1766,9 @@ export async function restoreFromBackup(
       restoreSessionId,
       currentCountsBeforeClear: currentCountsBeforeRestore,
     });
-    const dbImportStartedAt = nowMs();
+    failureContext.stage = 'db_import';
+    failureContext.step = 'write_restore_transaction';
+    dbImportStartedAt = nowMs();
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_started', {
       restoreSessionId,
       targetCounts: validateResult.counts,
@@ -1756,7 +1779,9 @@ export async function restoreFromBackup(
       imageFileCount: extracted.data.mistakeImages.length,
       imageTotalBytes: validateResult.imageTotalBytes,
     });
-    const imageRestoreStartedAt = nowMs();
+    failureContext.stage = 'images_restore';
+    failureContext.step = 'copy_image_files';
+    imageRestoreStartedAt = nowMs();
     const imageResult = await materializeRestoredImages({
       restoreSessionId,
       images: extracted.data.mistakeImages,
@@ -1798,7 +1823,9 @@ export async function restoreFromBackup(
       durationMs: durations.dbImportDurationMs,
     });
 
-    const verifyStartedAt = nowMs();
+    failureContext.stage = 'verify';
+    failureContext.step = 'compare_expected_actual_counts';
+    verifyStartedAt = nowMs();
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_verify_started', {
       restoreSessionId,
       expectedCounts: validateResult.counts,
@@ -1848,16 +1875,60 @@ export async function restoreFromBackup(
     };
   } catch (error) {
     const normalized = normalizeBackupError(error, 'RESTORE_UNKNOWN_FAILED');
-    failureContext.errorCode = normalized.code;
-    failureContext.stage = (normalized.stage as RestoreStage) ?? 'unknown';
-    failureContext.step = normalized.step ?? 'unknown';
+    const resolvedStage = (normalized.stage as RestoreStage | undefined) ?? failureContext.stage;
+    const resolvedStep = normalized.step ?? failureContext.step;
+    let resolvedErrorCode: BackupRestoreErrorCode = normalized.code;
+
+    if (
+      (normalized.code === 'CORRUPTED_BACKUP_FILE' || normalized.code === 'INVALID_BACKUP_FILE') &&
+      resolvedStage === 'package_read'
+    ) {
+      resolvedErrorCode = 'RESTORE_PACKAGE_READ_FAILED';
+    } else if (
+      (normalized.code === 'CORRUPTED_BACKUP_FILE' || normalized.code === 'INVALID_BACKUP_FILE') &&
+      resolvedStage === 'validate'
+    ) {
+      resolvedErrorCode = 'RESTORE_DATA_VALIDATE_FAILED';
+    } else if (normalized.code === 'UNSUPPORTED_BACKUP_VERSION' && resolvedStage === 'validate') {
+      resolvedErrorCode = 'RESTORE_SCHEMA_UNSUPPORTED';
+    }
+
+    if (durations.tempCopyDurationMs === 0 && tempCopyStartedAt !== null && resolvedStage === 'temp_copy') {
+      durations.tempCopyDurationMs = nowMs() - tempCopyStartedAt;
+    }
+    if (durations.packageReadDurationMs === 0 && packageReadStartedAt !== null && resolvedStage === 'package_read') {
+      durations.packageReadDurationMs = nowMs() - packageReadStartedAt;
+    }
+    if (durations.validateDurationMs === 0 && validateStartedAt !== null && resolvedStage === 'validate') {
+      durations.validateDurationMs = nowMs() - validateStartedAt;
+    }
+    if (
+      durations.beforeSnapshotDurationMs === 0 &&
+      beforeSnapshotStartedAt !== null &&
+      resolvedStage === 'before_snapshot'
+    ) {
+      durations.beforeSnapshotDurationMs = nowMs() - beforeSnapshotStartedAt;
+    }
+    if (durations.dbImportDurationMs === 0 && dbImportStartedAt !== null && resolvedStage === 'db_import') {
+      durations.dbImportDurationMs = nowMs() - dbImportStartedAt;
+    }
+    if (durations.imageRestoreDurationMs === 0 && imageRestoreStartedAt !== null && resolvedStage === 'images_restore') {
+      durations.imageRestoreDurationMs = nowMs() - imageRestoreStartedAt;
+    }
+    if (durations.verifyDurationMs === 0 && verifyStartedAt !== null && resolvedStage === 'verify') {
+      durations.verifyDurationMs = nowMs() - verifyStartedAt;
+    }
+
+    failureContext.errorCode = resolvedErrorCode;
+    failureContext.stage = resolvedStage;
+    failureContext.step = resolvedStep;
     failureContext.rootCause = normalized.cause ?? error;
     failureContext.warningCount = warnings.length;
     failureContext.hasBeforeRestoreBackup = !!beforeRestoreBackupUri;
     appendError(errors, {
-      code: normalized.code,
-      stage: failureContext.stage,
-      message: normalized.message,
+      code: resolvedErrorCode,
+      stage: resolvedStage,
+      message: getBackupErrorUserMessage(resolvedErrorCode),
       shortTarget: fileShortInfo,
       rootCauseMessage: safeError(normalized.cause ?? error).message,
     });
@@ -1874,7 +1945,7 @@ export async function restoreFromBackup(
     });
 
     throw buildRestoreError({
-      errorCode: normalized.code,
+      errorCode: resolvedErrorCode,
       stage: failureContext.stage,
       step: failureContext.step,
       cause: normalized.cause ?? normalized,
@@ -1963,9 +2034,13 @@ export async function restoreFromBackupPackage(options: {
   backupUri: string;
   requireUserConfirmation: boolean;
   restoreSessionId?: string;
+  fileShortInfo?: string;
 }): Promise<RestoreFromBackupResult> {
   if (!options.requireUserConfirmation) {
     throw new BackupRestoreError('RESTORE_FAILED', getBackupErrorUserMessage('RESTORE_FAILED'));
   }
-  return restoreFromBackup(options.backupUri, { restoreSessionId: options.restoreSessionId });
+  return restoreFromBackup(options.backupUri, {
+    restoreSessionId: options.restoreSessionId,
+    fileShortInfo: options.fileShortInfo,
+  });
 }
