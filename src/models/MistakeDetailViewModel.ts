@@ -22,7 +22,9 @@ export interface DetailReviewRecordItem {
   reviewIndex: number;
   createdAt: string;
   result: DetailReviewResult;
+  solutionImageId?: string | null;
   solutionImageUri?: string | null;
+  solutionImageExists?: boolean;
 }
 
 export interface MistakeDetailViewModel {

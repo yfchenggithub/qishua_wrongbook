@@ -1,16 +1,18 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+﻿import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
   Image,
+  Linking,
   Pressable,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -30,8 +32,10 @@ import type {
   DetailReviewRecordItem,
   MistakeDetailViewModel,
 } from '@/src/models/MistakeDetailViewModel';
+import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
+import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 const BRAND = {
@@ -56,6 +60,7 @@ type PreviewImageState = {
 };
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
+type ReviewImageSource = 'camera' | 'album';
 
 const MANAGED_IMAGE_ORDER: ManagedDetailType[] = ['question', 'my_solution', 'answer'];
 
@@ -161,6 +166,16 @@ function getDeleteTypeName(type: ManagedDetailType): string {
   return '答案解析';
 }
 
+function mapManagedTypeToImageSlot(type: ManagedDetailType): 'question' | 'solution' | 'answer' {
+  if (type === 'question') {
+    return 'question';
+  }
+  if (type === 'my_solution') {
+    return 'solution';
+  }
+  return 'answer';
+}
+
 function sortManagedImageSlots(slots: DetailImageSlot[]): DetailImageSlot[] {
   const mapByType = new Map<ManagedDetailType, DetailImageSlot>();
   for (const slot of slots) {
@@ -185,22 +200,79 @@ function getToastBackgroundColor(type: ToastType): string {
   return 'rgba(38, 44, 53, 0.95)';
 }
 
+function getReviewPreviewTitle(record: DetailReviewRecordItem): string {
+  if (Number.isFinite(record.reviewIndex) && record.reviewIndex > 0) {
+    return `第 ${record.reviewIndex} 刷记录`;
+  }
+  return '复做记录';
+}
+
+function normalizeErrorMessage(message?: string): string {
+  if (typeof message !== 'string') {
+    return '';
+  }
+  return message.replace(/\s+/g, ' ').trim();
+}
+
+function isCancelLikeMessage(message?: string): boolean {
+  const normalized = normalizeErrorMessage(message).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return normalized.includes('cancel') || normalized.includes('取消');
+}
+
+function isCameraPermissionDenied(message?: string): boolean {
+  const normalized = normalizeErrorMessage(message).toLowerCase();
+  return normalized.includes('camera permission') || normalized.includes('相机权限');
+}
+
+function isMediaLibraryPermissionDenied(message?: string): boolean {
+  const normalized = normalizeErrorMessage(message).toLowerCase();
+  return (
+    normalized.includes('media library permission')
+    || normalized.includes('photo permission')
+    || normalized.includes('相册权限')
+  );
+}
+
+function shouldPromptOpenSettings(message?: string): boolean {
+  const normalized = normalizeErrorMessage(message).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  return (
+    normalized.includes('system settings')
+    || normalized.includes('open settings')
+    || normalized.includes('去设置')
+    || normalized.includes('系统设置')
+  );
+}
+
 function ReviewRecordCard({
   record,
+  isBusy = false,
+  onAddImage,
   onPreview,
+  onOpenImageActions,
 }: {
   record: DetailReviewRecordItem;
+  isBusy?: boolean;
+  onAddImage?: (record: DetailReviewRecordItem) => void;
   onPreview?: (uri: string, title: string) => void;
+  onOpenImageActions?: (record: DetailReviewRecordItem) => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => {
+    setImageFailed(false);
+  }, [record.solutionImageExists, record.solutionImageUri]);
+
   const normalizedUri = normalizePreviewUri(record.solutionImageUri);
   const hasImage = !!normalizedUri;
-  const canShowImage = hasImage && !imageFailed;
-
-  const previewTitle =
-    Number.isFinite(record.reviewIndex) && record.reviewIndex > 0
-      ? `第 ${record.reviewIndex} 刷记录`
-      : '复做记录';
+  const imageExists = record.solutionImageExists !== false;
+  const canShowImage = hasImage && imageExists && !imageFailed;
+  const previewTitle = getReviewPreviewTitle(record);
 
   return (
     <View style={styles.reviewRecordRow}>
@@ -214,13 +286,17 @@ function ReviewRecordCard({
         <View style={styles.reviewRecordPreviewWrap}>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`${previewTitle}，点击查看大图`}
+            accessibilityLabel="复做图片，点击查看大图，长按可管理图片"
             onPress={() => {
               if (!normalizedUri || !onPreview) {
                 return;
               }
               onPreview(normalizedUri, previewTitle);
             }}
+            onLongPress={() => {
+              onOpenImageActions?.(record);
+            }}
+            delayLongPress={220}
             style={({ pressed }) => [styles.reviewRecordImageWrap, pressed && styles.previewTapPressed]}>
             <Image
               source={{ uri: normalizedUri }}
@@ -228,14 +304,55 @@ function ReviewRecordCard({
               resizeMode="cover"
               onError={() => setImageFailed(true)}
             />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="复做图片操作"
+              onPress={() => {
+                onOpenImageActions?.(record);
+              }}
+              style={({ pressed }) => [
+                styles.reviewRecordMoreButton,
+                pressed && styles.reviewRecordMoreButtonPressed,
+              ]}>
+              <MaterialIcons name="more-horiz" size={16} color={colors.textPrimary} />
+            </Pressable>
+            {isBusy ? (
+              <View style={styles.reviewRecordBusyMask}>
+                <ActivityIndicator size="small" color={colors.textPrimary} />
+              </View>
+            ) : null}
           </Pressable>
-          <Text style={styles.reviewRecordPreviewHint}>点击查看大图</Text>
+          <Text style={styles.reviewRecordPreviewHint}>点击查看</Text>
         </View>
-      ) : hasImage ? (
-        <View style={styles.reviewRecordBadge}>
-          <Text style={styles.reviewRecordBadgeText}>已保存照片</Text>
-        </View>
-      ) : null}
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={hasImage ? '复做图片不可用，点击重新添加' : '添加复做图片'}
+          onPress={() => {
+            if (hasImage) {
+              onOpenImageActions?.(record);
+              return;
+            }
+            onAddImage?.(record);
+          }}
+          style={({ pressed }) => [
+            styles.reviewRecordEmptyThumb,
+            hasImage && styles.reviewRecordMissingThumb,
+            pressed && styles.previewTapPressed,
+          ]}>
+          <MaterialIcons
+            name={hasImage ? 'image-not-supported' : 'photo-camera'}
+            size={18}
+            color={colors.textMuted}
+          />
+          <Text style={styles.reviewRecordEmptyText}>{hasImage ? '图片不可用' : '补拍'}</Text>
+          {isBusy ? (
+            <View style={styles.reviewRecordBusyMask}>
+              <ActivityIndicator size="small" color={colors.textPrimary} />
+            </View>
+          ) : null}
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -287,6 +404,7 @@ export default function MistakeDetailScreen() {
   const [isTitleEditing, setIsTitleEditing] = useState(false);
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
@@ -375,6 +493,272 @@ export default function MistakeDetailScreen() {
       title,
     });
   }, []);
+
+  const refreshDetail = useCallback(async () => {
+    if (!routeId) {
+      return;
+    }
+
+    const result = await MistakeDetailService.getMistakeDetail(routeId);
+    if (result.ok && result.detail) {
+      setState({
+        kind: 'success',
+        detail: result.detail,
+      });
+      return;
+    }
+
+    Logger.warn(PAGE_SCOPE, 'Skip updating detail snapshot because refresh failed.', {
+      routeId,
+      errorMessage: result.errorMessage ?? null,
+    });
+  }, [routeId]);
+
+  const promptOpenSettings = useCallback((source: ReviewImageSource) => {
+    const message =
+      source === 'camera'
+        ? '需要相机权限才能拍照添加复做图片，请到系统设置中开启。'
+        : '需要相册权限才能选择复做图片，请到系统设置中开启。';
+
+    Alert.alert('权限受限', message, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '去设置',
+        onPress: () => {
+          void Linking.openSettings();
+        },
+      },
+    ]);
+  }, []);
+
+  const handlePickAndPersistReviewImage = useCallback(
+    async (record: DetailReviewRecordItem, source: ReviewImageSource, successMessage: string) => {
+      if (state.kind !== 'success') {
+        return;
+      }
+      if (activeReviewRecordId !== null) {
+        return;
+      }
+
+      setActiveReviewRecordId(record.id);
+      try {
+        const saveResult =
+          source === 'camera'
+            ? await ImageService.takePhotoAndSave({
+                mistakeId: state.detail.id,
+                type: 'review_solution',
+              })
+            : await ImageService.pickImageAndSave({
+                mistakeId: state.detail.id,
+                type: 'review_solution',
+              });
+
+        const savedUri = normalizePreviewUri(saveResult.image?.uri);
+        const normalizedError = normalizeErrorMessage(saveResult.errorMessage);
+        if (!saveResult.ok || !savedUri) {
+          if (isCancelLikeMessage(normalizedError)) {
+            Logger.info(PAGE_SCOPE, 'User canceled selecting review record image.', {
+              mistakeId: state.detail.id,
+              reviewRecordId: record.id,
+              source,
+            });
+            return;
+          }
+
+          if (source === 'camera' && isCameraPermissionDenied(normalizedError)) {
+            showToast('需要相机权限才能拍照添加复做图片。', 'error');
+            if (shouldPromptOpenSettings(normalizedError)) {
+              promptOpenSettings('camera');
+            }
+            return;
+          }
+
+          if (source === 'album' && isMediaLibraryPermissionDenied(normalizedError)) {
+            showToast('需要相册权限才能选择复做图片。', 'error');
+            if (shouldPromptOpenSettings(normalizedError)) {
+              promptOpenSettings('album');
+            }
+            return;
+          }
+
+          if (shouldPromptOpenSettings(normalizedError)) {
+            promptOpenSettings(source);
+            return;
+          }
+
+          showToast('图片保存失败，请重试。', 'error');
+          return;
+        }
+
+        const persistResult = await ReviewRecordImageService.updateReviewRecordImage({
+          mistakeId: state.detail.id,
+          reviewRecordId: record.id,
+          imageUri: savedUri,
+        });
+        if (!persistResult.ok) {
+          showToast(persistResult.errorMessage ?? '复做图片更新失败，请重试。', 'error');
+          return;
+        }
+
+        await refreshDetail();
+        showToast(successMessage, 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to update review record image.', {
+          mistakeId: state.kind === 'success' ? state.detail.id : null,
+          reviewRecordId: record.id,
+          source,
+          error,
+        });
+        showToast('复做图片更新失败，请重试。', 'error');
+      } finally {
+        setActiveReviewRecordId(null);
+      }
+    },
+    [activeReviewRecordId, promptOpenSettings, refreshDetail, showToast, state],
+  );
+
+  const handleAddReviewImage = useCallback(
+    async (record: DetailReviewRecordItem, source: ReviewImageSource) => {
+      await handlePickAndPersistReviewImage(record, source, '复做图片已添加');
+    },
+    [handlePickAndPersistReviewImage],
+  );
+
+  const handleReplaceReviewImage = useCallback(
+    async (record: DetailReviewRecordItem, source: ReviewImageSource) => {
+      await handlePickAndPersistReviewImage(record, source, '复做图片已更新');
+    },
+    [handlePickAndPersistReviewImage],
+  );
+
+  const handleDeleteReviewImage = useCallback(
+    async (record: DetailReviewRecordItem) => {
+      if (state.kind !== 'success') {
+        return;
+      }
+      if (activeReviewRecordId !== null) {
+        return;
+      }
+
+      setActiveReviewRecordId(record.id);
+      try {
+        const removeResult = await ReviewRecordImageService.removeReviewRecordImage({
+          mistakeId: state.detail.id,
+          reviewRecordId: record.id,
+        });
+        if (!removeResult.ok) {
+          showToast(removeResult.errorMessage ?? '复做图片更新失败，请重试。', 'error');
+          return;
+        }
+
+        await refreshDetail();
+        showToast('复做图片已删除', 'info');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to remove review record image.', {
+          mistakeId: state.kind === 'success' ? state.detail.id : null,
+          reviewRecordId: record.id,
+          error,
+        });
+        showToast('复做图片更新失败，请重试。', 'error');
+      } finally {
+        setActiveReviewRecordId(null);
+      }
+    },
+    [activeReviewRecordId, refreshDetail, showToast, state],
+  );
+
+  const openReviewImagePickerActionSheet = useCallback(
+    (record: DetailReviewRecordItem, mode: 'add' | 'replace') => {
+      const isAddMode = mode === 'add';
+      Alert.alert(
+        isAddMode ? '添加复做图片' : '替换复做图片',
+        isAddMode ? '只会关联到这条复做记录。' : '只会替换这条复做记录的图片。',
+        [
+          { text: '取消', style: 'cancel' },
+          {
+            text: '拍照',
+            onPress: () => {
+              if (isAddMode) {
+                void handleAddReviewImage(record, 'camera');
+                return;
+              }
+              void handleReplaceReviewImage(record, 'camera');
+            },
+          },
+          {
+            text: '从相册选择',
+            onPress: () => {
+              if (isAddMode) {
+                void handleAddReviewImage(record, 'album');
+                return;
+              }
+              void handleReplaceReviewImage(record, 'album');
+            },
+          },
+        ],
+      );
+    },
+    [handleAddReviewImage, handleReplaceReviewImage],
+  );
+
+  const handleOpenReviewImageActions = useCallback(
+    (record: DetailReviewRecordItem) => {
+      Alert.alert('复做图片操作', '请选择操作', [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '查看大图',
+          onPress: () => {
+            const normalizedUri = normalizePreviewUri(record.solutionImageUri);
+            if (!normalizedUri || record.solutionImageExists === false) {
+              showToast('图片不可用，请重新添加。', 'info');
+              return;
+            }
+            handleOpenPreview(normalizedUri, getReviewPreviewTitle(record));
+          },
+        },
+        {
+          text: '更多操作',
+          onPress: () => {
+            Alert.alert('更多操作', '请选择操作', [
+              { text: '取消', style: 'cancel' },
+              {
+                text: '替换图片',
+                onPress: () => {
+                  openReviewImagePickerActionSheet(record, 'replace');
+                },
+              },
+              {
+                text: '删除图片',
+                style: 'destructive',
+                onPress: () => {
+                  Alert.alert(
+                    '删除复做图片？',
+                    '只会删除这条复做记录的图片，不会删除复做记录。',
+                    [
+                      { text: '取消', style: 'cancel' },
+                      {
+                        text: '删除',
+                        style: 'destructive',
+                        onPress: () => {
+                          void handleDeleteReviewImage(record);
+                        },
+                      },
+                    ],
+                  );
+                },
+              },
+            ]);
+          },
+        },
+      ]);
+    },
+    [handleDeleteReviewImage, handleOpenPreview, openReviewImagePickerActionSheet, showToast],
+  );
+
+  const isReviewRecordImageBusy = useCallback(
+    (reviewRecordId: string) => activeReviewRecordId === reviewRecordId,
+    [activeReviewRecordId],
+  );
 
   const loadDetail = useCallback(
     async (options?: { keepCurrent?: boolean }) => {
@@ -502,9 +886,7 @@ export default function MistakeDetailScreen() {
   } = useMistakeDetailImages({
     mistakeId: state.kind === 'success' ? state.detail.id : null,
     imageSlots: detailSlots,
-    refreshDetail: async () => {
-      await loadDetail({ keepCurrent: true });
-    },
+    refreshDetail,
     showToast,
   });
 
@@ -554,13 +936,22 @@ export default function MistakeDetailScreen() {
       }
 
       const normalizedUri = normalizePreviewUri(slot.uri);
-      if (!normalizedUri) {
+      if (!normalizedUri || slot.exists === false) {
+        showToast('请先拍照添加图片', 'info');
+        Logger.warn(PAGE_SCOPE, 'Edit image blocked because source image is unavailable.', {
+          mistakeId: state.detail.id,
+          imageType: slot.type,
+          hasUri: !!normalizedUri,
+          exists: slot.exists ?? null,
+        });
         return;
       }
 
       Logger.info(PAGE_SCOPE, 'Edit image clicked.', {
         mistakeId: state.detail.id,
         imageType: slot.type,
+        imageSlot: mapManagedTypeToImageSlot(slot.type),
+        sourceUriLength: normalizedUri.length,
       });
 
       router.push(
@@ -569,11 +960,14 @@ export default function MistakeDetailScreen() {
           params: {
             id: state.detail.id,
             imageType: slot.type,
+            imageSlot: mapManagedTypeToImageSlot(slot.type),
+            sourceUri: normalizedUri,
+            oldImageUri: normalizedUri,
           },
         } as never,
       );
     },
-    [router, state],
+    [router, showToast, state],
   );
 
   const handleStartTitleEdit = useCallback(() => {
@@ -762,10 +1156,18 @@ export default function MistakeDetailScreen() {
                 <SectionTitle title="图片管理" />
                 <Pressable
                   onPress={() => void loadDetail({ keepCurrent: true })}
-                  disabled={isRefreshing || takePhotoType !== null || deleteType !== null}
+                  disabled={
+                    isRefreshing
+                    || takePhotoType !== null
+                    || deleteType !== null
+                    || activeReviewRecordId !== null
+                  }
                   style={[
                     styles.refreshButton,
-                    (isRefreshing || takePhotoType !== null || deleteType !== null)
+                    (isRefreshing
+                      || takePhotoType !== null
+                      || deleteType !== null
+                      || activeReviewRecordId !== null)
                       && styles.refreshButtonDisabled,
                   ]}>
                   <Text style={styles.refreshButtonText}>{isRefreshing ? '刷新中...' : '刷新'}</Text>
@@ -813,7 +1215,12 @@ export default function MistakeDetailScreen() {
                     <ReviewRecordCard
                       key={record.id}
                       record={record}
+                      isBusy={isReviewRecordImageBusy(record.id)}
+                      onAddImage={(targetRecord) => {
+                        openReviewImagePickerActionSheet(targetRecord, 'add');
+                      }}
                       onPreview={(uri, title) => handleOpenPreview(uri, title)}
+                      onOpenImageActions={handleOpenReviewImageActions}
                     />
                   ))}
                 </View>
@@ -1085,7 +1492,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     padding: spacing.md,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
@@ -1103,23 +1510,48 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   reviewRecordPreviewWrap: {
-    alignItems: 'flex-end',
+    width: 72,
+    alignItems: 'center',
     gap: 2,
   },
   reviewRecordImageWrap: {
-    borderRadius: radius.md,
-    overflow: 'hidden',
-  },
-  reviewRecordImage: {
-    width: 72,
-    height: 72,
+    width: 68,
+    height: 68,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+    overflow: 'hidden',
+    position: 'relative',
+  },
+  reviewRecordImage: {
+    width: '100%',
+    height: '100%',
   },
   previewTapPressed: {
     opacity: 0.84,
+  },
+  reviewRecordMoreButton: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 22,
+    height: 22,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255, 255, 255, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewRecordMoreButtonPressed: {
+    opacity: 0.86,
+  },
+  reviewRecordBusyMask: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 255, 255, 0.68)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   reviewRecordPreviewHint: {
     ...typography.caption,
@@ -1127,18 +1559,29 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 12,
   },
-  reviewRecordBadge: {
-    borderRadius: radius.pill,
+  reviewRecordEmptyThumb: {
+    width: 68,
+    height: 68,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+    borderStyle: 'dashed',
     backgroundColor: colors.surface,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    position: 'relative',
   },
-  reviewRecordBadgeText: {
+  reviewRecordMissingThumb: {
+    borderStyle: 'solid',
+    backgroundColor: colors.surfaceMuted,
+  },
+  reviewRecordEmptyText: {
     ...typography.caption,
-    color: colors.textSecondary,
+    color: colors.textMuted,
     fontWeight: '700',
+    fontSize: 10,
+    lineHeight: 12,
   },
   toastContainer: {
     position: 'absolute',
@@ -1164,3 +1607,5 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+
+

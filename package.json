@@ -10,6 +10,11 @@
     "web": "expo start --web",
     "dev-client": "expo start --dev-client",
     "check:deps": "expo install --check",
+    "check:encoding": "node ./scripts/check-encoding.js",
+    "check:encoding:all": "node ./scripts/check-encoding.js --all",
+    "check:encoding:staged": "node ./scripts/check-encoding.js --staged",
+    "preflight": "npm run check:encoding && npm run typecheck && npm run lint",
+    "setup:hooks": "git config core.hooksPath .githooks",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint"
   },

@@ -1,4 +1,4 @@
-import * as Clipboard from 'expo-clipboard';
+﻿import * as Clipboard from 'expo-clipboard';
 import { Stack, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
@@ -131,6 +131,137 @@ function formatCopyLine(log: RuntimeLogItem): string {
   const metadataText = stringifyMetadata(log.metadata, METADATA_COPY_LIMIT);
   const metadataPart = metadataText ? ` ${metadataText}` : '';
   return `[${log.timestamp}] ${level}${scopePart} ${log.message}${metadataPart}`;
+}
+
+function stringifyCopyField(value: unknown): string {
+  if (value === undefined) {
+    return '';
+  }
+
+  if (value === null) {
+    return 'null';
+  }
+
+  if (typeof value === 'string') {
+    return value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (value instanceof Error) {
+    const errorPayload: Record<string, unknown> = {
+      name: value.name,
+      message: value.message,
+    };
+    if (value.stack) {
+      errorPayload.stack = value.stack;
+    }
+    return JSON.stringify(errorPayload, null, 2);
+  }
+
+  try {
+    const seen = new WeakSet<object>();
+    const stringified = JSON.stringify(
+      value,
+      (_key, nextValue: unknown) => {
+        if (nextValue instanceof Date) {
+          return nextValue.toISOString();
+        }
+
+        if (nextValue instanceof Error) {
+          const errorPayload: Record<string, unknown> = {
+            name: nextValue.name,
+            message: nextValue.message,
+          };
+          if (nextValue.stack) {
+            errorPayload.stack = nextValue.stack;
+          }
+          return errorPayload;
+        }
+
+        if (typeof nextValue === 'object' && nextValue !== null) {
+          if (seen.has(nextValue as object)) {
+            return '[Circular]';
+          }
+          seen.add(nextValue as object);
+        }
+        return nextValue;
+      },
+      2,
+    );
+
+    if (typeof stringified === 'string') {
+      return stringified;
+    }
+  } catch {
+    // Fallback to String conversion below.
+  }
+
+  return String(value);
+}
+
+function getCopyTextField(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : fallback;
+}
+
+function formatSingleLogForCopy(log: RuntimeLogItem): string {
+  const extendedLog = log as RuntimeLogItem & Record<string, unknown>;
+  const level = getCopyTextField(extendedLog.level, 'info').toUpperCase();
+  const timestamp =
+    getCopyTextField(extendedLog.timestamp, '') ||
+    getCopyTextField(extendedLog.createdAt, '') ||
+    getCopyTextField(extendedLog.time, 'unknown-time');
+  const scope = getCopyTextField(extendedLog.scope, 'unknown');
+  const message = getCopyTextField(extendedLog.message, '');
+  const metadataCopyValue = extendedLog.metadata ?? {};
+
+  const lines: string[] = [
+    `[${level}] ${timestamp}`,
+    `scope: ${scope}`,
+    `message: ${message}`,
+    `metadata: ${stringifyCopyField(metadataCopyValue)}`,
+  ];
+
+  if (extendedLog.error !== undefined) {
+    lines.push(`error: ${stringifyCopyField(extendedLog.error)}`);
+  }
+
+  if (extendedLog.stack !== undefined) {
+    lines.push(`stack: ${stringifyCopyField(extendedLog.stack)}`);
+  }
+
+  const knownKeys = new Set([
+    'id',
+    'timestamp',
+    'createdAt',
+    'time',
+    'level',
+    'scope',
+    'message',
+    'metadata',
+    'error',
+    'stack',
+  ]);
+
+  for (const [key, value] of Object.entries(extendedLog)) {
+    if (knownKeys.has(key) || value === undefined) {
+      continue;
+    }
+    lines.push(`${key}: ${stringifyCopyField(value)}`);
+  }
+
+  return lines.join('\n');
 }
 
 export default function RuntimeLogsPage() {
@@ -296,6 +427,27 @@ export default function RuntimeLogsPage() {
     }
   }, [showToast]);
 
+  const handleCopySingleLog = useCallback(
+    async (log: RuntimeLogItem) => {
+      if (typeof Clipboard.setStringAsync !== 'function') {
+        showToast('当前环境暂不支持复制，请截图反馈', 'warning', TOAST_DURATION_LONG);
+        return;
+      }
+
+      try {
+        await Clipboard.setStringAsync(formatSingleLogForCopy(log));
+        showToast('已复制该条日志', 'success');
+      } catch (error) {
+        Logger.warn(PAGE_SCOPE, 'Copy single runtime log failed.', {
+          error,
+          logId: log.id,
+        });
+        showToast('复制失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+      }
+    },
+    [showToast],
+  );
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <Stack.Screen options={{ title: '运行日志', headerShown: false }} />
@@ -312,6 +464,7 @@ export default function RuntimeLogsPage() {
           <Text style={styles.summaryText}>
             当前日志条数：{logs.length}，筛选后：{logsForRender.length}
           </Text>
+          <Text style={styles.summaryText}>长按单条日志可复制</Text>
         </View>
 
         <View style={styles.section}>
@@ -333,7 +486,7 @@ export default function RuntimeLogsPage() {
             })}
           </View>
 
-          <Text style={styles.filterTitle}>关键字搜索</Text>
+          <Text style={styles.filterTitle}>关键词搜索</Text>
           <Text style={styles.filterTitle}>时间顺序</Text>
           <View style={styles.filterRow}>
             {LOG_TIME_ORDERS.map((orderItem) => {
@@ -405,7 +558,13 @@ export default function RuntimeLogsPage() {
             logsForRender.map(({ item, metadataText }) => {
               const levelStyle = getLevelBadgeStyle(item.level);
               return (
-                <View key={item.id} style={styles.logCard}>
+                <Pressable
+                  key={item.id}
+                  delayLongPress={500}
+                  onLongPress={() => {
+                    void handleCopySingleLog(item);
+                  }}
+                  style={({ pressed }) => [styles.logCard, pressed ? styles.logCardPressed : null]}>
                   <View style={styles.logHeadRow}>
                     <Text style={styles.logTimestamp}>{item.timestamp}</Text>
                     <View
@@ -424,7 +583,7 @@ export default function RuntimeLogsPage() {
                   <Text style={styles.logScopeText}>scope: {item.scope ?? 'unknown'}</Text>
                   <Text style={styles.logMessageText}>{item.message}</Text>
                   {metadataText ? <Text style={styles.logMetadataText}>{metadataText}</Text> : null}
-                </View>
+                </Pressable>
               );
             })
           )}
@@ -590,6 +749,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     padding: spacing.sm,
     gap: spacing.xs,
+  },
+  logCardPressed: {
+    opacity: 0.88,
   },
   logHeadRow: {
     flexDirection: 'row',

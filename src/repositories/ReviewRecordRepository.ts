@@ -223,6 +223,22 @@ ORDER BY review_index ASC, created_at ASC;`,
     }
   },
 
+  async getReviewRecordById(id: string): Promise<ReviewRecord | null> {
+    try {
+      await ensureDatabaseReady();
+      const normalizedId = typeof id === 'string' ? id.trim() : '';
+      if (!normalizedId) {
+        return null;
+      }
+
+      const record = await getReviewRecordByIdInternal(normalizedId);
+      return record;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'getReviewRecordById failed.', { id, error });
+      throw error;
+    }
+  },
+
   async getLatestReviewRecord(mistakeId: string): Promise<ReviewRecord | null> {
     try {
       await ensureDatabaseReady();

@@ -1,4 +1,4 @@
-import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
+﻿import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type {
   DetailImageSlot,
   DetailReviewRecordItem,
@@ -266,14 +266,33 @@ async function mapReviewRecords(
   const mapped = await Promise.all(
     mistakeReviewRecords.map(async (record) => {
       const reviewSolutionImages = await MistakeImageRepository.getReviewSolutionImages(record.id);
-      const solutionImageUri = normalizeOptionalText(reviewSolutionImages[0]?.uri ?? null);
+      const primaryImage = reviewSolutionImages[0];
+      const solutionImageId = normalizeOptionalText(primaryImage?.id ?? null);
+      const solutionImageUri = normalizeOptionalText(primaryImage?.uri ?? null);
+      let solutionImageExists = false;
+
+      if (solutionImageUri) {
+        try {
+          const info = await getImageInfo(solutionImageUri);
+          solutionImageExists = info.exists;
+        } catch (error) {
+          Logger.error(SERVICE_SCOPE, 'Failed to load review image info, fallback to unavailable.', {
+            reviewRecordId: record.id,
+            solutionImageUriShort: toShortUri(solutionImageUri),
+            error,
+          });
+          solutionImageExists = false;
+        }
+      }
 
       return {
         id: record.id,
         reviewIndex: record.review_index,
         createdAt: record.created_at,
         result: normalizeDetailReviewResult(record.result),
+        solutionImageId,
         solutionImageUri,
+        solutionImageExists,
       };
     }),
   );

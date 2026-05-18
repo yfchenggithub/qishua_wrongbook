@@ -1,5 +1,6 @@
 export * as ImageService from "./ImageService";
 export * as ImageOptimizeService from "./ImageOptimizeService";
+export * as ImageProcessService from "./ImageProcessService";
 export * as ImagePickerService from "./ImagePickerService";
 export * as ImageStorageService from "./ImageStorageService";
 export * as ImageEnhancementService from "./imageEnhancement/scanEnhanceImage";
@@ -11,6 +12,7 @@ export * as SettingsStatsService from "./SettingsStatsService";
 export * as ReviewFlowService from "./ReviewFlowService";
 export * as ReviewScheduleService from "./ReviewScheduleService";
 export * as CompleteReviewService from "./CompleteReviewService";
+export * as ReviewRecordImageService from "./ReviewRecordImageService";
 export * as ReviewSessionService from "./ReviewSessionService";
 export * as ReviewReminderService from "./ReviewReminderService";
 export * as TodayReviewPdfExportService from "./TodayReviewPdfExportService";

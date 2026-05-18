@@ -383,6 +383,68 @@ ORDER BY sort_order ASC, created_at ASC;`,
     }
   },
 
+  async upsertReviewSolutionImageByReviewRecordId(
+    mistakeId: string,
+    reviewRecordId: string,
+    uri: string,
+  ): Promise<MistakeImage> {
+    try {
+      await ensureDatabaseReady();
+      const normalizedMistakeId = normalizeRequiredText(mistakeId, 'mistakeId');
+      const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
+      const normalizedUri = normalizeRequiredText(uri, 'uri');
+
+      return withDatabaseTransaction(async (db) => {
+        const existingRows = await db.getAllAsync<MistakeImage>(
+          `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+WHERE review_record_id = ?
+  AND type = 'review_solution'
+ORDER BY sort_order ASC, created_at ASC;`,
+          normalizedReviewRecordId,
+        );
+        const existing = existingRows.map(mapMistakeImageRow);
+
+        if (existing.length <= 0) {
+          return MistakeImageRepository.createMistakeImageInTransaction(db, {
+            mistake_id: normalizedMistakeId,
+            review_record_id: normalizedReviewRecordId,
+            type: 'review_solution',
+            uri: normalizedUri,
+            sort_order: 0,
+          });
+        }
+
+        const primary = existing[0];
+        await db.runAsync(
+          `UPDATE mistake_images
+SET mistake_id = ?, uri = ?, sort_order = ?
+WHERE id = ?;`,
+          normalizedMistakeId,
+          normalizedUri,
+          0,
+          primary.id,
+        );
+
+        for (const staleImage of existing.slice(1)) {
+          await db.runAsync('DELETE FROM mistake_images WHERE id = ?;', staleImage.id);
+        }
+
+        const updated = await getImageByIdInDatabase(db, primary.id);
+        if (!updated) {
+          throw new Error('Failed to load upserted review solution image.');
+        }
+        return updated;
+      });
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'upsertReviewSolutionImageByReviewRecordId failed.', {
+        mistakeId,
+        reviewRecordId,
+        error,
+      });
+      throw error;
+    }
+  },
+
   async insertMistakeImages(mistakeId: string, images: InsertMistakeImageItem[]): Promise<MistakeImage[]> {
     try {
       await ensureDatabaseReady();

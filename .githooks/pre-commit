@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -e
+
+echo "[pre-commit] Running encoding guard..."
+git diff --cached --name-only --diff-filter=ACMR | node ./scripts/check-encoding.js --stdin
