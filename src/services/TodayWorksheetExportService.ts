@@ -7,12 +7,14 @@ const SERVICE_SCOPE = 'TodayWorksheetExportService';
 const MESSAGE_SUCCESS = '今日练习卷已生成';
 const MESSAGE_EMPTY = '今天没有待复做错题';
 const MESSAGE_SHARE_UNAVAILABLE = '当前设备暂不支持分享，请在文件管理中查看已导出的练习卷';
+const MESSAGE_BUSY = '正在处理上一次导出/分享，请稍后再试。';
 const MESSAGE_FAILED = '导出失败，请稍后重试';
 
 export type TodayWorksheetExportOutcome =
   | 'success'
   | 'empty'
   | 'share_unavailable'
+  | 'busy'
   | 'failed';
 
 export type TodayWorksheetExportResult = {
@@ -56,6 +58,16 @@ export async function exportTodayWorksheet(): Promise<TodayWorksheetExportResult
       return {
         outcome: 'share_unavailable',
         message: MESSAGE_SHARE_UNAVAILABLE,
+      };
+    }
+
+    if (result.reason === 'busy') {
+      Logger.info(SERVICE_SCOPE, 'Skip worksheet export because another export/share flow is in progress.', {
+        message: result.message,
+      });
+      return {
+        outcome: 'busy',
+        message: MESSAGE_BUSY,
       };
     }
 

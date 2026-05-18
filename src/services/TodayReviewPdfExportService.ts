@@ -16,6 +16,9 @@ const PDF_FILE_PREFIX = 'qishua_today_review';
 const EXPORT_IMAGE_MAX_WIDTH = 1200;
 const EXPORT_IMAGE_MAX_HEIGHT = 1600;
 const EXPORT_IMAGE_QUALITY = 0.55;
+const EXPORT_BUSY_MESSAGE = '导出/分享进行中，请稍后再试。';
+const SHARE_BUSY_ERROR_FRAGMENT = 'another share request is being processed';
+let isExportInProgress = false;
 const FALLBACK_EXPORT_ERROR_MESSAGE = '导出失败，请稍后重试';
 const SHARE_UNAVAILABLE_MESSAGE = '当前设备暂不支持分享，请在文件管理中查看已导出的练习卷';
 const EMPTY_MESSAGE = '今天没有待复做题，无需导出练习卷';
@@ -32,7 +35,7 @@ export type ExportTodayReviewPdfResult =
     }
   | {
       success: false;
-      reason: 'empty' | 'generate_failed' | 'share_unavailable' | 'unknown';
+      reason: 'empty' | 'generate_failed' | 'share_unavailable' | 'busy' | 'unknown';
       message: string;
     };
 
@@ -71,6 +74,13 @@ function toSafeUriPreview(uri: string | null | undefined): string | null {
 
 function toDisplayText(value: string | null | undefined, fallback: string): string {
   return normalizeOptionalText(value) ?? fallback;
+}
+
+function isShareBusyError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return error.message.toLowerCase().includes(SHARE_BUSY_ERROR_FRAGMENT);
 }
 
 function resolveBaseDate(date?: string): Date {
@@ -469,6 +479,18 @@ async function persistPdfToDocumentDirectory(
 export async function exportTodayReviewPdf(
   options?: ExportTodayReviewPdfOptions,
 ): Promise<ExportTodayReviewPdfResult> {
+  if (isExportInProgress) {
+    Logger.warn(SERVICE_SCOPE, 'Skip export because another export/share flow is in progress.', {
+      date: options?.date ?? null,
+    });
+    return {
+      success: false,
+      reason: 'busy',
+      message: EXPORT_BUSY_MESSAGE,
+    };
+  }
+
+  isExportInProgress = true;
   const baseDate = resolveBaseDate(options?.date);
   const dateString = toDateOnlyString(baseDate);
 
@@ -521,10 +543,26 @@ export async function exportTodayReviewPdf(
       };
     }
 
-    await Sharing.shareAsync(exportedFileUri, {
-      mimeType: PDF_MIME_TYPE,
-      dialogTitle: '分享今日练习卷',
-    });
+    try {
+      await Sharing.shareAsync(exportedFileUri, {
+        mimeType: PDF_MIME_TYPE,
+        dialogTitle: '分享今日练习卷',
+      });
+    } catch (error) {
+      if (isShareBusyError(error)) {
+        Logger.warn(SERVICE_SCOPE, 'Share request rejected because another share is processing.', {
+          date: dateString,
+          fileUriPreview: toSafeUriPreview(exportedFileUri),
+          error,
+        });
+        return {
+          success: false,
+          reason: 'busy',
+          message: EXPORT_BUSY_MESSAGE,
+        };
+      }
+      throw error;
+    }
 
     Logger.info(SERVICE_SCOPE, 'Today review PDF exported and shared successfully.', {
       date: dateString,
@@ -547,5 +585,7 @@ export async function exportTodayReviewPdf(
       reason: 'unknown',
       message: FALLBACK_EXPORT_ERROR_MESSAGE,
     };
+  } finally {
+    isExportInProgress = false;
   }
 }

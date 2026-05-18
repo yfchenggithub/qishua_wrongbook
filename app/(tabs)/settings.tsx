@@ -785,6 +785,14 @@ export default function SettingsScreen() {
         return;
       }
 
+      if (result.outcome === 'busy') {
+        Logger.info(PAGE_SCOPE, 'Export skipped because another export/share flow is still in progress.', {
+          outcome: result.outcome,
+        });
+        showToast(result.message, 'info');
+        return;
+      }
+
       Logger.warn(PAGE_SCOPE, 'Today worksheet export failed from settings.', {
         outcome: result.outcome,
       });

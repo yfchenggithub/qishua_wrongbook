@@ -469,6 +469,11 @@ export default function TodayScreen() {
         return;
       }
 
+      if (result.outcome === 'busy') {
+        showToast(result.message, 'info');
+        return;
+      }
+
       showToast(result.message, 'error', TOAST_DURATION_LONG);
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Failed to export today worksheet.', { error });
