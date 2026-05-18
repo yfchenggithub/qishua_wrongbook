@@ -12,6 +12,10 @@ export interface DetailImageSlot {
   uri?: string | null;
   exists?: boolean;
   fileSize?: number | null;
+  width?: number | null;
+  height?: number | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
   emptyText: string;
 }
 

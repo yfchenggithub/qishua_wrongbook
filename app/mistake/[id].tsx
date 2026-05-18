@@ -1188,6 +1188,10 @@ export default function MistakeDetailScreen() {
                       imageUri={slot.uri}
                       imageExists={slot.exists}
                       fileSize={slot.fileSize}
+                      width={slot.width}
+                      height={slot.height}
+                      imageWidth={slot.imageWidth}
+                      imageHeight={slot.imageHeight}
                       emptyText={slot.emptyText}
                       loadErrorText={slotType === 'question' ? '题目图片加载失败' : '图片加载失败'}
                       isBusy={isTypeBusy(slotType)}
