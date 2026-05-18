@@ -1,7 +1,6 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { Platform } from 'react-native';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
 import { optimizeImageForStorage } from '@/src/services/ImageOptimizeService';
@@ -160,11 +159,19 @@ async function buildQuestionImageSrc(uri: string): Promise<string | null> {
     });
   }
 
-  if (Platform.OS === 'android') {
-    return sourceUri;
+  const candidateUris = sourceUri === normalizedUri ? [sourceUri] : [sourceUri, normalizedUri];
+  for (const candidateUri of candidateUris) {
+    const dataUri = await toImageDataUri(candidateUri);
+    if (dataUri) {
+      return dataUri;
+    }
   }
 
-  return toImageDataUri(sourceUri);
+  Logger.warn(SERVICE_SCOPE, 'Failed to build embeddable image data uri for export PDF item.', {
+    sourceUriPreview: toSafeUriPreview(sourceUri),
+    originalUriPreview: toSafeUriPreview(normalizedUri),
+  });
+  return null;
 }
 
 function formatDifficultyText(difficulty: number | null): string {
