@@ -25,6 +25,14 @@ const EMPTY_MESSAGE = '今天没有待复做题，无需导出练习卷';
 
 export type ExportTodayReviewPdfOptions = {
   date?: string;
+  onProgress?: (progress: ExportTodayReviewPdfProgress) => void;
+};
+
+export type ExportTodayReviewPdfStage = 'prepare_items' | 'generate_pdf' | 'open_share';
+
+export type ExportTodayReviewPdfProgress = {
+  stage: ExportTodayReviewPdfStage;
+  itemCount: number | null;
 };
 
 export type ExportTodayReviewPdfResult =
@@ -37,6 +45,8 @@ export type ExportTodayReviewPdfResult =
       success: false;
       reason: 'empty' | 'generate_failed' | 'share_unavailable' | 'busy' | 'unknown';
       message: string;
+      exportedCount?: number;
+      fileUri?: string;
     };
 
 type TodayReviewPdfRenderItem = {
@@ -98,6 +108,35 @@ function resolveBaseDate(date?: string): Date {
 
 function buildExportFileName(dateString: string): string {
   return `${PDF_FILE_PREFIX}_${dateString}.pdf`;
+}
+
+function toSafeProgressItemCount(itemCount: number | null | undefined): number | null {
+  if (typeof itemCount !== 'number' || !Number.isFinite(itemCount)) {
+    return null;
+  }
+  return Math.max(0, Math.floor(itemCount));
+}
+
+function reportExportProgress(
+  reporter: ExportTodayReviewPdfOptions['onProgress'],
+  stage: ExportTodayReviewPdfStage,
+  itemCount?: number | null,
+): void {
+  if (!reporter) {
+    return;
+  }
+  try {
+    reporter({
+      stage,
+      itemCount: toSafeProgressItemCount(itemCount),
+    });
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Export progress reporter callback failed.', {
+      stage,
+      itemCount: toSafeProgressItemCount(itemCount),
+      error,
+    });
+  }
 }
 
 function guessImageMimeType(uri: string): string {
@@ -479,6 +518,8 @@ async function persistPdfToDocumentDirectory(
 export async function exportTodayReviewPdf(
   options?: ExportTodayReviewPdfOptions,
 ): Promise<ExportTodayReviewPdfResult> {
+  const onProgress = options?.onProgress;
+
   if (isExportInProgress) {
     Logger.warn(SERVICE_SCOPE, 'Skip export because another export/share flow is in progress.', {
       date: options?.date ?? null,
@@ -495,20 +536,24 @@ export async function exportTodayReviewPdf(
   const dateString = toDateOnlyString(baseDate);
 
   try {
+    reportExportProgress(onProgress, 'prepare_items', null);
     const exportItems = await getTodayReviewExportItems(options?.date);
     if (exportItems.length <= 0) {
       return {
         success: false,
         reason: 'empty',
         message: EMPTY_MESSAGE,
+        exportedCount: 0,
       };
     }
 
+    reportExportProgress(onProgress, 'prepare_items', exportItems.length);
     const renderItems = await buildRenderItems(exportItems);
     const html = buildPdfHtml(renderItems, dateString);
 
     let generatedPdfUri = '';
     try {
+      reportExportProgress(onProgress, 'generate_pdf', exportItems.length);
       const printResult = await Print.printToFileAsync({
         html,
         width: 595,
@@ -525,12 +570,14 @@ export async function exportTodayReviewPdf(
         success: false,
         reason: 'generate_failed',
         message: FALLBACK_EXPORT_ERROR_MESSAGE,
+        exportedCount: exportItems.length,
       };
     }
 
     const exportFileName = buildExportFileName(dateString);
     const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
 
+    reportExportProgress(onProgress, 'open_share', exportItems.length);
     const isShareAvailable = await Sharing.isAvailableAsync();
     if (!isShareAvailable) {
       Logger.warn(SERVICE_SCOPE, 'Sharing is unavailable after PDF export.', {
@@ -540,6 +587,8 @@ export async function exportTodayReviewPdf(
         success: false,
         reason: 'share_unavailable',
         message: SHARE_UNAVAILABLE_MESSAGE,
+        exportedCount: exportItems.length,
+        fileUri: exportedFileUri,
       };
     }
 
@@ -559,6 +608,8 @@ export async function exportTodayReviewPdf(
           success: false,
           reason: 'busy',
           message: EXPORT_BUSY_MESSAGE,
+          exportedCount: exportItems.length,
+          fileUri: exportedFileUri,
         };
       }
       throw error;

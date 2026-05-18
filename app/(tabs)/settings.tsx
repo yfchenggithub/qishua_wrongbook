@@ -233,6 +233,8 @@ export default function SettingsScreen() {
   const [overviewErrorMessage, setOverviewErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
+  const [worksheetExportStage, setWorksheetExportStage] =
+    useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -755,15 +757,27 @@ export default function SettingsScreen() {
       return;
     }
 
+    if (dataOverview.dueToday <= 0) {
+      showToast('今天没有待复做错题可导出', 'info');
+      return;
+    }
+
     setIsExportingWorksheet(true);
+    setWorksheetExportStage('preparing');
     Logger.info(PAGE_SCOPE, 'Start exporting today worksheet from settings.', {
       dueToday: dataOverview.dueToday,
     });
     try {
-      const result = await TodayWorksheetExportService.exportTodayWorksheet();
+      const result = await TodayWorksheetExportService.exportTodayWorksheet({
+        expectedPendingCount: dataOverview.dueToday,
+        onProgress: (progress) => {
+          setWorksheetExportStage(progress.stage);
+        },
+      });
       if (result.outcome === 'success') {
         Logger.info(PAGE_SCOPE, 'Exported today worksheet successfully from settings.', {
           outcome: result.outcome,
+          exportedCount: result.exportedCount,
         });
         showToast(result.message, 'success');
         return;
@@ -780,8 +794,10 @@ export default function SettingsScreen() {
       if (result.outcome === 'share_unavailable') {
         Logger.warn(PAGE_SCOPE, 'Export finished but share capability is unavailable.', {
           outcome: result.outcome,
+          exportedCount: result.exportedCount,
+          hasFileUri: Boolean(result.fileUri),
         });
-        showToast(result.message, 'info');
+        showToast(result.message, 'info', TOAST_DURATION_LONG);
         return;
       }
 
@@ -789,7 +805,7 @@ export default function SettingsScreen() {
         Logger.info(PAGE_SCOPE, 'Export skipped because another export/share flow is still in progress.', {
           outcome: result.outcome,
         });
-        showToast(result.message, 'info');
+        showToast(result.message, 'info', TOAST_DURATION_LONG);
         return;
       }
 
@@ -802,6 +818,7 @@ export default function SettingsScreen() {
       showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
     } finally {
       setIsExportingWorksheet(false);
+      setWorksheetExportStage(null);
     }
   }, [dataOverview.dueToday, isExportingWorksheet, showToast]);
 
@@ -967,6 +984,19 @@ export default function SettingsScreen() {
   const displayStorageText = shouldMaskStats
     ? STATS_PLACEHOLDER
     : formatStorageSize(dataOverview.storageBytes);
+  const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
+  const canExportTodayWorksheet = worksheetPendingCount > 0;
+  const worksheetExportButtonText = isExportingWorksheet
+    ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
+        worksheetExportStage ?? 'preparing',
+        worksheetPendingCount,
+      )
+    : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(worksheetPendingCount);
+  const worksheetExportHintText = isExportingWorksheet
+    ? worksheetExportButtonText
+    : canExportTodayWorksheet
+      ? `将导出今日待复做的 ${worksheetPendingCount} 题，便于打印。`
+      : '今日没有待复做错题，暂不可导出。';
 
   const handleShowStorageDetails = useCallback(() => {
     Alert.alert(
@@ -1240,19 +1270,20 @@ export default function SettingsScreen() {
                 导出今日到期错题，方便打印给学生做练习。
               </Text>
               <Pressable
-                disabled={isExportingWorksheet}
+                disabled={isExportingWorksheet || !canExportTodayWorksheet}
                 onPress={() => {
                   void handleExportTodayWorksheet();
                 }}
                 style={[
                   styles.actionButton,
                   styles.actionButtonOrange,
-                  isExportingWorksheet ? styles.disabledButton : null,
+                  isExportingWorksheet || !canExportTodayWorksheet ? styles.disabledButton : null,
                 ]}>
                 <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextOrange]}>
-                  {isExportingWorksheet ? '正在生成…' : '导出今日练习卷'}
+                  {worksheetExportButtonText}
                 </Text>
               </Pressable>
+              <Text style={styles.metaText}>{worksheetExportHintText}</Text>
             </View>
           </View>
         </CardContainer>

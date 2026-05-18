@@ -4,11 +4,17 @@ import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExpor
 
 const SERVICE_SCOPE = 'TodayWorksheetExportService';
 
-const MESSAGE_SUCCESS = '今日练习卷已生成';
-const MESSAGE_EMPTY = '今天没有待复做错题';
-const MESSAGE_SHARE_UNAVAILABLE = '当前设备暂不支持分享，请在文件管理中查看已导出的练习卷';
-const MESSAGE_BUSY = '正在处理上一次导出/分享，请稍后再试。';
+const MESSAGE_EMPTY = '今天没有待复做错题可导出';
+const MESSAGE_BUSY = '上一次导出或分享尚未结束，请先关闭分享面板后重试';
 const MESSAGE_FAILED = '导出失败，请稍后重试';
+
+export type TodayWorksheetExportStage = 'preparing' | 'generating' | 'sharing';
+
+export type TodayWorksheetExportProgress = {
+  stage: TodayWorksheetExportStage;
+  pendingCount: number | null;
+  message: string;
+};
 
 export type TodayWorksheetExportOutcome =
   | 'success'
@@ -20,12 +26,110 @@ export type TodayWorksheetExportOutcome =
 export type TodayWorksheetExportResult = {
   outcome: TodayWorksheetExportOutcome;
   message: string;
+  exportedCount: number;
+  fileUri?: string;
 };
+
+export type ExportTodayWorksheetOptions = {
+  expectedPendingCount?: number;
+  onProgress?: (progress: TodayWorksheetExportProgress) => void;
+};
+
+function toSafeCount(count: number | null | undefined): number {
+  if (typeof count !== 'number' || !Number.isFinite(count)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(count));
+}
+
+function formatCountSuffix(count: number): string {
+  const safe = toSafeCount(count);
+  return `${safe}题`;
+}
+
+function buildSuccessMessage(count: number): string {
+  return `今日练习卷已生成（${formatCountSuffix(count)}）`;
+}
+
+function buildShareUnavailableMessage(count: number): string {
+  return `已生成${formatCountSuffix(count)}练习卷，但当前设备不支持分享。请到文件管理器查看导出 PDF。`;
+}
+
+function buildFailedMessageFromPdfResult(
+  fallbackCount: number,
+  result: Extract<TodayReviewPdfExportService.ExportTodayReviewPdfResult, { success: false }>,
+): string {
+  const countForMessage = toSafeCount(result.exportedCount ?? fallbackCount);
+  if (result.reason === 'share_unavailable') {
+    return buildShareUnavailableMessage(countForMessage);
+  }
+  if (result.reason === 'busy') {
+    return MESSAGE_BUSY;
+  }
+  return MESSAGE_FAILED;
+}
+
+function mapPdfProgressStageToWorksheetStage(
+  stage: TodayReviewPdfExportService.ExportTodayReviewPdfStage,
+): TodayWorksheetExportStage {
+  if (stage === 'generate_pdf') {
+    return 'generating';
+  }
+  if (stage === 'open_share') {
+    return 'sharing';
+  }
+  return 'preparing';
+}
+
+function emitProgress(
+  reporter: ExportTodayWorksheetOptions['onProgress'],
+  stage: TodayWorksheetExportStage,
+  pendingCount: number | null,
+): void {
+  if (!reporter) {
+    return;
+  }
+  const safeCount = toSafeCount(pendingCount);
+  try {
+    reporter({
+      stage,
+      pendingCount: safeCount,
+      message: buildTodayWorksheetExportProgressMessage(stage, safeCount),
+    });
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Worksheet export progress reporter callback failed.', {
+      stage,
+      pendingCount: safeCount,
+      error,
+    });
+  }
+}
+
+export function buildTodayWorksheetExportButtonLabel(pendingCount: number): string {
+  return `导出今日练习卷（${formatCountSuffix(pendingCount)}）`;
+}
+
+export function buildTodayWorksheetExportProgressMessage(
+  stage: TodayWorksheetExportStage,
+  pendingCount?: number,
+): string {
+  const safeCount = toSafeCount(pendingCount);
+  if (stage === 'preparing') {
+    if (safeCount > 0) {
+      return `正在整理题目（${formatCountSuffix(safeCount)}）...`;
+    }
+    return '正在整理题目...';
+  }
+  if (stage === 'generating') {
+    return '正在生成 PDF...';
+  }
+  return '正在打开分享面板...';
+}
 
 export async function getTodayWorksheetPendingCount(): Promise<number> {
   try {
     const count = await MistakeListService.getTodayReviewQueueCount();
-    return Math.max(0, Math.floor(count));
+    return toSafeCount(count);
   } catch (error) {
     Logger.warn(SERVICE_SCOPE, 'Failed to load pending count for today worksheet export.', {
       error,
@@ -34,30 +138,57 @@ export async function getTodayWorksheetPendingCount(): Promise<number> {
   }
 }
 
-export async function exportTodayWorksheet(): Promise<TodayWorksheetExportResult> {
+export async function exportTodayWorksheet(
+  options?: ExportTodayWorksheetOptions,
+): Promise<TodayWorksheetExportResult> {
+  const expectedPendingCount = toSafeCount(options?.expectedPendingCount);
+  const pendingCount =
+    expectedPendingCount > 0 ? expectedPendingCount : await getTodayWorksheetPendingCount();
+
+  if (pendingCount <= 0) {
+    return {
+      outcome: 'empty',
+      message: MESSAGE_EMPTY,
+      exportedCount: 0,
+    };
+  }
+
+  emitProgress(options?.onProgress, 'preparing', pendingCount);
   try {
-    const result = await TodayReviewPdfExportService.exportTodayReviewPdf();
+    const result = await TodayReviewPdfExportService.exportTodayReviewPdf({
+      onProgress: (progress) => {
+        const mappedStage = mapPdfProgressStageToWorksheetStage(progress.stage);
+        const countInProgress =
+          progress.itemCount !== null && progress.itemCount !== undefined
+            ? progress.itemCount
+            : pendingCount;
+        emitProgress(options?.onProgress, mappedStage, countInProgress);
+      },
+    });
+
     if (result.success) {
+      const exportedCount = toSafeCount(result.exportedCount);
       return {
         outcome: 'success',
-        message: MESSAGE_SUCCESS,
+        message: buildSuccessMessage(exportedCount),
+        exportedCount,
+        fileUri: result.fileUri,
       };
     }
 
-    if (result.reason === 'empty') {
-      return {
-        outcome: 'empty',
-        message: MESSAGE_EMPTY,
-      };
-    }
+    const exportedCount = toSafeCount(result.exportedCount ?? pendingCount);
+    const message = buildFailedMessageFromPdfResult(pendingCount, result);
 
     if (result.reason === 'share_unavailable') {
       Logger.warn(SERVICE_SCOPE, 'Sharing unavailable while exporting today worksheet.', {
         message: result.message,
+        exportedCount,
       });
       return {
         outcome: 'share_unavailable',
-        message: MESSAGE_SHARE_UNAVAILABLE,
+        message,
+        exportedCount,
+        fileUri: result.fileUri,
       };
     }
 
@@ -67,7 +198,17 @@ export async function exportTodayWorksheet(): Promise<TodayWorksheetExportResult
       });
       return {
         outcome: 'busy',
-        message: MESSAGE_BUSY,
+        message,
+        exportedCount,
+        fileUri: result.fileUri,
+      };
+    }
+
+    if (result.reason === 'empty') {
+      return {
+        outcome: 'empty',
+        message: MESSAGE_EMPTY,
+        exportedCount: 0,
       };
     }
 
@@ -77,13 +218,16 @@ export async function exportTodayWorksheet(): Promise<TodayWorksheetExportResult
     });
     return {
       outcome: 'failed',
-      message: MESSAGE_FAILED,
+      message,
+      exportedCount,
+      fileUri: result.fileUri,
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to export today worksheet.', { error });
     return {
       outcome: 'failed',
       message: MESSAGE_FAILED,
+      exportedCount: pendingCount,
     };
   }
 }

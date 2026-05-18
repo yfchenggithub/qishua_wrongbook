@@ -248,6 +248,8 @@ export default function TodayScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [exportStage, setExportStage] =
+    useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
@@ -451,9 +453,20 @@ export default function TodayScreen() {
       return;
     }
 
+    if (summary.todayDueCount <= 0) {
+      showToast('今天没有待复做错题可导出', 'info');
+      return;
+    }
+
     setIsExportingPdf(true);
+    setExportStage('preparing');
     try {
-      const result = await TodayWorksheetExportService.exportTodayWorksheet();
+      const result = await TodayWorksheetExportService.exportTodayWorksheet({
+        expectedPendingCount: summary.todayDueCount,
+        onProgress: (progress) => {
+          setExportStage(progress.stage);
+        },
+      });
       if (result.outcome === 'success') {
         showToast(result.message, 'success');
         return;
@@ -461,16 +474,17 @@ export default function TodayScreen() {
 
       if (result.outcome === 'empty') {
         showToast(result.message, 'info');
+        void loadHomeData('refresh');
         return;
       }
 
       if (result.outcome === 'share_unavailable') {
-        showToast(result.message, 'info');
+        showToast(result.message, 'info', TOAST_DURATION_LONG);
         return;
       }
 
       if (result.outcome === 'busy') {
-        showToast(result.message, 'info');
+        showToast(result.message, 'info', TOAST_DURATION_LONG);
         return;
       }
 
@@ -480,10 +494,22 @@ export default function TodayScreen() {
       showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
     } finally {
       setIsExportingPdf(false);
+      setExportStage(null);
     }
-  }, [isExportingPdf, showToast]);
+  }, [isExportingPdf, loadHomeData, showToast, summary.todayDueCount]);
 
-  const exportButtonText = isExportingPdf ? '正在生成练习卷…' : '导出今日练习卷';
+  const canExportTodayWorksheet = summary.todayDueCount > 0;
+  const exportButtonText = isExportingPdf
+    ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
+        exportStage ?? 'preparing',
+        summary.todayDueCount,
+      )
+    : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(summary.todayDueCount);
+  const exportHintText = isExportingPdf
+    ? exportButtonText
+    : canExportTodayWorksheet
+      ? `将导出今日待复做的 ${summary.todayDueCount} 题，便于打印练习。`
+      : '今日没有待复做错题，暂不可导出。';
   const startTodayReviewButtonText = isStartingSession ? '正在进入今日复做…' : '开始今日复做';
   const canShowExportButton =
     summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
@@ -543,13 +569,17 @@ export default function TodayScreen() {
               </Pressable>
               <Pressable
                 onPress={() => void handleExportTodayWorksheet()}
-                disabled={isExportingPdf}
-                style={[styles.secondaryActionButton, isExportingPdf ? styles.secondaryActionButtonDisabled : null]}>
+                disabled={isExportingPdf || !canExportTodayWorksheet}
+                style={[
+                  styles.secondaryActionButton,
+                  isExportingPdf || !canExportTodayWorksheet ? styles.secondaryActionButtonDisabled : null,
+                ]}>
                 <View style={styles.actionButtonContent}>
                   <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
                   <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                 </View>
               </Pressable>
+              <Text style={styles.exportHintText}>{exportHintText}</Text>
             </View>
           ) : errorMessage && !isLoading ? (
             <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
@@ -561,18 +591,23 @@ export default function TodayScreen() {
                 onActionPress={summary.homeStatus === 'empty' ? () => router.push('/add' as never) : undefined}
               />
               {canShowExportButton ? (
-                <Pressable
-                  onPress={() => void handleExportTodayWorksheet()}
-                  disabled={isExportingPdf}
-                  style={[
-                    styles.secondaryActionButton,
-                    isExportingPdf ? styles.secondaryActionButtonDisabled : null,
-                  ]}>
-                  <View style={styles.actionButtonContent}>
-                    <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
-                    <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
-                  </View>
-                </Pressable>
+                <>
+                  <Pressable
+                    onPress={() => void handleExportTodayWorksheet()}
+                    disabled={isExportingPdf || !canExportTodayWorksheet}
+                    style={[
+                      styles.secondaryActionButton,
+                      isExportingPdf || !canExportTodayWorksheet
+                        ? styles.secondaryActionButtonDisabled
+                        : null,
+                    ]}>
+                    <View style={styles.actionButtonContent}>
+                      <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
+                      <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
+                    </View>
+                  </Pressable>
+                  <Text style={styles.exportHintText}>{exportHintText}</Text>
+                </>
               ) : null}
             </View>
           )}
@@ -782,6 +817,11 @@ const styles = StyleSheet.create({
     ...typography.sectionTitle,
     color: '#141519',
     fontWeight: '700',
+  },
+  exportHintText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: -spacing.xs,
   },
   mistakeCard: {
     borderRadius: radius.xl,
