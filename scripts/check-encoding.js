@@ -63,6 +63,10 @@ const SKIP_DIRECTORIES = new Set([
   'coverage',
 ]);
 
+const EXCLUDED_RELATIVE_FILES = new Set([
+  'scripts/check-encoding.js',
+]);
+
 const MOJIBAKE_SNIPPETS = [
   '鍙栨秷',
   '璇诲彇',
@@ -93,7 +97,18 @@ function normalizeSlash(filePath) {
   return filePath.replace(/\\/g, '/');
 }
 
+function isExcludedFile(filePath) {
+  const maybeRelative = path.isAbsolute(filePath)
+    ? path.relative(process.cwd(), filePath)
+    : filePath;
+  const normalized = normalizeSlash(maybeRelative).replace(/^\.\//, '').toLowerCase();
+  return EXCLUDED_RELATIVE_FILES.has(normalized);
+}
+
 function shouldCheckTextFile(filePath) {
+  if (isExcludedFile(filePath)) {
+    return false;
+  }
   const base = path.basename(filePath);
   if (TEXT_FILENAMES.has(base)) {
     return true;
