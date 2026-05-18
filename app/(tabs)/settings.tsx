@@ -656,7 +656,7 @@ export default function SettingsScreen() {
       setIsRestoring(true);
       const restoreStartedAt = Date.now();
       let lastProgressStage: RestoreProgressEvent['stage'] | null = null;
-      showToast('正在恢复数据…', 'info', TOAST_DURATION_LONG);
+      let hasShownRestoreSuccessToast = false;
       showToast('正在恢复数据…', 'info', TOAST_DURATION_LONG);
 
       try {
@@ -671,6 +671,14 @@ export default function SettingsScreen() {
               return;
             }
             lastProgressStage = event.stage;
+            if (event.stage === 'success') {
+              if (hasShownRestoreSuccessToast) {
+                return;
+              }
+              hasShownRestoreSuccessToast = true;
+              showToast('恢复完成', 'success', TOAST_DURATION_LONG);
+              return;
+            }
             showToast(toRestoreProgressToastMessage(event), 'info', TOAST_DURATION_LONG);
           },
         });
@@ -691,9 +699,14 @@ export default function SettingsScreen() {
           errorMessage: null,
         });
 
-        showToast('恢复完成', 'success', TOAST_DURATION_LONG);
+        if (!hasShownRestoreSuccessToast) {
+          showToast('恢复完成', 'success', TOAST_DURATION_LONG);
+          hasShownRestoreSuccessToast = true;
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 800);
+        });
         void loadDataOverview('refresh');
-        router.replace('/(tabs)' as never);
       } catch (error) {
         const errorName = error instanceof Error ? error.name : 'UnknownError';
         const errorMessage = error instanceof Error ? error.message : String(error);
@@ -752,7 +765,7 @@ export default function SettingsScreen() {
         setIsRestoring(false);
       }
     },
-    [isRestoring, loadDataOverview, router, showToast],
+    [isRestoring, loadDataOverview, showToast],
   );
 
   const handleRestoreFromBackup = useCallback(() => {
