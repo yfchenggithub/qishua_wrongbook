@@ -95,9 +95,36 @@ export interface RestoreFromBackupResult {
   beforeRestoreBackupUri?: string;
 }
 
+export type RestoreProgressStage =
+  | 'starting'
+  | 'temp_copy'
+  | 'package_read'
+  | 'validate'
+  | 'before_snapshot'
+  | 'images_restore'
+  | 'db_import'
+  | 'verify'
+  | 'rollback'
+  | 'success';
+
+export interface RestoreProgressEvent {
+  restoreSessionId: string;
+  stage: RestoreProgressStage;
+  message: string;
+}
+
 export interface RestoreFromBackupOptions {
   restoreSessionId?: string;
   fileShortInfo?: string;
+  onProgress?: (event: RestoreProgressEvent) => void;
+  /**
+   * Internal flag for rollback path: skip creating another safety backup.
+   */
+  skipBeforeSnapshot?: boolean;
+  /**
+   * Internal flag: disable nested rollback attempts.
+   */
+  allowRollback?: boolean;
 }
 
 export interface RestoreSafetyBackupInfo {

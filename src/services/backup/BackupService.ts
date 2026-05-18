@@ -45,6 +45,8 @@ import {
   type CreateBackupOptions,
   type CreateBackupServiceResult,
   type InspectBackupResult,
+  type RestoreProgressEvent,
+  type RestoreProgressStage,
   type RestoreFromBackupOptions,
   type RestoreFromBackupResult,
 } from '@/src/services/backup/BackupTypes';
@@ -1611,6 +1613,28 @@ export async function restoreFromBackup(
   const restoreSessionId = normalizeOptionalText(options?.restoreSessionId) ?? createRestoreSessionId();
   const startedAt = nowMs();
   const fileShortInfo = normalizeOptionalText(options?.fileShortInfo) ?? getFileShortInfo(fileUri);
+  const shouldCreateBeforeSnapshot = options?.skipBeforeSnapshot !== true;
+  const shouldAttemptRollback = options?.allowRollback !== false;
+  const emitProgress = (stage: RestoreProgressStage, message: string): void => {
+    const callback = options?.onProgress;
+    if (!callback) {
+      return;
+    }
+    const payload: RestoreProgressEvent = {
+      restoreSessionId,
+      stage,
+      message,
+    };
+    try {
+      callback(payload);
+    } catch (error) {
+      Logger.warn(SERVICE_SCOPE, 'restore_progress_callback_failed', {
+        restoreSessionId,
+        stage,
+        error: safeError(error),
+      });
+    }
+  };
   const warnings: RestoreWarningItem[] = [];
   const errors: RestoreErrorItem[] = [];
   const durations = createEmptyDurations();
@@ -1654,6 +1678,7 @@ export async function restoreFromBackup(
         step: 'validate_backup_uri',
       });
     }
+    emitProgress('starting', 'Preparing restore environment...')
 
     const selectedFile = new File(normalizedUri);
     const fileName = normalizeOptionalText(selectedFile.name) ?? fileShortInfo;
@@ -1691,6 +1716,7 @@ export async function restoreFromBackup(
 
     failureContext.stage = 'temp_copy';
     failureContext.step = 'copy_source_to_temp';
+    emitProgress('temp_copy', 'Copying backup file to temp directory...')
     tempCopyStartedAt = nowMs();
     const copied = await copyBackupFileToTemp(normalizedUri, restoreSessionId, fileShortInfo);
     durations.tempCopyDurationMs = nowMs() - tempCopyStartedAt;
@@ -1698,6 +1724,7 @@ export async function restoreFromBackup(
 
     failureContext.stage = 'package_read';
     failureContext.step = 'read_backup_package';
+    emitProgress('package_read', 'Reading backup package...')
     packageReadStartedAt = nowMs();
     const extracted = await readBackupPackageFromTemp({
       restoreSessionId,
@@ -1717,6 +1744,7 @@ export async function restoreFromBackup(
 
     failureContext.stage = 'validate';
     failureContext.step = 'validate_manifest_and_data';
+    emitProgress('validate', 'Validating backup data...')
     validateStartedAt = nowMs();
     const validateResult = validateRestorePackage({
       restoreSessionId,
@@ -1729,38 +1757,41 @@ export async function restoreFromBackup(
     failureContext.countsParsed = cloneCounts(validateResult.counts);
     orphanImageSamples = validateResult.orphanImageSamples;
 
-    logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_before_snapshot_started', {
-      restoreSessionId,
-      currentCountsBeforeRestore,
-    });
+    if (shouldCreateBeforeSnapshot) {
+      emitProgress('before_snapshot', 'Creating pre-restore safety backup...')
+      logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_before_snapshot_started', {
+        restoreSessionId,
+        currentCountsBeforeRestore,
+      });
 
-    failureContext.stage = 'before_snapshot';
-    failureContext.step = 'create_before_restore_backup';
-    beforeSnapshotStartedAt = nowMs();
-    let safetyBackup: CreateBackupServiceResult;
-    try {
-      safetyBackup = await createBackup({ reason: 'before_restore' });
-    } catch (error) {
-      throw buildRestoreError({
-        errorCode: 'RESTORE_BEFORE_SNAPSHOT_FAILED',
-        stage: 'before_snapshot',
-        step: 'create_before_restore_backup',
-        cause: error,
-        details: {
-          restoreSessionId,
-        },
+      failureContext.stage = 'before_snapshot';
+      failureContext.step = 'create_before_restore_backup';
+      beforeSnapshotStartedAt = nowMs();
+      let safetyBackup: CreateBackupServiceResult;
+      try {
+        safetyBackup = await createBackup({ reason: 'before_restore' });
+      } catch (error) {
+        throw buildRestoreError({
+          errorCode: 'RESTORE_BEFORE_SNAPSHOT_FAILED',
+          stage: 'before_snapshot',
+          step: 'create_before_restore_backup',
+          cause: error,
+          details: {
+            restoreSessionId,
+          },
+        });
+      }
+      beforeRestoreBackupUri = safetyBackup.fileUri;
+      failureContext.hasBeforeRestoreBackup = true;
+      durations.beforeSnapshotDurationMs = nowMs() - beforeSnapshotStartedAt;
+      logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_before_snapshot_success', {
+        restoreSessionId,
+        snapshotShortPath: shortPath(beforeRestoreBackupUri),
+        snapshotCounts: safetyBackup.manifest.counts,
+        snapshotSizeBytes: new File(safetyBackup.fileUri).info().size ?? null,
+        durationMs: durations.beforeSnapshotDurationMs,
       });
     }
-    beforeRestoreBackupUri = safetyBackup.fileUri;
-    failureContext.hasBeforeRestoreBackup = true;
-    durations.beforeSnapshotDurationMs = nowMs() - beforeSnapshotStartedAt;
-    logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_before_snapshot_success', {
-      restoreSessionId,
-      snapshotShortPath: shortPath(beforeRestoreBackupUri),
-      snapshotCounts: safetyBackup.manifest.counts,
-      snapshotSizeBytes: new File(safetyBackup.fileUri).info().size ?? null,
-      durationMs: durations.beforeSnapshotDurationMs,
-    });
 
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_clear_started', {
       restoreSessionId,
@@ -1768,6 +1799,7 @@ export async function restoreFromBackup(
     });
     failureContext.stage = 'db_import';
     failureContext.step = 'write_restore_transaction';
+    emitProgress('db_import', 'Importing records into database...')
     dbImportStartedAt = nowMs();
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_started', {
       restoreSessionId,
@@ -1781,6 +1813,7 @@ export async function restoreFromBackup(
     });
     failureContext.stage = 'images_restore';
     failureContext.step = 'copy_image_files';
+    emitProgress('images_restore', 'Restoring image files...')
     imageRestoreStartedAt = nowMs();
     const imageResult = await materializeRestoredImages({
       restoreSessionId,
@@ -1825,6 +1858,7 @@ export async function restoreFromBackup(
 
     failureContext.stage = 'verify';
     failureContext.step = 'compare_expected_actual_counts';
+    emitProgress('verify', 'Verifying restored data...')
     verifyStartedAt = nowMs();
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_verify_started', {
       restoreSessionId,
@@ -1859,9 +1893,10 @@ export async function restoreFromBackup(
       totalDurationMs: durations.totalDurationMs,
       finalCounts: importedCounts,
       warningCount: warnings.length,
-      hasBeforeRestoreBackup: true,
+      hasBeforeRestoreBackup: !!beforeRestoreBackupUri,
       durations,
     });
+    emitProgress('success', 'Restore completed')
 
     return {
       restoreSessionId,
@@ -1870,7 +1905,7 @@ export async function restoreFromBackup(
       restoredReviewRecords: importedCounts.reviewRecords,
       warningCount: warnings.length,
       errorCount: errors.length,
-      hasBeforeRestoreBackup: true,
+      hasBeforeRestoreBackup: !!beforeRestoreBackupUri,
       beforeRestoreBackupUri,
     };
   } catch (error) {
@@ -1933,7 +1968,82 @@ export async function restoreFromBackup(
       rootCauseMessage: safeError(normalized.cause ?? error).message,
     });
 
-    if (failureContext.stage === 'before_snapshot' && beforeRestoreBackupUri) {
+    const canAttemptRollback = shouldAttemptRollback && shouldCreateBeforeSnapshot;
+    if (canAttemptRollback && typeof beforeRestoreBackupUri === 'string') {
+      const rollbackBackupUri = beforeRestoreBackupUri;
+      failureContext.rollbackAttempted = true;
+      const rollbackStartedAt = nowMs();
+      const rollbackSessionId = `${restoreSessionId}-rollback`;
+      const rollbackFileShortInfo = shortPath(rollbackBackupUri) ?? 'before-restore-backup.qsbk';
+      emitProgress('rollback', 'Rollback is running...')
+
+      logRestoreEvent(SERVICE_SCOPE, 'warn', 'restore_rollback_started', {
+        restoreSessionId,
+        rollbackSessionId,
+        rollbackSourceShortPath: rollbackFileShortInfo,
+        originalErrorCode: resolvedErrorCode,
+        originalStage: resolvedStage,
+        originalStep: resolvedStep,
+      });
+
+      try {
+        const rollbackResult = await restoreFromBackup(rollbackBackupUri, {
+          restoreSessionId: rollbackSessionId,
+          fileShortInfo: rollbackFileShortInfo,
+          skipBeforeSnapshot: true,
+          allowRollback: false,
+        });
+
+        durations.rollbackDurationMs = nowMs() - rollbackStartedAt;
+        failureContext.rollbackSuccess = true;
+        try {
+          failureContext.currentCounts = await readCurrentDatabaseCounts();
+        } catch {
+          // best-effort diagnostics only
+        }
+        emitProgress('rollback', 'Rollback is running...')
+        logRestoreEvent(SERVICE_SCOPE, 'warn', 'restore_rollback_success', {
+          restoreSessionId,
+          rollbackSessionId,
+          durationMs: durations.rollbackDurationMs,
+          rollbackCounts: {
+            mistakes: rollbackResult.restoredMistakes,
+            mistakeImages: rollbackResult.restoredImages,
+            reviewRecords: rollbackResult.restoredReviewRecords,
+            imageFiles: rollbackResult.restoredImages,
+          },
+        });
+      } catch (rollbackError) {
+        durations.rollbackDurationMs = nowMs() - rollbackStartedAt;
+        failureContext.rollbackSuccess = false;
+        const normalizedRollback = normalizeBackupError(rollbackError, 'RESTORE_ROLLBACK_FAILED');
+        const rollbackCauseMessage = safeError(normalizedRollback.cause ?? rollbackError).message;
+        appendError(errors, {
+          code: 'RESTORE_ROLLBACK_FAILED',
+          stage: 'rollback',
+          message: getBackupErrorUserMessage('RESTORE_ROLLBACK_FAILED'),
+          shortTarget: rollbackFileShortInfo,
+          rootCauseMessage: rollbackCauseMessage,
+        });
+
+        resolvedErrorCode = 'RESTORE_ROLLBACK_FAILED';
+        failureContext.errorCode = resolvedErrorCode;
+        failureContext.stage = 'rollback';
+        failureContext.step = 'restore_from_before_snapshot';
+        failureContext.rootCause = normalizedRollback.cause ?? rollbackError;
+
+        logRestoreEvent(SERVICE_SCOPE, 'error', 'restore_rollback_failed', {
+          restoreSessionId,
+          rollbackSessionId,
+          durationMs: durations.rollbackDurationMs,
+          rollbackErrorCode: normalizedRollback.code,
+          rollbackErrorName: normalizedRollback.name,
+          rollbackErrorMessage: normalizedRollback.message,
+          rollbackRootCause: safeError(normalizedRollback.cause ?? rollbackError),
+        });
+        emitProgress('rollback', 'Rollback is running...')
+      }
+    } else {
       failureContext.rollbackAttempted = false;
       failureContext.rollbackSuccess = false;
     }

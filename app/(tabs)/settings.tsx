@@ -22,7 +22,7 @@ import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/servic
 import { Logger } from '@/src/services/Logger';
 import * as BackupService from '@/src/services/backup/BackupService';
 import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
-import type { BackupManifest } from '@/src/services/backup/BackupTypes';
+import type { BackupManifest, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
@@ -250,6 +250,33 @@ function toBackupRestoreDetails(error: unknown): Record<string, unknown> {
     }
   }
   return {};
+}
+
+function toRestoreProgressToastMessage(event: RestoreProgressEvent): string {
+  switch (event.stage) {
+    case 'starting':
+      return '正在准备恢复环境…';
+    case 'temp_copy':
+      return '正在复制备份文件…';
+    case 'package_read':
+      return '正在读取备份包…';
+    case 'validate':
+      return '正在校验备份数据…';
+    case 'before_snapshot':
+      return '正在创建安全备份…';
+    case 'images_restore':
+      return '正在恢复图片文件…';
+    case 'db_import':
+      return '正在写入数据库…';
+    case 'verify':
+      return '正在校验恢复结果…';
+    case 'rollback':
+      return event.message.trim().length > 0 ? event.message : '恢复失败，正在回滚…';
+    case 'success':
+      return '恢复完成';
+    default:
+      return '正在恢复数据…';
+  }
 }
 
 function buildRestorePreviewMessage(manifest: BackupManifest, warnings: string[]): string {
@@ -628,12 +655,24 @@ export default function SettingsScreen() {
 
       setIsRestoring(true);
       const restoreStartedAt = Date.now();
+      let lastProgressStage: RestoreProgressEvent['stage'] | null = null;
+      showToast('正在恢复数据…', 'info', TOAST_DURATION_LONG);
       showToast('正在恢复数据…', 'info', TOAST_DURATION_LONG);
 
       try {
         const restoreResult = await BackupService.restoreFromBackup(params.backupUri, {
           restoreSessionId: params.restoreSessionId,
           fileShortInfo: params.fileShortInfo,
+          onProgress: (event) => {
+            if (event.restoreSessionId !== params.restoreSessionId) {
+              return;
+            }
+            if (event.stage === lastProgressStage) {
+              return;
+            }
+            lastProgressStage = event.stage;
+            showToast(toRestoreProgressToastMessage(event), 'info', TOAST_DURATION_LONG);
+          },
         });
         Logger.info(PAGE_SCOPE, 'restore_success', {
           restoreSessionId: params.restoreSessionId,
@@ -654,7 +693,7 @@ export default function SettingsScreen() {
 
         showToast('恢复完成', 'success', TOAST_DURATION_LONG);
         void loadDataOverview('refresh');
-        router.replace('/(tabs)/index' as never);
+        router.replace('/(tabs)' as never);
       } catch (error) {
         const errorName = error instanceof Error ? error.name : 'UnknownError';
         const errorMessage = error instanceof Error ? error.message : String(error);
