@@ -9,7 +9,6 @@ import {
   Animated,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -1272,14 +1271,21 @@ export default function SettingsScreen() {
 
   const statsItems = useMemo(
     () => [
-      { label: '已录入错题', value: displayNumber(dataOverview.totalMistakes) },
-      { label: '今天待复做', value: displayNumber(dataOverview.dueToday) },
-      { label: '已经掌握', value: displayNumber(dataOverview.mastered) },
-      { label: '累计复做(次)', value: displayNumber(dataOverview.totalReviews) },
-      { label: '本机图片(张)', value: displayNumber(dataOverview.imageCount) },
+      { label: '已录入', value: displayNumber(dataOverview.totalMistakes) },
+      { label: '待复做', value: displayNumber(dataOverview.dueToday) },
+      { label: '已掌握', value: displayNumber(dataOverview.mastered) },
+      { label: '累计复做', value: displayNumber(dataOverview.totalReviews) },
     ],
     [dataOverview, displayNumber],
   );
+  const statIconNames = [
+    'library-books',
+    'event-note',
+    'check-circle-outline',
+    'whatshot',
+    'donut-large',
+    'history',
+  ] as const;
 
   const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages;
   const isRestoreBusy = isInspectingBackup || isRestoring;
@@ -1405,48 +1411,57 @@ export default function SettingsScreen() {
           </View>
         </CardContainer>
 
-        <CardContainer style={styles.card} padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconBlue]}>
-              <MaterialIcons color="#2D74D6" name="bar-chart" size={30} />
+        <CardContainer style={[styles.card, styles.statsCard]} padding={spacing.md}>
+          <View style={styles.statsCardRow}>
+            <View style={styles.statsHeaderIconWrap}>
+              <MaterialIcons color="#2D74D6" name="bar-chart" size={24} />
             </View>
-            <View style={styles.cardMain}>
-              <View style={styles.titleRow}>
-                <Text style={styles.cardTitle}>学习数据</Text>
-                <View style={styles.refreshWrap}>
-                  <Text style={styles.refreshText}>{statsUpdatedText}</Text>
-                  <Pressable
-                    accessibilityLabel="刷新学习数据"
-                    accessibilityRole="button"
-                    disabled={isStatsBusy}
-                    onPress={() => {
-                      void loadDataOverview('refresh');
-                    }}
-                    style={[styles.refreshButton, isStatsBusy ? styles.disabledButton : null]}>
-                    {isStatsBusy ? (
-                      <ActivityIndicator color="#6A717A" size="small" />
-                    ) : (
-                      <MaterialIcons color="#6A717A" name="refresh" size={19} />
-                    )}
-                  </Pressable>
+            <View style={styles.statsMain}>
+              <View style={styles.statsHeader}>
+                <View style={styles.statsHeaderText}>
+                  <Text style={[styles.cardTitle, styles.statsTitle]}>学习数据</Text>
+                  <Text style={styles.statsUpdatedText}>{statsUpdatedText}</Text>
                 </View>
+                <Pressable
+                  accessibilityLabel="刷新学习数据"
+                  accessibilityRole="button"
+                  disabled={isStatsBusy}
+                  onPress={() => {
+                    void loadDataOverview('refresh');
+                  }}
+                  style={[styles.statsRefreshButton, isStatsBusy ? styles.disabledButton : null]}>
+                  {isStatsBusy ? (
+                    <ActivityIndicator color="#2D74D6" size="small" />
+                  ) : (
+                    <MaterialIcons color="#2D74D6" name="refresh" size={18} />
+                  )}
+                </Pressable>
               </View>
-              <View style={styles.statsRow}>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.statsRowContent}>
-                  {statsItems.map((item, index) => (
-                    <View
-                      key={item.label}
-                      style={[styles.statItem, index > 0 ? styles.statItemDivider : null]}>
-                      <Text style={styles.statValue}>{item.value}</Text>
-                      <Text numberOfLines={2} style={styles.statLabel}>
-                        {item.label}
-                      </Text>
+              <View style={styles.statsGrid}>
+                {statsItems.map((item, index) => {
+                  const statIconName = statIconNames[index % statIconNames.length];
+                  return (
+                    <View key={item.label} style={styles.statItemCard}>
+                      <View style={styles.statItemBody}>
+                        <View style={styles.statItemIconWrap}>
+                          <MaterialIcons color="#2D74D6" name={statIconName} size={17} />
+                        </View>
+                        <View style={styles.statTextWrap}>
+                          <Text numberOfLines={2} style={styles.statLabel}>
+                            {item.label}
+                          </Text>
+                          <Text
+                            adjustsFontSizeToFit
+                            minimumFontScale={0.86}
+                            numberOfLines={1}
+                            style={styles.statValue}>
+                            {item.value}
+                          </Text>
+                        </View>
+                      </View>
                     </View>
-                  ))}
-                </ScrollView>
+                  );
+                })}
               </View>
               {overviewErrorMessage ? <Text style={styles.errorText}>{overviewErrorMessage}</Text> : null}
             </View>
@@ -1917,60 +1932,135 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     lineHeight: 18,
   },
-  refreshWrap: {
+  statsCard: {
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E2E8F3',
+    backgroundColor: '#F8FAFD',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
+  statsCardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  statsMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: spacing.sm,
+  },
+  statsHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  refreshText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-  },
-  refreshButton: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.pill,
+  statsHeaderIconWrap: {
+    width: 60,
+    height: 60,
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#D6DAE0',
+    borderColor: '#CCE0FC',
+    backgroundColor: '#EAF2FF',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.surface,
+    flexShrink: 0,
   },
-  statsRow: {
-    marginTop: spacing.xs,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    overflow: 'hidden',
-  },
-  statsRowContent: {
-    flexDirection: 'row',
-  },
-  statItem: {
-    width: 92,
-    minHeight: 84,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 2,
-    paddingVertical: spacing.sm,
+  statsHeaderText: {
+    flex: 1,
+    minWidth: 0,
     gap: 2,
   },
-  statItemDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: colors.border,
+  statsTitle: {
+    color: '#131722',
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '800',
+  },
+  statsUpdatedText: {
+    ...typography.bodySmall,
+    color: '#8691A2',
+    fontSize: 14,
+    lineHeight: 18,
+  },
+  statsRefreshButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#DEE6F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.08,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 2,
+  },
+  statsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: spacing.sm,
+    alignItems: 'flex-start',
+  },
+  statItemCard: {
+    width: '48.6%',
+    minHeight: 74,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E6ECF5',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 0,
+    marginBottom: 0,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.03,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
+  },
+  statItemBody: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  statItemIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#EAF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   statValue: {
     ...typography.sectionTitle,
-    color: colors.textPrimary,
-    fontSize: 20,
-    lineHeight: 26,
+    color: '#2D74D6',
+    fontSize: 21,
+    lineHeight: 25,
+    fontWeight: '800',
   },
   statLabel: {
     ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-    textAlign: 'center',
+    color: '#7A8496',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '500',
+    textAlign: 'left',
   },
   errorText: {
     ...typography.caption,
