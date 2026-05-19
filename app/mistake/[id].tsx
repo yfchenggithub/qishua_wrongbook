@@ -36,6 +36,7 @@ import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
+import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { formatDateShort } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
@@ -48,6 +49,8 @@ const BRAND = {
 const PAGE_SCOPE = 'MistakeDetailScreen';
 const TOAST_DURATION_DEFAULT = 2000;
 const TITLE_DOUBLE_TAP_WINDOW_MS = 280;
+const VOICE_PLAYBACK_END_BUFFER_MS = 280;
+const VOICE_FILE_MISSING_MESSAGE = '语音文件不存在，可能已被删除或未恢复';
 
 type ToastType = 'success' | 'info' | 'error';
 
@@ -135,6 +138,14 @@ function formatReviewCreatedAt(iso: string): string {
   const minute = pad2(parsed.getMinutes());
   const second = pad2(parsed.getSeconds());
   return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+}
+
+function formatDurationMs(durationMs: number): string {
+  const safeDurationMs = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+  const totalSeconds = Math.floor(safeDurationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${pad2(minutes)}:${pad2(seconds)}`;
 }
 
 function normalizePreviewUri(uri: string | null | undefined): string | null {
@@ -256,15 +267,21 @@ function shouldPromptOpenSettings(message?: string): boolean {
 function ReviewRecordCard({
   record,
   isBusy = false,
+  isVoicePlaying = false,
+  isVoiceBusy = false,
   onAddImage,
   onPreview,
   onOpenImageActions,
+  onToggleVoicePlayback,
 }: {
   record: DetailReviewRecordItem;
   isBusy?: boolean;
+  isVoicePlaying?: boolean;
+  isVoiceBusy?: boolean;
   onAddImage?: (record: DetailReviewRecordItem) => void;
   onPreview?: (uri: string, title: string) => void;
   onOpenImageActions?: (record: DetailReviewRecordItem) => void;
+  onToggleVoicePlayback?: (record: DetailReviewRecordItem) => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => {
@@ -276,6 +293,7 @@ function ReviewRecordCard({
   const imageExists = record.solutionImageExists !== false;
   const canShowImage = hasImage && imageExists && !imageFailed;
   const previewTitle = getReviewPreviewTitle(record);
+  const voiceNote = record.voiceNote ?? null;
 
   return (
     <View style={styles.reviewRecordRow}>
@@ -283,6 +301,32 @@ function ReviewRecordCard({
         <Text style={styles.reviewRecordTitle}>第 {record.reviewIndex} 刷</Text>
         <Text style={styles.reviewRecordMeta}>时间：{formatReviewCreatedAt(record.createdAt)}</Text>
         <Text style={styles.reviewRecordMeta}>结果：{formatReviewResultLabel(record.result)}</Text>
+        {voiceNote ? (
+          <View style={styles.reviewRecordVoiceRow}>
+            <Text style={styles.reviewRecordVoiceText}>
+              {`有语音讲解 ${formatDurationMs(voiceNote.durationMs)}`}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isVoicePlaying ? '停止语音讲解' : '播放语音讲解'}
+              disabled={isVoiceBusy}
+              onPress={() => {
+                onToggleVoicePlayback?.(record);
+              }}
+              style={({ pressed }) => [
+                styles.reviewRecordVoiceButton,
+                isVoiceBusy && styles.reviewRecordVoiceButtonDisabled,
+                pressed && styles.previewTapPressed,
+              ]}>
+              <MaterialIcons
+                name={isVoicePlaying ? 'stop-circle' : 'play-circle-filled'}
+                size={16}
+                color={colors.textPrimary}
+              />
+              <Text style={styles.reviewRecordVoiceButtonText}>{isVoicePlaying ? '停止' : '播放'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
       </View>
 
       {canShowImage ? (
@@ -408,10 +452,13 @@ export default function MistakeDetailScreen() {
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
+  const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
+  const [isVoicePlaybackBusy, setIsVoicePlaybackBusy] = useState(false);
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -481,6 +528,31 @@ export default function MistakeDetailScreen() {
       }, duration);
     },
     [hideToast, toastOpacity, toastTranslateY],
+  );
+
+  const clearVoicePlaybackResetTimer = useCallback(() => {
+    if (voicePlaybackResetTimerRef.current) {
+      clearTimeout(voicePlaybackResetTimerRef.current);
+      voicePlaybackResetTimerRef.current = null;
+    }
+  }, []);
+
+  const stopVoicePlayback = useCallback(
+    async (showErrorToast = false) => {
+      clearVoicePlaybackResetTimer();
+      setActiveVoiceRecordId(null);
+
+      const stopResult = await VoiceNoteService.stopPlaying();
+      if (!stopResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'Failed to stop detail review voice playback.', {
+          errorMessage: stopResult.errorMessage ?? null,
+        });
+        if (showErrorToast) {
+          showToast(toBriefErrorMessage(stopResult.errorMessage), 'error');
+        }
+      }
+    },
+    [clearVoicePlaybackResetTimer, showToast],
   );
 
   const handleClosePreview = useCallback(() => {
@@ -773,6 +845,86 @@ export default function MistakeDetailScreen() {
     [handleDeleteReviewImage, handleEditReviewImage],
   );
 
+  const handleToggleReviewVoicePlayback = useCallback(
+    async (record: DetailReviewRecordItem) => {
+      const voiceNote = record.voiceNote ?? null;
+      if (!voiceNote || isVoicePlaybackBusy) {
+        return;
+      }
+
+      if (activeVoiceRecordId === record.id) {
+        setIsVoicePlaybackBusy(true);
+        await stopVoicePlayback(true);
+        setIsVoicePlaybackBusy(false);
+        return;
+      }
+
+      const fileUri = normalizePreviewUri(voiceNote.fileUri);
+      if (!fileUri) {
+        Logger.warn(PAGE_SCOPE, 'Skipped detail review voice playback because file uri is empty.', {
+          reviewRecordId: record.id,
+          reviewIndex: record.reviewIndex,
+          voiceNoteId: voiceNote.id,
+        });
+        showToast(VOICE_FILE_MISSING_MESSAGE, 'info');
+        return;
+      }
+
+      setIsVoicePlaybackBusy(true);
+
+      const fileInfoResult = await VoiceNoteService.getVoiceNoteFileInfo(fileUri);
+      if (!fileInfoResult.info.exists) {
+        Logger.warn(PAGE_SCOPE, 'Skipped detail review voice playback because file does not exist.', {
+          reviewRecordId: record.id,
+          reviewIndex: record.reviewIndex,
+          voiceNoteId: voiceNote.id,
+        });
+        showToast(VOICE_FILE_MISSING_MESSAGE, 'info');
+        setIsVoicePlaybackBusy(false);
+        return;
+      }
+
+      if (!fileInfoResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'Voice file info read failed before detail review playback.', {
+          reviewRecordId: record.id,
+          reviewIndex: record.reviewIndex,
+          voiceNoteId: voiceNote.id,
+          errorMessage: fileInfoResult.errorMessage ?? null,
+        });
+      }
+
+      const playResult = await VoiceNoteService.playVoiceNote(fileUri);
+      if (!playResult.ok) {
+        setActiveVoiceRecordId(null);
+        Logger.warn(PAGE_SCOPE, 'Detail review voice playback failed.', {
+          reviewRecordId: record.id,
+          reviewIndex: record.reviewIndex,
+          voiceNoteId: voiceNote.id,
+          errorMessage: playResult.errorMessage ?? null,
+        });
+        showToast(toBriefErrorMessage(playResult.errorMessage), 'error');
+        setIsVoicePlaybackBusy(false);
+        return;
+      }
+
+      clearVoicePlaybackResetTimer();
+      setActiveVoiceRecordId(record.id);
+      voicePlaybackResetTimerRef.current = setTimeout(() => {
+        setActiveVoiceRecordId((current) => (current === record.id ? null : current));
+        voicePlaybackResetTimerRef.current = null;
+      }, Math.max(voiceNote.durationMs + VOICE_PLAYBACK_END_BUFFER_MS, 1000));
+
+      setIsVoicePlaybackBusy(false);
+    },
+    [
+      activeVoiceRecordId,
+      clearVoicePlaybackResetTimer,
+      isVoicePlaybackBusy,
+      showToast,
+      stopVoicePlayback,
+    ],
+  );
+
   const isReviewRecordImageBusy = useCallback(
     (reviewRecordId: string) => activeReviewRecordId === reviewRecordId,
     [activeReviewRecordId],
@@ -872,6 +1024,17 @@ export default function MistakeDetailScreen() {
     }, [loadDetail]),
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      return () => {
+        clearVoicePlaybackResetTimer();
+        setActiveVoiceRecordId(null);
+        setIsVoicePlaybackBusy(false);
+        void VoiceNoteService.stopPlaying();
+      };
+    }, [clearVoicePlaybackResetTimer]),
+  );
+
   useEffect(
     () => () => {
       if (toastTimerRef.current) {
@@ -882,6 +1045,11 @@ export default function MistakeDetailScreen() {
         clearTimeout(titleTapTimerRef.current);
         titleTapTimerRef.current = null;
       }
+      if (voicePlaybackResetTimerRef.current) {
+        clearTimeout(voicePlaybackResetTimerRef.current);
+        voicePlaybackResetTimerRef.current = null;
+      }
+      void VoiceNoteService.stopPlaying();
     },
     [],
   );
@@ -1286,11 +1454,16 @@ export default function MistakeDetailScreen() {
                       key={record.id}
                       record={record}
                       isBusy={isReviewRecordImageBusy(record.id)}
+                      isVoicePlaying={activeVoiceRecordId === record.id}
+                      isVoiceBusy={isVoicePlaybackBusy}
                       onAddImage={(targetRecord) => {
                         openReviewImagePickerActionSheet(targetRecord, 'add');
                       }}
                       onPreview={(uri, title) => handleOpenPreview(uri, title)}
                       onOpenImageActions={handleOpenReviewImageActions}
+                      onToggleVoicePlayback={(targetRecord) => {
+                        void handleToggleReviewVoicePlayback(targetRecord);
+                      }}
                     />
                   ))}
                 </View>
@@ -1621,6 +1794,39 @@ const styles = StyleSheet.create({
   reviewRecordMeta: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  reviewRecordVoiceRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  reviewRecordVoiceText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  reviewRecordVoiceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  reviewRecordVoiceButtonDisabled: {
+    opacity: 0.6,
+  },
+  reviewRecordVoiceButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 11,
+    lineHeight: 14,
   },
   reviewRecordPreviewWrap: {
     width: 72,

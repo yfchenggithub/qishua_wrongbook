@@ -290,6 +290,7 @@ async function mapReviewRecords(
         reviewIndex: record.review_index,
         createdAt: record.created_at,
         result: normalizeDetailReviewResult(record.result),
+        voiceNote: record.voice_note ?? null,
         solutionImageId,
         solutionImageUri,
         solutionImageExists,
