@@ -32,6 +32,7 @@ const MOVE_AREA_INSET = 14;
 const CORNER_MARK_SIZE = 10;
 const CORNER_MARK_THICKNESS = 2;
 const SAVE_DELAY_MS = 180;
+const IS_CROP_DEBUG_ENABLED = __DEV__;
 
 type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
 
@@ -47,6 +48,17 @@ type ImageSize = {
   height: number;
 };
 
+type DebugProbePreview = {
+  uri: string;
+  width: number;
+  height: number;
+  fileSize: number;
+  sourceSizeUsed: ImageSize;
+  sourceSizeMeasured: ImageSize;
+  normalizedCropRect: ImageProcessService.CropRect;
+  createdAt: string;
+};
+
 type PageState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
@@ -57,6 +69,9 @@ type PageState =
       imageType: ManagedDetailImageType;
       title: string;
       sourceUri: string;
+      sourceWidth: number;
+      sourceHeight: number;
+      sourceIsTemporary: boolean;
       oldImageUri: string;
     };
 
@@ -107,6 +122,13 @@ function toShortUri(uri: string | null | undefined): string | null {
 
 function clamp(numberValue: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, numberValue));
+}
+
+function createCropDebugSessionId(): string {
+  const randomPart = Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, '0');
+  return `crop-${Date.now().toString(36)}-${randomPart}`;
 }
 
 function getImageTitle(slot: ImageSlot): string {
@@ -345,11 +367,15 @@ export default function MistakeImageEditScreen() {
   const [containerSize, setContainerSize] = useState<ImageSize | null>(null);
   const [cropBox, setCropBox] = useState<ImageRect | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [debugProbePreview, setDebugProbePreview] = useState<DebugProbePreview | null>(null);
 
   const isMountedRef = useRef(true);
   const cropBoxRef = useRef<ImageRect | null>(null);
   const displayedRectRef = useRef<ImageRect | null>(null);
   const isProcessingRef = useRef(false);
+  const debugSessionIdRef = useRef(createCropDebugSessionId());
+  const temporarySourceUriRef = useRef<string | null>(null);
+  const debugProbeUriRef = useRef<string | null>(null);
   const moveStartRectRef = useRef<ImageRect | null>(null);
   const resizeStartRectRef = useRef<ImageRect | null>(null);
 
@@ -366,6 +392,47 @@ export default function MistakeImageEditScreen() {
       isMountedRef.current = false;
     },
     [],
+  );
+
+  const cleanupDebugProbeUri = useCallback((uri: string | null | undefined) => {
+    if (!uri) {
+      return;
+    }
+    try {
+      const file = new File(uri);
+      if (file.exists) {
+        file.delete();
+      }
+    } catch (error) {
+      Logger.warn(PAGE_SCOPE, 'Failed to cleanup debug probe image.', {
+        debugSessionId: debugSessionIdRef.current,
+        probeUriShort: toShortUri(uri),
+        error,
+      });
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      const tempUri = temporarySourceUriRef.current;
+      if (tempUri) {
+        try {
+          const tempFile = new File(tempUri);
+          if (tempFile.exists) {
+            tempFile.delete();
+          }
+        } catch (error) {
+          Logger.warn(PAGE_SCOPE, 'Failed to cleanup temporary crop source image on unmount.', {
+            debugSessionId: debugSessionIdRef.current,
+            tempUriShort: toShortUri(tempUri),
+            error,
+          });
+        }
+      }
+
+      cleanupDebugProbeUri(debugProbeUriRef.current);
+    },
+    [cleanupDebugProbeUri],
   );
 
   const displayedImageRect = useMemo(() => {
@@ -472,13 +539,60 @@ export default function MistakeImageEditScreen() {
         return;
       }
 
+      const preparedSource = await ImageProcessService.prepareCropSourceImage(nextSourceUri);
+      if (cancelled) {
+        if (preparedSource.isTemporary) {
+          try {
+            const preparedFile = new File(preparedSource.uri);
+            if (preparedFile.exists) {
+              preparedFile.delete();
+            }
+          } catch (error) {
+            Logger.warn(PAGE_SCOPE, 'Failed to cleanup prepared source image after page cancellation.', {
+              preparedUriShort: toShortUri(preparedSource.uri),
+              error,
+            });
+          }
+        }
+        return;
+      }
+
+      const previousTemporaryUri = temporarySourceUriRef.current;
+      if (previousTemporaryUri && previousTemporaryUri !== preparedSource.uri) {
+        try {
+          const previousFile = new File(previousTemporaryUri);
+          if (previousFile.exists) {
+            previousFile.delete();
+          }
+        } catch (error) {
+          Logger.warn(PAGE_SCOPE, 'Failed to cleanup previous temporary crop source image.', {
+            previousUriShort: toShortUri(previousTemporaryUri),
+            error,
+          });
+        }
+      }
+      temporarySourceUriRef.current = preparedSource.isTemporary ? preparedSource.uri : null;
+
+      Logger.info(PAGE_SCOPE, 'Prepared crop source image for crop page.', {
+        mistakeId: routeMistakeId,
+        imageSlot: resolvedImageSlot,
+        sourceUriShort: toShortUri(nextSourceUri),
+        preparedUriShort: toShortUri(preparedSource.uri),
+        sourceWidth: preparedSource.width,
+        sourceHeight: preparedSource.height,
+        sourceIsTemporary: preparedSource.isTemporary,
+      });
+
       setState({
         kind: 'success',
         mistakeId: routeMistakeId,
         imageSlot: resolvedImageSlot,
         imageType: resolvedImageType,
         title: getImageTitle(resolvedImageSlot),
-        sourceUri: nextSourceUri,
+        sourceUri: preparedSource.uri,
+        sourceWidth: preparedSource.width,
+        sourceHeight: preparedSource.height,
+        sourceIsTemporary: preparedSource.isTemporary,
         oldImageUri: routeOldImageUri ?? nextSourceUri,
       });
     }
@@ -492,49 +606,32 @@ export default function MistakeImageEditScreen() {
 
   useEffect(() => {
     if (state.kind !== 'success') {
+      cleanupDebugProbeUri(debugProbeUriRef.current);
+      debugProbeUriRef.current = null;
+      setDebugProbePreview(null);
       setSourceImageSize(null);
       setCropBox(null);
       setIsImageSizeLoading(false);
       return;
     }
-
-    let cancelled = false;
-    setIsImageSizeLoading(true);
+    cleanupDebugProbeUri(debugProbeUriRef.current);
+    debugProbeUriRef.current = null;
+    setDebugProbePreview(null);
+    setSourceImageSize({
+      width: state.sourceWidth,
+      height: state.sourceHeight,
+    });
+    setIsImageSizeLoading(false);
     setCropBox(null);
-
-    Image.getSize(
-      state.sourceUri,
-      (width, height) => {
-        if (cancelled || !isMountedRef.current) {
-          return;
-        }
-        setSourceImageSize({ width, height });
-        setIsImageSizeLoading(false);
-        Logger.info(PAGE_SCOPE, 'Loaded source image size.', {
-          mistakeId: state.mistakeId,
-          imageSlot: state.imageSlot,
-          sourceUriShort: toShortUri(state.sourceUri),
-          width,
-          height,
-        });
-      },
-      () => {
-        if (cancelled || !isMountedRef.current) {
-          return;
-        }
-        setSourceImageSize(null);
-        setIsImageSizeLoading(false);
-        setState({
-          kind: 'error',
-          message: '读取图片尺寸失败，请返回重试。',
-        });
-      },
-    );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [state]);
+    Logger.info(PAGE_SCOPE, 'Use prepared source image size on crop page.', {
+      mistakeId: state.mistakeId,
+      imageSlot: state.imageSlot,
+      sourceUriShort: toShortUri(state.sourceUri),
+      width: state.sourceWidth,
+      height: state.sourceHeight,
+      sourceIsTemporary: state.sourceIsTemporary,
+    });
+  }, [cleanupDebugProbeUri, state]);
 
   const moveResponder = useRef(
     PanResponder.create({
@@ -739,6 +836,45 @@ export default function MistakeImageEditScreen() {
     [state],
   );
 
+  const collectCropDebugSnapshot = useCallback(
+    async (cropRect: ImageProcessService.CropRect | null) => {
+      if (state.kind !== 'success') {
+        return null;
+      }
+
+      const sourceGeometry = await ImageProcessService.collectImageGeometryDiagnostics(state.sourceUri);
+      const relativeRect = cropBox
+        && displayedImageRect
+        && displayedImageRect.width > 0
+        && displayedImageRect.height > 0
+        ? {
+            x: (cropBox.x - displayedImageRect.x) / displayedImageRect.width,
+            y: (cropBox.y - displayedImageRect.y) / displayedImageRect.height,
+            width: cropBox.width / displayedImageRect.width,
+            height: cropBox.height / displayedImageRect.height,
+          }
+        : null;
+
+      return {
+        debugSessionId: debugSessionIdRef.current,
+        mistakeId: state.mistakeId,
+        imageSlot: state.imageSlot,
+        sourceUriShort: toShortUri(state.sourceUri),
+        sourceImageSizeFromState: sourceImageSize,
+        sourceWidthFromPageState: state.sourceWidth,
+        sourceHeightFromPageState: state.sourceHeight,
+        sourceIsTemporary: state.sourceIsTemporary,
+        containerSize,
+        displayedImageRect,
+        cropBox,
+        cropRectSource: cropRect,
+        relativeRect,
+        sourceGeometry,
+      };
+    },
+    [containerSize, cropBox, displayedImageRect, sourceImageSize, state],
+  );
+
   const processAndSaveImage = useCallback(
     async (cropRect: ImageProcessService.CropRect | undefined) => {
       if (state.kind !== 'success' || isProcessingRef.current) {
@@ -755,6 +891,7 @@ export default function MistakeImageEditScreen() {
 
       try {
         Logger.info(PAGE_SCOPE, 'Start processing image from crop page.', {
+          debugSessionId: debugSessionIdRef.current,
           mistakeId: state.mistakeId,
           imageSlot: state.imageSlot,
           sourceUriShort: toShortUri(state.sourceUri),
@@ -768,6 +905,8 @@ export default function MistakeImageEditScreen() {
           cropRect,
           imageSlot: state.imageSlot,
           mistakeId: state.mistakeId,
+          sourceSizeHint: sourceImageSize,
+          debugSessionId: debugSessionIdRef.current,
         });
 
         const nextImageFile = new File(processed.uri);
@@ -786,6 +925,7 @@ export default function MistakeImageEditScreen() {
         await deleteOldImageAfterSuccess(state.oldImageUri, processed.uri);
 
         Logger.info(PAGE_SCOPE, 'Crop page save flow completed.', {
+          debugSessionId: debugSessionIdRef.current,
           mistakeId: state.mistakeId,
           imageSlot: state.imageSlot,
           outputUriShort: toShortUri(processed.uri),
@@ -802,6 +942,7 @@ export default function MistakeImageEditScreen() {
         }, SAVE_DELAY_MS);
       } catch (error) {
         Logger.error(PAGE_SCOPE, 'Crop page save flow failed.', {
+          debugSessionId: debugSessionIdRef.current,
           mistakeId: state.mistakeId,
           imageSlot: state.imageSlot,
           error,
@@ -834,6 +975,7 @@ export default function MistakeImageEditScreen() {
 
     const cropRect = parseCropRectToSourceRect(cropBox, displayedImageRect, sourceImageSize);
     Logger.info(PAGE_SCOPE, 'Convert crop rect to source coordinates.', {
+      debugSessionId: debugSessionIdRef.current,
       mistakeId: state.mistakeId,
       imageSlot: state.imageSlot,
       displayedImageRect,
@@ -846,8 +988,20 @@ export default function MistakeImageEditScreen() {
       return;
     }
 
+    if (IS_CROP_DEBUG_ENABLED) {
+      try {
+        const debugSnapshot = await collectCropDebugSnapshot(cropRect);
+        Logger.info(PAGE_SCOPE, '[CROP_DEBUG] Pre-save snapshot.', debugSnapshot);
+      } catch (error) {
+        Logger.warn(PAGE_SCOPE, '[CROP_DEBUG] Failed to collect pre-save snapshot.', {
+          debugSessionId: debugSessionIdRef.current,
+          error,
+        });
+      }
+    }
+
     await processAndSaveImage(cropRect);
-  }, [cropBox, displayedImageRect, processAndSaveImage, sourceImageSize, state]);
+  }, [collectCropDebugSnapshot, cropBox, displayedImageRect, processAndSaveImage, sourceImageSize, state]);
 
   const handleUseFullImage = useCallback(async () => {
     if (state.kind !== 'success') {
@@ -855,6 +1009,86 @@ export default function MistakeImageEditScreen() {
     }
     await processAndSaveImage(undefined);
   }, [processAndSaveImage, state]);
+
+  const handleDebugProbe = useCallback(async () => {
+    if (!IS_CROP_DEBUG_ENABLED) {
+      return;
+    }
+    if (state.kind !== 'success' || !cropBox || !displayedImageRect || !sourceImageSize) {
+      Alert.alert('调试预演', '当前裁剪区域无效，请先调整后重试。');
+      return;
+    }
+    if (isProcessingRef.current) {
+      return;
+    }
+
+    const cropRect = parseCropRectToSourceRect(cropBox, displayedImageRect, sourceImageSize);
+    if (!cropRect) {
+      Alert.alert('调试预演', '无法解析裁剪坐标。');
+      return;
+    }
+
+    const startedAt = Date.now();
+    isProcessingRef.current = true;
+    setIsProcessing(true);
+
+    try {
+      const preSnapshot = await collectCropDebugSnapshot(cropRect);
+      Logger.info(PAGE_SCOPE, '[CROP_DEBUG] Start debug probe.', preSnapshot);
+
+      const probe = await ImageProcessService.runCropDebugProbe({
+        sourceUri: state.sourceUri,
+        cropRect,
+        sourceSizeHint: sourceImageSize,
+        debugSessionId: debugSessionIdRef.current,
+      });
+
+      const previousProbeUri = debugProbeUriRef.current;
+      if (previousProbeUri && previousProbeUri !== probe.uri) {
+        cleanupDebugProbeUri(previousProbeUri);
+      }
+      debugProbeUriRef.current = probe.uri;
+      setDebugProbePreview({
+        uri: probe.uri,
+        width: probe.width,
+        height: probe.height,
+        fileSize: probe.fileSize,
+        sourceSizeMeasured: probe.sourceSizeMeasured,
+        sourceSizeUsed: probe.sourceSizeUsed,
+        normalizedCropRect: probe.normalizedCropRect,
+        createdAt: new Date().toISOString(),
+      });
+
+      Logger.info(PAGE_SCOPE, '[CROP_DEBUG] Debug probe image ready.', {
+        debugSessionId: debugSessionIdRef.current,
+        outputUriShort: toShortUri(probe.uri),
+        outputWidth: probe.width,
+        outputHeight: probe.height,
+        outputFileSize: probe.fileSize,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, '[CROP_DEBUG] Debug probe failed.', {
+        debugSessionId: debugSessionIdRef.current,
+        error,
+        durationMs: Date.now() - startedAt,
+      });
+      const message = error instanceof Error ? error.message : String(error);
+      Alert.alert('调试预演失败', message || '请重试');
+    } finally {
+      isProcessingRef.current = false;
+      if (isMountedRef.current) {
+        setIsProcessing(false);
+      }
+    }
+  }, [
+    cleanupDebugProbeUri,
+    collectCropDebugSnapshot,
+    cropBox,
+    displayedImageRect,
+    sourceImageSize,
+    state,
+  ]);
 
   const handleCancel = useCallback(() => {
     if (isProcessingRef.current) {
@@ -919,6 +1153,25 @@ export default function MistakeImageEditScreen() {
             <View style={styles.previewHeader}>
               <Text style={styles.previewTitle}>{state.title}</Text>
               <Text style={styles.previewHint}>拖动框体移动，拖动四角调整大小</Text>
+              {IS_CROP_DEBUG_ENABLED ? (
+                <View style={styles.debugRow}>
+                  <Text numberOfLines={1} style={styles.debugSessionText}>
+                    调试会话: {debugSessionIdRef.current}
+                  </Text>
+                  <Pressable
+                    disabled={isProcessing}
+                    onPress={() => {
+                      void handleDebugProbe();
+                    }}
+                    style={({ pressed }) => [
+                      styles.debugProbeButton,
+                      pressed && styles.pressed,
+                      isProcessing && styles.disabled,
+                    ]}>
+                    <Text style={styles.debugProbeButtonText}>调试预演</Text>
+                  </Pressable>
+                </View>
+              ) : null}
             </View>
 
             <View style={styles.previewStage} onLayout={handleContainerLayout}>
@@ -1026,6 +1279,18 @@ export default function MistakeImageEditScreen() {
                 </>
               ) : null}
             </View>
+
+            {IS_CROP_DEBUG_ENABLED && debugProbePreview ? (
+              <View style={styles.debugPreviewBlock}>
+                <Text style={styles.debugPreviewTitle}>调试预演输出（不入库）</Text>
+                <Image source={{ uri: debugProbePreview.uri }} style={styles.debugPreviewImage} resizeMode="contain" />
+                <Text style={styles.debugPreviewMeta}>
+                  输出: {debugProbePreview.width}x{debugProbePreview.height} | 裁剪: {debugProbePreview.normalizedCropRect.originX},{' '}
+                  {debugProbePreview.normalizedCropRect.originY},{' '}
+                  {debugProbePreview.normalizedCropRect.width}x{debugProbePreview.normalizedCropRect.height}
+                </Text>
+              </View>
+            ) : null}
           </CardContainer>
         </View>
 
@@ -1156,6 +1421,34 @@ const styles = StyleSheet.create({
   previewHeader: {
     gap: spacing.xs,
   },
+  debugRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  debugSessionText: {
+    flex: 1,
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  debugProbeButton: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  debugProbeButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 11,
+    lineHeight: 14,
+  },
   previewTitle: {
     ...typography.sectionTitle,
     fontSize: 18,
@@ -1189,6 +1482,32 @@ const styles = StyleSheet.create({
   previewLoadingText: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  debugPreviewBlock: {
+    marginTop: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.sm,
+    gap: spacing.xs,
+  },
+  debugPreviewTitle: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  debugPreviewImage: {
+    width: '100%',
+    height: 120,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surfaceMuted,
+  },
+  debugPreviewMeta: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
   },
   mask: {
     position: 'absolute',
