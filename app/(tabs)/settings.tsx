@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import { Logger } from '@/src/services/Logger';
+import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
 import * as BackupService from '@/src/services/backup/BackupService';
 import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
 import type { BackupManifest, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
@@ -196,7 +197,7 @@ function formatBackupCreatedAt(isoDateTime: string): string {
     date.getDate(),
   ).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(
     date.getMinutes(),
-  ).padStart(2, '0')}`;
+  ).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
 }
 
 function toBackupFileShortInfo(name: string | null | undefined): string {
@@ -309,6 +310,7 @@ export default function SettingsScreen() {
   const [worksheetExportStage, setWorksheetExportStage] =
     useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
@@ -438,6 +440,11 @@ export default function SettingsScreen() {
     }
   }, [showToast]);
 
+  const loadLastBackupState = useCallback(async () => {
+    const history = await BackupHistoryService.loadBackupHistoryState();
+    setLastBackupAt(history.lastBackupAt);
+  }, []);
+
   const loadDataOverview = useCallback(async (mode: 'initial' | 'refresh') => {
     const startedAt = Date.now();
     Logger.info(PAGE_SCOPE, 'Start loading settings statistics.', { mode });
@@ -482,8 +489,9 @@ export default function SettingsScreen() {
       hasFocusedRef.current = true;
       void loadDataOverview(mode);
       void loadReminderState();
+      void loadLastBackupState();
       return undefined;
-    }, [loadDataOverview, loadReminderState]),
+    }, [loadDataOverview, loadLastBackupState, loadReminderState]),
   );
 
   const disableDeveloperMode = useCallback(
@@ -590,6 +598,16 @@ export default function SettingsScreen() {
     try {
       showToast('正在整理备份文件…', 'info', TOAST_DURATION_LONG);
       const result = await BackupService.createBackup({ reason: 'manual' });
+      try {
+        const persistedHistory = await BackupHistoryService.saveLastBackupAt(result.manifest.createdAt);
+        setLastBackupAt(persistedHistory.lastBackupAt);
+      } catch (error) {
+        Logger.warn(PAGE_SCOPE, 'Failed to persist last backup time in settings.', {
+          createdAt: result.manifest.createdAt,
+          error,
+        });
+        setLastBackupAt(result.manifest.createdAt);
+      }
       await BackupService.shareBackup(result.fileUri);
       showToast('备份文件已生成，请保存到安全位置。', 'success', TOAST_DURATION_LONG);
     } catch (error) {
@@ -811,7 +829,7 @@ export default function SettingsScreen() {
           extension: getFileExtension(selectedAsset.name),
           mimeType: selectedAsset.mimeType ?? null,
           fileSizeBytes: typeof selectedAsset.size === 'number' ? selectedAsset.size : null,
-          startedAt: new Date(inspectStartedAt).toISOString(),
+          startedAt: formatBackupCreatedAt(new Date(inspectStartedAt).toISOString()),
         });
         Logger.info(PAGE_SCOPE, 'restore_pick_file', {
           restoreSessionId,
@@ -1322,7 +1340,10 @@ export default function SettingsScreen() {
                 保护错题、复做记录和图片，换手机或重装 App 后可恢复数据。
               </Text>
               <Text style={styles.metaText}>
-                上次备份：<Text style={styles.metaStrong}>未备份</Text>
+                上次备份：
+                <Text style={styles.metaStrong}>
+                  {lastBackupAt ? formatBackupCreatedAt(lastBackupAt) : '未备份'}
+                </Text>
               </Text>
               <View style={styles.actionRow}>
                 <Pressable

@@ -26,6 +26,32 @@ export interface ValidateManifestResult {
   errors: string[];
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function pad3(value: number): string {
+  return String(value).padStart(3, '0');
+}
+
+function toLocalIsoDateTime(date: Date): string {
+  const year = date.getFullYear();
+  const month = pad2(date.getMonth() + 1);
+  const day = pad2(date.getDate());
+  const hours = pad2(date.getHours());
+  const minutes = pad2(date.getMinutes());
+  const seconds = pad2(date.getSeconds());
+  const milliseconds = pad3(date.getMilliseconds());
+
+  const offsetMinutesTotal = -date.getTimezoneOffset();
+  const offsetSign = offsetMinutesTotal >= 0 ? '+' : '-';
+  const offsetAbsoluteMinutes = Math.abs(offsetMinutesTotal);
+  const offsetHours = pad2(Math.floor(offsetAbsoluteMinutes / 60));
+  const offsetMinutes = pad2(offsetAbsoluteMinutes % 60);
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${offsetSign}${offsetHours}:${offsetMinutes}`;
+}
+
 function isValidIsoDateTime(value: string): boolean {
   if (!value.trim()) {
     return false;
@@ -48,7 +74,7 @@ export function createBackupManifest(input: CreateManifestInput): BackupPackageM
     formatVersion: BACKUP_FORMAT_VERSION,
     appName: input.appName.trim(),
     appVersion: input.appVersion.trim(),
-    createdAt: input.createdAt ?? new Date().toISOString(),
+    createdAt: input.createdAt ?? toLocalIsoDateTime(new Date()),
     schemaVersion: input.schemaVersion,
     devicePlatform: input.devicePlatform,
     counts: {
@@ -149,4 +175,3 @@ export function validateBackupManifest(raw: unknown): ValidateManifestResult {
     }),
   };
 }
-

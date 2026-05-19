@@ -33,7 +33,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "formatVersion": 1,
   "appName": "七刷错题本",
   "appVersion": "0.1.0",
-  "createdAt": "2026-05-17T13:30:45.123Z",
+  "createdAt": "2026-05-17T21:30:45.123+08:00",
   "schemaVersion": 2,
   "devicePlatform": "android",
   "counts": {
@@ -51,7 +51,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `formatVersion`: 备份格式版本号（初版为 `1`）。
 - `appName`: App 名称。
 - `appVersion`: 生成该备份时的 App 版本。
-- `createdAt`: 备份创建时间（ISO 8601）。
+- `createdAt`: 备份创建时间（ISO 8601，包含本地时区偏移）。
 - `schemaVersion`: 数据 schema 版本（对应当前 DB 版本）。
 - `devicePlatform`: 备份来源平台（android/ios/web/unknown）。
 - `counts`: 数据量摘要。

@@ -18,6 +18,8 @@ const TOAST_DURATION_DEFAULT = 1800;
 const TOAST_DURATION_LONG = 2600;
 const METADATA_PREVIEW_LIMIT = 1000;
 const METADATA_COPY_LIMIT = 1000;
+const ISO_DATETIME_TOKEN_PATTERN =
+  /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})/g;
 
 type ToastType = 'success' | 'info' | 'warning' | 'error';
 type LogLevelFilter = 'all' | RuntimeLogItem['level'];
@@ -110,17 +112,28 @@ function formatRuntimeTimestamp(timestamp: string): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
 }
 
+function localizeIsoDateTimeTokens(value: string): string {
+  if (typeof value !== 'string' || !value) {
+    return value;
+  }
+
+  return value.replace(ISO_DATETIME_TOKEN_PATTERN, (matchedIsoDateTime) => {
+    const localized = formatRuntimeTimestamp(matchedIsoDateTime);
+    return localized || matchedIsoDateTime;
+  });
+}
+
 function stringifyMetadata(metadata: unknown, maxLength: number): string {
   if (metadata === undefined || metadata === null) {
     return '';
   }
 
   if (typeof metadata === 'string') {
-    return truncateText(metadata, maxLength);
+    return truncateText(localizeIsoDateTimeTokens(metadata), maxLength);
   }
 
   if (metadata instanceof Error) {
-    return truncateText(`${metadata.name}: ${metadata.message}`, maxLength);
+    return truncateText(localizeIsoDateTimeTokens(`${metadata.name}: ${metadata.message}`), maxLength);
   }
 
   try {
@@ -134,7 +147,7 @@ function stringifyMetadata(metadata: unknown, maxLength: number): string {
       }
 
       if (typeof value === 'string') {
-        return truncateText(value, maxLength);
+        return truncateText(localizeIsoDateTimeTokens(value), maxLength);
       }
 
       return value;
@@ -173,7 +186,7 @@ function stringifyCopyField(value: unknown): string {
   }
 
   if (typeof value === 'string') {
-    return value;
+    return localizeIsoDateTimeTokens(value);
   }
 
   if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
@@ -181,7 +194,7 @@ function stringifyCopyField(value: unknown): string {
   }
 
   if (value instanceof Date) {
-    return value.toISOString();
+    return formatRuntimeTimestamp(value.toISOString()) || value.toISOString();
   }
 
   if (value instanceof Error) {
@@ -201,7 +214,11 @@ function stringifyCopyField(value: unknown): string {
       value,
       (_key, nextValue: unknown) => {
         if (nextValue instanceof Date) {
-          return nextValue.toISOString();
+          return formatRuntimeTimestamp(nextValue.toISOString()) || nextValue.toISOString();
+        }
+
+        if (typeof nextValue === 'string') {
+          return localizeIsoDateTimeTokens(nextValue);
         }
 
         if (nextValue instanceof Error) {
