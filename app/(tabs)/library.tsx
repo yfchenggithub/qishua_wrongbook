@@ -30,6 +30,14 @@ import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 const SEARCH_DEBOUNCE_MS = 350;
 const PAGE_SCOPE = 'LibraryScreen';
 
+function sanitizeNextReviewText(text: string): string {
+  const normalized = typeof text === 'string' ? text.trim() : '';
+  if (!normalized) {
+    return '';
+  }
+  return normalized.replace(/^[^\u4E00-\u9FFF0-9A-Za-z]+/u, '').trim();
+}
+
 function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListFilter['segment'] {
   if (value === 'pending') {
     return 'due';
@@ -78,10 +86,24 @@ function MistakeLibraryCard({
       }),
     [item.maxReviewCount, item.nextReviewAt, item.reviewCount],
   );
+  const nextReviewLineText = useMemo(() => {
+    const sanitized = sanitizeNextReviewText(nextReviewInfo.displayText);
+    if (!nextReviewInfo.absoluteDate) {
+      return sanitized;
+    }
+
+    const groupedDateMatch = /[\(\uFF08]([^\)\uFF09]+)[\)\uFF09]/.exec(sanitized);
+    if (groupedDateMatch && groupedDateMatch[1]) {
+      const compactDatePart = groupedDateMatch[1].replace(/\s+/g, '');
+      return `${nextReviewInfo.label}(${compactDatePart})`;
+    }
+
+    return `${nextReviewInfo.label}(${nextReviewInfo.absoluteDate})`;
+  }, [nextReviewInfo.absoluteDate, nextReviewInfo.displayText, nextReviewInfo.label]);
 
   return (
     <Pressable onPress={onPress} style={styles.cardPressable}>
-      <CardContainer padding={spacing.md} style={styles.card}>
+      <CardContainer padding={14} style={styles.card}>
         <View style={styles.cardRow}>
           {showImage ? (
             <Image
@@ -96,38 +118,66 @@ function MistakeLibraryCard({
 
           <View style={styles.cardMain}>
             <View style={styles.cardTopLine}>
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.cardMeta}>
-                {item.module}
-              </Text>
-              <Text maxFontSizeMultiplier={1.1} style={styles.arrow}>
-                {'>'}
-              </Text>
+              <View style={styles.modulePill}>
+                <Text
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                  allowFontScaling={false}
+                  maxFontSizeMultiplier={1.0}
+                  style={styles.cardMeta}>
+                  {item.module}
+                </Text>
+              </View>
+              <View style={styles.cardTopLineEnd}>
+                <View style={styles.difficultyPill}>
+                  <Text
+                    numberOfLines={1}
+                    allowFontScaling={false}
+                    maxFontSizeMultiplier={1.0}
+                    style={styles.difficultyText}>
+                    难度 {item.difficulty}
+                  </Text>
+                </View>
+                <MaterialIcons name="chevron-right" size={18} style={styles.arrow} />
+              </View>
             </View>
 
             <View style={styles.titleRow}>
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.2} style={styles.cardTitle}>
+              <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1.0}
+                style={styles.cardTitle}>
                 {item.title}
-              </Text>
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.difficultyText}>
-                难度 {item.difficulty}
               </Text>
             </View>
             <View style={styles.progressRow}>
-              <Text maxFontSizeMultiplier={1.1} style={styles.progressLabel}>
+              <Text
+                numberOfLines={1}
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1.0}
+                style={styles.progressLabel}>
                 进度 {item.reviewCount}/{item.maxReviewCount}
               </Text>
               <ProgressDots
                 total={item.maxReviewCount}
                 current={item.reviewCount}
                 completed={item.reviewCount}
+                style={styles.progressDots}
               />
             </View>
             <View style={styles.nextReviewWrap}>
-              <Text maxFontSizeMultiplier={1.0} style={styles.nextReviewLabel}>
+              <Text
+                numberOfLines={1}
+                allowFontScaling={false}
+                maxFontSizeMultiplier={1.0}
+                style={styles.nextReviewLabel}>
                 下一次复做
               </Text>
               <Text
-                numberOfLines={2}
+                numberOfLines={1}
+                allowFontScaling={false}
                 maxFontSizeMultiplier={1.0}
                 style={[
                   styles.nextReviewText,
@@ -135,7 +185,7 @@ function MistakeLibraryCard({
                   nextReviewInfo.tone === 'muted' && styles.nextReviewTextMuted,
                   nextReviewInfo.tone === 'danger' && styles.nextReviewTextDanger,
                 ]}>
-                {nextReviewInfo.displayText}
+                {nextReviewLineText}
               </Text>
             </View>
           </View>
@@ -491,78 +541,129 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cardPressable: {
-    marginHorizontal: spacing.screenPadding,
+    marginHorizontal: 14,
     borderRadius: radius.xl,
   },
   card: {
-    borderRadius: radius.xl,
+    borderRadius: 26,
   },
   cardRow: {
     flexDirection: 'row',
-    gap: spacing.md,
+    alignItems: 'center',
+    gap: 12,
   },
   cardMain: {
     flex: 1,
     minWidth: 0,
-    gap: spacing.xs,
+    gap: 6,
   },
   cardTopLine: {
     flexDirection: 'row',
     alignItems: 'center',
+    minWidth: 0,
     gap: spacing.sm,
   },
+  modulePill: {
+    flex: 1,
+    minWidth: 0,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#DBE7FF',
+    backgroundColor: '#EEF3FF',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    alignSelf: 'flex-start',
+  },
   cardMeta: {
-    ...typography.body,
-    color: colors.textSecondary,
-    fontWeight: '600',
-    flex: 1,
+    ...typography.caption,
+    color: '#4A5F9D',
+    fontWeight: '700',
+    flexShrink: 1,
     minWidth: 0,
+    lineHeight: 16,
   },
-  arrow: {
-    ...typography.body,
-    color: colors.textMuted,
-    fontSize: 24,
-    lineHeight: 24,
-  },
-  cardTitle: {
-    ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
-    flex: 1,
-    minWidth: 0,
-  },
-  titleRow: {
+  cardTopLineEnd: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    flexShrink: 0,
+  },
+  arrow: {
+    color: colors.textMuted,
+    flexShrink: 0,
+  },
+  cardTitle: {
+    ...typography.body,
+    color: colors.success,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: '700',
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  titleRow: {
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  difficultyPill: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#FFE2C4',
+    backgroundColor: '#FFF3E8',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    flexShrink: 0,
+    alignSelf: 'flex-start',
   },
   difficultyText: {
-    ...typography.body,
-    color: colors.textSecondary,
-    fontWeight: '600',
+    ...typography.caption,
+    color: '#A75D17',
+    fontWeight: '700',
+    lineHeight: 16,
+    flexShrink: 0,
   },
   progressLabel: {
-    ...typography.caption,
+    ...typography.bodySmall,
     color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    flexShrink: 0,
   },
   progressRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-start',
-    gap: spacing.sm,
+    gap: 6,
+    minWidth: 0,
+    flexShrink: 1,
+  },
+  progressDots: {
+    gap: 3,
+    flexShrink: 1,
+    minWidth: 0,
   },
   nextReviewWrap: {
-    gap: 2,
+    gap: 1,
+    minWidth: 0,
+    flexShrink: 1,
   },
   nextReviewLabel: {
     ...typography.caption,
     color: colors.textMuted,
     fontWeight: '700',
+    fontSize: 12,
+    lineHeight: 16,
+    flexShrink: 0,
   },
   nextReviewText: {
     ...typography.bodySmall,
     color: colors.textSecondary,
     fontWeight: '600',
+    fontSize: 13,
+    lineHeight: 18,
+    flexShrink: 1,
+    minWidth: 0,
   },
   nextReviewTextSuccess: {
     color: colors.success,
@@ -574,9 +675,9 @@ const styles = StyleSheet.create({
     color: colors.danger,
   },
   thumb: {
-    width: 92,
-    height: 92,
-    borderRadius: radius.md,
+    width: 84,
+    height: 84,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
@@ -591,9 +692,9 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   thumbImage: {
-    width: 92,
-    height: 92,
-    borderRadius: radius.md,
+    width: 84,
+    height: 84,
+    borderRadius: 14,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
