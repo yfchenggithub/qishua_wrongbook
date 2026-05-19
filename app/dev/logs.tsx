@@ -1,7 +1,17 @@
 ﻿import * as Clipboard from 'expo-clipboard';
 import { Stack, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Animated,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type StyleProp,
+  type TextStyle,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -16,6 +26,9 @@ import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens
 const PAGE_SCOPE = 'DevLogsPage';
 const TOAST_DURATION_DEFAULT = 1800;
 const TOAST_DURATION_LONG = 2600;
+const TOAST_DURATION_HINT = 1200;
+const SEARCH_HINT_DEBOUNCE_MS = 320;
+const FILTER_HINT_DEBOUNCE_MS = 200;
 const METADATA_PREVIEW_LIMIT = 1000;
 const METADATA_COPY_LIMIT = 1000;
 const ISO_DATETIME_TOKEN_PATTERN =
@@ -73,6 +86,10 @@ function getLevelBadgeStyle(level: RuntimeLogItem['level']): {
     default:
       return { text: 'INFO', color: '#0f766e', backgroundColor: '#ecfeff' };
   }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function truncateText(value: string, maxLength: number): string {
@@ -262,6 +279,36 @@ function getCopyTextField(value: unknown, fallback: string): string {
   return normalized.length > 0 ? normalized : fallback;
 }
 
+function renderHighlightedText(
+  text: string,
+  keyword: string,
+  baseStyle: StyleProp<TextStyle>,
+) {
+  if (!keyword) {
+    return <Text style={baseStyle}>{text}</Text>;
+  }
+
+  const pattern = new RegExp(`(${escapeRegExp(keyword)})`, 'ig');
+  const parts = text.split(pattern);
+  const keywordLower = keyword.toLowerCase();
+
+  return (
+    <Text style={baseStyle}>
+      {parts.map((part, index) => {
+        if (!part) {
+          return null;
+        }
+        const isMatch = part.toLowerCase() === keywordLower;
+        return (
+          <Text key={`${index}-${part}`} style={isMatch ? styles.searchMatchText : null}>
+            {part}
+          </Text>
+        );
+      })}
+    </Text>
+  );
+}
+
 function formatSingleLogForCopy(log: RuntimeLogItem): string {
   const extendedLog = log as RuntimeLogItem & Record<string, unknown>;
   const level = getCopyTextField(extendedLog.level, 'info').toUpperCase();
@@ -328,6 +375,11 @@ export default function RuntimeLogsPage() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filterHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipFirstSearchHintRef = useRef(true);
+  const skipFirstFilterHintRef = useRef(true);
+  const latestCountRef = useRef<{ total: number; filtered: number }>({ total: logs.length, filtered: logs.length });
 
   const toastBottomOffset = Math.max(insets.bottom + spacing.lg, layout.bottomTabHeight * 0.2);
 
@@ -370,6 +422,10 @@ export default function RuntimeLogsPage() {
         return haystack.includes(normalizedKeyword);
       });
   }, [countScope, levelFilter, logs, normalizedKeyword, timeOrder]);
+
+  useEffect(() => {
+    latestCountRef.current = { total: logs.length, filtered: logsForRender.length };
+  }, [logs.length, logsForRender.length]);
 
   const hideToast = useCallback(() => {
     Animated.parallel([
@@ -427,6 +483,11 @@ export default function RuntimeLogsPage() {
     [hideToast, toastOpacity, toastTranslateY],
   );
 
+  const showCountHintToast = useCallback(() => {
+    const { total, filtered } = latestCountRef.current;
+    showToast(`当前日志条数：${total}，筛选后：${filtered}`, 'info', TOAST_DURATION_HINT);
+  }, [showToast]);
+
   useEffect(() => {
     refreshLogs();
     const unsubscribe = subscribeRuntimeLogs(() => {
@@ -441,8 +502,68 @@ export default function RuntimeLogsPage() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      if (searchHintTimerRef.current) {
+        clearTimeout(searchHintTimerRef.current);
+        searchHintTimerRef.current = null;
+      }
+      if (filterHintTimerRef.current) {
+        clearTimeout(filterHintTimerRef.current);
+        filterHintTimerRef.current = null;
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (skipFirstSearchHintRef.current) {
+      skipFirstSearchHintRef.current = false;
+      return;
+    }
+
+    if (searchHintTimerRef.current) {
+      clearTimeout(searchHintTimerRef.current);
+      searchHintTimerRef.current = null;
+    }
+
+    if (!normalizedKeyword) {
+      return;
+    }
+
+    searchHintTimerRef.current = setTimeout(() => {
+      showCountHintToast();
+      searchHintTimerRef.current = null;
+    }, SEARCH_HINT_DEBOUNCE_MS);
+
+    return () => {
+      if (searchHintTimerRef.current) {
+        clearTimeout(searchHintTimerRef.current);
+        searchHintTimerRef.current = null;
+      }
+    };
+  }, [normalizedKeyword, showCountHintToast]);
+
+  useEffect(() => {
+    if (skipFirstFilterHintRef.current) {
+      skipFirstFilterHintRef.current = false;
+      return;
+    }
+
+    if (filterHintTimerRef.current) {
+      clearTimeout(filterHintTimerRef.current);
+      filterHintTimerRef.current = null;
+    }
+
+    filterHintTimerRef.current = setTimeout(() => {
+      showCountHintToast();
+      filterHintTimerRef.current = null;
+    }, FILTER_HINT_DEBOUNCE_MS);
+
+    return () => {
+      if (filterHintTimerRef.current) {
+        clearTimeout(filterHintTimerRef.current);
+        filterHintTimerRef.current = null;
+      }
+    };
+  }, [countScope, levelFilter, showCountHintToast, timeOrder]);
 
   const handleRefreshPress = useCallback(() => {
     refreshLogs();
@@ -588,6 +709,9 @@ export default function RuntimeLogsPage() {
               <Text style={styles.clearSearchButtonText}>清空搜索</Text>
             </Pressable>
           ) : null}
+          {normalizedKeyword ? (
+            <Text style={styles.searchResultText}>搜索命中：{logsForRender.length} 条</Text>
+          ) : null}
         </View>
 
         <View style={styles.buttonRow}>
@@ -604,7 +728,9 @@ export default function RuntimeLogsPage() {
 
         <View style={styles.section}>
           {logsForRender.length === 0 ? (
-            <Text style={styles.emptyText}>暂无运行日志</Text>
+            <Text style={styles.emptyText}>
+              {logs.length === 0 ? '暂无运行日志' : `没有匹配“${keyword.trim()}”的日志`}
+            </Text>
           ) : (
             logsForRender.map(({ item, metadataText, formattedTimestamp }) => {
               const levelStyle = getLevelBadgeStyle(item.level);
@@ -617,7 +743,7 @@ export default function RuntimeLogsPage() {
                   }}
                   style={({ pressed }) => [styles.logCard, pressed ? styles.logCardPressed : null]}>
                   <View style={styles.logHeadRow}>
-                    <Text style={styles.logTimestamp}>{formattedTimestamp}</Text>
+                    {renderHighlightedText(formattedTimestamp, normalizedKeyword, styles.logTimestamp)}
                     <View
                       style={[
                         styles.levelBadge,
@@ -631,9 +757,15 @@ export default function RuntimeLogsPage() {
                       </Text>
                     </View>
                   </View>
-                  <Text style={styles.logScopeText}>scope: {item.scope ?? 'unknown'}</Text>
-                  <Text style={styles.logMessageText}>{item.message}</Text>
-                  {metadataText ? <Text style={styles.logMetadataText}>{metadataText}</Text> : null}
+                  {renderHighlightedText(
+                    `scope: ${item.scope ?? 'unknown'}`,
+                    normalizedKeyword,
+                    styles.logScopeText,
+                  )}
+                  {renderHighlightedText(item.message, normalizedKeyword, styles.logMessageText)}
+                  {metadataText
+                    ? renderHighlightedText(metadataText, normalizedKeyword, styles.logMetadataText)
+                    : null}
                 </Pressable>
               );
             })
@@ -768,6 +900,10 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '700',
   },
+  searchResultText: {
+    ...typography.caption,
+    color: colors.textMuted,
+  },
   buttonRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -844,6 +980,10 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     fontFamily: 'monospace',
+  },
+  searchMatchText: {
+    color: '#b42318',
+    fontWeight: '700',
   },
   toastContainer: {
     position: 'absolute',
