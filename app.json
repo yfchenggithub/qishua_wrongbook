@@ -58,7 +58,14 @@
       "expo-notifications",
       "expo-sqlite",
       "@react-native-community/datetimepicker",
-      "expo-audio"
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "七刷错题需要使用麦克风录制你的复做讲解。",
+          "recordAudioAndroid": true,
+          "enableBackgroundRecording": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
