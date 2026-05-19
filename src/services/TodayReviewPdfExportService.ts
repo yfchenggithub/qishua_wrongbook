@@ -462,15 +462,45 @@ function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): st
           .answer-lines-fill {
             flex: 1 1 auto;
             min-height: 140px;
-            background-image: repeating-linear-gradient(
-              to bottom,
-              transparent 0,
-              transparent 31px,
-              #333333 31px,
-              #333333 32px
-            );
-            background-repeat: repeat-y;
-            background-size: 100% 32px;
+            position: relative;
+            --answer-rule-color: #666666;
+            --answer-row-gap: 30px;
+            --answer-center-gap: 8px;
+          }
+          .answer-lines-fill::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            left: 50%;
+            width: 1px;
+            background: #333333;
+            transform: translateX(-0.5px);
+          }
+          .answer-lines-fill::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image:
+              repeating-linear-gradient(
+                to bottom,
+                transparent 0,
+                transparent calc(var(--answer-row-gap) - 1px),
+                var(--answer-rule-color) calc(var(--answer-row-gap) - 1px),
+                var(--answer-rule-color) var(--answer-row-gap)
+              ),
+              repeating-linear-gradient(
+                to bottom,
+                transparent 0,
+                transparent calc(var(--answer-row-gap) - 1px),
+                var(--answer-rule-color) calc(var(--answer-row-gap) - 1px),
+                var(--answer-rule-color) var(--answer-row-gap)
+              );
+            background-size:
+              calc(50% - var(--answer-center-gap)) 100%,
+              calc(50% - var(--answer-center-gap)) 100%;
+            background-position: left top, right top;
+            background-repeat: no-repeat;
           }
           .result-area {
             margin-top: auto;

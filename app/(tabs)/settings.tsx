@@ -1320,6 +1320,16 @@ export default function SettingsScreen() {
     reminderSettings.enabled,
     reminderSettings.scheduledDate,
   ]);
+  const nextReminderTextParts = useMemo(() => {
+    const separatorIndex = nextReminderText.indexOf('：');
+    if (separatorIndex < 0) {
+      return { prefix: nextReminderText, value: '' };
+    }
+    return {
+      prefix: nextReminderText.slice(0, separatorIndex + 1),
+      value: nextReminderText.slice(separatorIndex + 1).trimStart(),
+    };
+  }, [nextReminderText]);
 
   return (
     <View style={styles.pageRoot}>
@@ -1520,7 +1530,9 @@ export default function SettingsScreen() {
               </Text>
               <View style={styles.reminderTimeWrap}>
                 <View style={styles.reminderTimeRow}>
-                  <Text style={styles.metaText}>提醒时间：{reminderTimeText}</Text>
+                  <Text style={styles.metaText}>
+                    提醒时间：<Text style={styles.reminderValueText}>{reminderTimeText}</Text>
+                  </Text>
                   <Pressable
                     accessibilityRole="button"
                     disabled={!canEditReminderTime}
@@ -1541,7 +1553,12 @@ export default function SettingsScreen() {
                     )}
                   </Pressable>
                 </View>
-                <Text style={styles.reminderScheduleText}>{nextReminderText}</Text>
+                <Text style={styles.reminderScheduleText}>
+                  {nextReminderTextParts.prefix}
+                  {nextReminderTextParts.value ? (
+                    <Text style={styles.reminderValueText}>{nextReminderTextParts.value}</Text>
+                  ) : null}
+                </Text>
               </View>
               {shouldShowReminderPermissionNotice ? (
                 <View style={styles.reminderPermissionNotice}>
@@ -1565,8 +1582,12 @@ export default function SettingsScreen() {
             <View style={styles.cardMain}>
               <Text style={styles.cardTitle}>本机存储</Text>
               <Text style={styles.cardDescription}>错题图片和复做记录都保存在本机。</Text>
-              <Text style={styles.metaText}>图片数量：{displayNumber(dataOverview.imageCount)} 张</Text>
-              <Text style={styles.metaText}>占用空间：{displayStorageText}</Text>
+              <Text style={styles.metaText}>
+                图片数量：<Text style={styles.storageValueText}>{displayNumber(dataOverview.imageCount)} 张</Text>
+              </Text>
+              <Text style={styles.metaText}>
+                占用空间：<Text style={styles.storageValueText}>{displayStorageText}</Text>
+              </Text>
               <View style={styles.actionRow}>
                 <Pressable
                   disabled={isStorageBusy}
@@ -2097,6 +2118,14 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: '#6A717A',
     fontWeight: '600',
+  },
+  reminderValueText: {
+    color: '#7B53CC',
+    fontWeight: '700',
+  },
+  storageValueText: {
+    color: '#2A9D50',
+    fontWeight: '700',
   },
   reminderPermissionNotice: {
     marginTop: spacing.xs,
