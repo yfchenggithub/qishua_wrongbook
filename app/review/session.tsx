@@ -1,5 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
   ActivityIndicator,
   Alert,
@@ -32,10 +33,10 @@ import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 const PAGE_SCOPE = 'ReviewSessionPage';
 const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
-const QUESTION_PREVIEW_MIN_HEIGHT = 72;
-const QUESTION_PREVIEW_MAX_HEIGHT = 280;
-const QUESTION_PREVIEW_EMPTY_HEIGHT = 160;
-const QUESTION_PREVIEW_FALLBACK_HEIGHT = 160;
+const QUESTION_PREVIEW_MIN_HEIGHT = 112;
+const QUESTION_PREVIEW_MAX_HEIGHT = 228;
+const QUESTION_PREVIEW_EMPTY_HEIGHT = 148;
+const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
 
 type ToastType = 'success' | 'info' | 'error';
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -114,6 +115,16 @@ function toShortErrorMessage(input?: string): string {
 
 function isPositiveFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function getReviewActionSymbol(tone: 'known' | 'fuzzy' | 'unknown'): string {
+  if (tone === 'known') {
+    return '\u2713';
+  }
+  if (tone === 'fuzzy') {
+    return '?';
+  }
+  return '\u00D7';
 }
 
 function pickSlotImageDimensions(slot?: DetailImageSlot): ImageDimensions | null {
@@ -235,7 +246,12 @@ function QuestionImageCard({
 
   return (
     <CardContainer style={styles.questionCard} padding={spacing.lg}>
-      <Text style={styles.questionTitle}>题目图片</Text>
+      <View style={styles.sectionHeaderRow}>
+        <View style={styles.sectionIconWrap}>
+          <MaterialIcons name="image" size={20} color="#16A34A" />
+        </View>
+        <Text style={styles.questionTitle}>{'\u9898\u76ee\u56fe\u7247'}</Text>
+      </View>
       <View
         onLayout={handleQuestionImageLayout}
         style={[
@@ -244,7 +260,7 @@ function QuestionImageCard({
           !hasUri ? { height: QUESTION_PREVIEW_EMPTY_HEIGHT } : null,
         ]}>
         {canShowImage ? (
-          <>
+          <View style={styles.questionImageFrame}>
             {onPreview ? (
               <Pressable
                 accessibilityRole="button"
@@ -279,13 +295,12 @@ function QuestionImageCard({
                 <Text style={styles.questionPreviewButtonText}>查看大图</Text>
               </Pressable>
             ) : null}
-          </>
+          </View>
         ) : null}
         {!hasUri ? <Text style={styles.questionPlaceholderText}>还没有上传题目图片</Text> : null}
         {fileMissing ? <Text style={styles.questionErrorText}>题目图片文件不存在</Text> : null}
         {loadFailed ? <Text style={styles.questionErrorText}>题目图片加载失败</Text> : null}
       </View>
-      {canShowImage && onPreview ? <Text style={styles.questionPreviewHint}>单击图片预览 · 双击大图关闭</Text> : null}
     </CardContainer>
   );
 }
@@ -577,26 +592,27 @@ export default function ReviewSessionPage() {
     [currentIndex, currentMeta, currentQueueItem, incrementStats, isCompleted, isLoadingCurrent, isSubmitting, showToast, totalCount],
   );
 
-  const progressText = useMemo(() => {
-    if (totalCount <= 0) {
-      return '0 / 0';
-    }
-    if (isCompleted) {
-      return `${totalCount} / ${totalCount}`;
-    }
-    return `${currentIndex + 1} / ${totalCount}`;
-  }, [currentIndex, isCompleted, totalCount]);
-
+  const progressCurrent = totalCount <= 0 ? 0 : Math.min(currentIndex + 1, totalCount);
+  const reviewRound = currentMeta?.nextReviewIndex ?? currentQueueItem?.nextReviewIndex ?? 1;
+  const actionSectionBottomSpace = insets.bottom + spacing.sm;
   const toastBottomOffset = insets.bottom + spacing.lg;
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer scroll contentStyle={styles.screenContent}>
+      <View pointerEvents="none" style={styles.pageGlowTop} />
+      <View pointerEvents="none" style={styles.pageGlowBottom} />
+      <ScreenContainer scroll style={styles.screenSafeArea} contentStyle={styles.screenContent}>
         <Pressable style={styles.exitButton} onPress={handleRequestExit}>
           <Text style={styles.exitButtonText}>退出今日复做</Text>
         </Pressable>
 
-        <BrandHeader title="七刷错题本" subtitle="今日复做会话" />
+        <BrandHeader
+          title={'\u4e03\u5237\u9519\u9898\u672c'}
+          subtitle={'\u4eca\u65e5\u590d\u505a\u4f1a\u8bdd'}
+          style={styles.brandHeader}
+          titleStyle={styles.brandHeaderTitle}
+          subtitleStyle={styles.brandHeaderSubtitle}
+        />
 
         {sessionState === 'loading' ? (
           <CardContainer style={styles.stateCard} padding={spacing.lg}>
@@ -654,11 +670,25 @@ export default function ReviewSessionPage() {
         {sessionState === 'ready' && !isCompleted ? (
           <>
             <CardContainer style={styles.progressCard} padding={spacing.lg}>
-              <Text style={styles.progressHeader}>今日复做</Text>
-              <Text style={styles.progressNumber}>{progressText}</Text>
-              <Text style={styles.progressSubText}>第 {currentMeta?.nextReviewIndex ?? currentQueueItem?.nextReviewIndex ?? 1} 刷</Text>
+              <View style={styles.sectionHeaderRow}>
+                <View style={styles.sectionIconWrap}>
+                  <MaterialIcons name="assignment-turned-in" size={20} color="#16A34A" />
+                </View>
+                <Text style={styles.progressHeader}>{'\u4eca\u65e5\u590d\u505a'}</Text>
+              </View>
+              <View style={styles.progressMainRow}>
+                <View style={styles.progressNumberRow}>
+                  <Text style={styles.progressNumberCurrent}>{progressCurrent}</Text>
+                  <Text style={styles.progressNumberSlash}> / </Text>
+                  <Text style={styles.progressNumberTotal}>{totalCount}</Text>
+                </View>
+                <View style={styles.reviewPill}>
+                  <Text style={styles.reviewPillText}>{`\u7b2c ${reviewRound} \u5237`}</Text>
+                </View>
+              </View>
+              <View style={styles.progressDivider} />
               <Text style={styles.progressTitle} numberOfLines={2}>
-                {currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...'}
+                {currentMeta?.title ?? currentQueueItem?.title ?? '\u6b63\u5728\u51c6\u5907\u9898\u76ee...'}
               </Text>
               <Text style={styles.progressModule}>{currentMeta?.module ?? currentQueueItem?.module ?? ''}</Text>
             </CardContainer>
@@ -698,8 +728,11 @@ export default function ReviewSessionPage() {
             ) : null}
 
             {!isLoadingCurrent && !currentErrorMessage ? (
-              <View style={styles.actionSection}>
-                <Text style={styles.actionHint}>选择结果后会自动进入下一题</Text>
+              <View style={[styles.actionSection, { paddingBottom: actionSectionBottomSpace }]}>
+                <View style={styles.actionHintRow}>
+                  <MaterialIcons name="info-outline" size={17} color="#64748B" />
+                  <Text style={styles.actionHint}>{'\u9009\u62e9\u7ed3\u679c\u540e\u4f1a\u81ea\u52a8\u8fdb\u5165\u4e0b\u4e00\u9898'}</Text>
+                </View>
                 {REVIEW_ACTIONS.map((action) => (
                   <Pressable
                     key={action.value}
@@ -714,9 +747,10 @@ export default function ReviewSessionPage() {
                           : styles.resultButtonUnknown,
                       isSubmitting ? styles.disabledControl : null,
                     ]}>
-                    <Text style={styles.resultButtonText}>
-                      {isSubmitting ? '记录中...' : action.label}
-                    </Text>
+                    <View style={styles.resultButtonContent}>
+                      {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
+                      <Text style={styles.resultButtonText}>{isSubmitting ? '\u8bb0\u5f55\u4e2d...' : action.label}</Text>
+                    </View>
                   </Pressable>
                 ))}
               </View>
@@ -755,48 +789,151 @@ export default function ReviewSessionPage() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  pageGlowTop: {
+    position: 'absolute',
+    top: -140,
+    right: -96,
+    width: 320,
+    height: 320,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(34, 197, 94, 0.09)',
+  },
+  pageGlowBottom: {
+    position: 'absolute',
+    bottom: 20,
+    left: -120,
+    width: 260,
+    height: 260,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(14, 165, 233, 0.07)',
+  },
+  screenSafeArea: {
+    backgroundColor: 'transparent',
   },
   screenContent: {
-    paddingTop: spacing.lg,
-    gap: spacing.lg,
+    paddingTop: spacing.md,
+    gap: spacing.md,
+    backgroundColor: 'transparent',
+  },
+  brandHeader: {
+    gap: spacing.xs,
+  },
+  brandHeaderTitle: {
+    ...typography.titleLarge,
+    fontSize: 30,
+    lineHeight: 36,
+    color: '#0F172A',
+    fontWeight: '800',
+  },
+  brandHeaderSubtitle: {
+    ...typography.body,
+    fontSize: 15,
+    lineHeight: 21,
+    color: '#64748B',
+    fontWeight: '600',
   },
   exitButton: {
     alignSelf: 'flex-start',
     paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    marginLeft: -spacing.xs,
   },
   exitButtonText: {
     ...typography.body,
-    color: colors.textPrimary,
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#334155',
     fontWeight: '700',
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  sectionIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#DCFCE7',
   },
   progressCard: {
     borderRadius: radius.xl,
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
   progressHeader: {
-    ...typography.body,
-    color: colors.textSecondary,
+    ...typography.sectionTitle,
+    fontSize: 22,
+    lineHeight: 30,
+    color: '#1F2937',
     fontWeight: '700',
   },
-  progressNumber: {
+  progressMainRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  progressNumberRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  progressNumberCurrent: {
+    ...typography.titleLarge,
+    fontSize: 48,
+    lineHeight: 54,
+    color: '#059669',
+    fontWeight: '800',
+  },
+  progressNumberSlash: {
+    ...typography.titleMedium,
+    marginHorizontal: spacing.xs,
+    fontSize: 28,
+    lineHeight: 34,
+    color: '#334155',
+    fontWeight: '700',
+  },
+  progressNumberTotal: {
     ...typography.titleLarge,
     fontSize: 40,
     lineHeight: 46,
+    color: '#111827',
+    fontWeight: '800',
   },
-  progressSubText: {
-    ...typography.body,
-    color: colors.textSecondary,
+  reviewPill: {
+    alignSelf: 'center',
+    borderRadius: radius.pill,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  reviewPillText: {
+    ...typography.bodySmall,
+    color: '#166534',
     fontWeight: '700',
+  },
+  progressDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
   },
   progressTitle: {
     ...typography.sectionTitle,
-    fontSize: 24,
-    lineHeight: 32,
-    marginTop: spacing.sm,
+    marginTop: 2,
+    fontSize: 30,
+    lineHeight: 36,
+    color: '#0F172A',
+    fontWeight: '800',
   },
   progressModule: {
     ...typography.body,
-    color: colors.textSecondary,
+    color: '#64748B',
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '500',
   },
   questionCard: {
     borderRadius: radius.xl,
@@ -806,30 +943,43 @@ const styles = StyleSheet.create({
     ...typography.sectionTitle,
     fontSize: 22,
     lineHeight: 30,
+    color: '#1F2937',
   },
   questionImageWrap: {
     width: '100%',
-    borderRadius: radius.md,
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#EEF2F7',
+    padding: spacing.sm,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   questionImageWrapEmpty: {
     borderStyle: 'dashed',
+    borderColor: '#CBD5E1',
+  },
+  questionImageFrame: {
+    width: '100%',
+    height: '100%',
+    borderRadius: radius.lg,
+    overflow: 'hidden',
+    backgroundColor: '#F8FAFC',
   },
   questionImage: {
     width: '100%',
     height: '100%',
+    borderRadius: 12,
   },
   questionImagePressable: {
     width: '100%',
     height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   questionImagePressablePressed: {
-    opacity: 0.94,
+    opacity: 0.92,
   },
   questionPreviewButton: {
     position: 'absolute',
@@ -837,17 +987,17 @@ const styles = StyleSheet.create({
     bottom: spacing.sm,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 2,
+    borderColor: '#D1D5DB',
+    backgroundColor: 'rgba(248, 250, 252, 0.92)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
   },
   questionPreviewButtonText: {
     ...typography.caption,
-    color: colors.textMuted,
+    color: '#475569',
     fontSize: 11,
     lineHeight: 14,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   questionPreviewHint: {
     ...typography.caption,
@@ -856,47 +1006,68 @@ const styles = StyleSheet.create({
   },
   questionPlaceholderText: {
     ...typography.body,
-    color: colors.textMuted,
+    color: '#94A3B8',
     textAlign: 'center',
+    fontWeight: '600',
   },
   questionErrorText: {
     ...typography.body,
-    color: colors.danger,
+    color: '#DC2626',
     textAlign: 'center',
+    fontWeight: '600',
   },
   actionSection: {
     gap: spacing.sm,
-    paddingBottom: spacing.sm,
+  },
+  actionHintRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.xs,
   },
   actionHint: {
-    ...typography.body,
-    color: colors.textSecondary,
-    fontWeight: '700',
+    ...typography.bodySmall,
+    color: '#64748B',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '600',
   },
   resultButton: {
-    minHeight: 58,
-    borderRadius: radius.lg,
+    minHeight: 56,
+    borderRadius: 18,
     borderWidth: 1,
-    alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
   },
   resultButtonKnown: {
-    backgroundColor: '#0F5F2D',
-    borderColor: '#0F5F2D',
+    backgroundColor: '#22C55E',
+    borderColor: '#16A34A',
   },
   resultButtonFuzzy: {
-    backgroundColor: '#8A5A06',
-    borderColor: '#8A5A06',
+    backgroundColor: '#F59E0B',
+    borderColor: '#D97706',
   },
   resultButtonUnknown: {
-    backgroundColor: '#8E2323',
-    borderColor: '#8E2323',
+    backgroundColor: '#EF4444',
+    borderColor: '#DC2626',
+  },
+  resultButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  resultButtonIcon: {
+    ...typography.sectionTitle,
+    fontSize: 18,
+    lineHeight: 22,
+    color: colors.white,
+    fontWeight: '800',
   },
   resultButtonText: {
     ...typography.sectionTitle,
-    fontSize: 22,
-    lineHeight: 28,
+    fontSize: 20,
+    lineHeight: 27,
     color: colors.white,
     fontWeight: '800',
   },
