@@ -8,7 +8,7 @@ import { withDatabaseTransaction } from '@/src/db';
 import { DATABASE_VERSION } from '@/src/db/constants';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
-import type { ReviewRecord } from '@/src/models/ReviewRecord';
+import type { ReviewRecord, ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import { ensureMistakeImageDir } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
@@ -16,6 +16,8 @@ import {
   BACKUP_DATA_FILE_NAME,
   BACKUP_IMAGES_DIR_NAME,
   BACKUP_MANIFEST_FILE_NAME,
+  BACKUP_VOICE_FILES_DIR_NAME,
+  BACKUP_VOICE_NOTES_FILE_NAME,
   createBackupManifest,
   validateBackupManifest,
 } from '@/src/services/backup/BackupManifest';
@@ -28,6 +30,7 @@ import {
 } from '@/src/services/backup/BackupRestoreError';
 import {
   ensureBackupImageRelativePath,
+  ensureBackupVoiceFileRelativePath,
   FflateBackupZipAdapter,
   type BackupZipAdapter,
 } from '@/src/services/backup/BackupZipAdapter';
@@ -42,6 +45,7 @@ import {
   type BackupImageArchiveFile,
   type BackupManifest,
   type BackupMistakeImageRecord,
+  type BackupVoiceNoteRecord,
   type CreateBackupOptions,
   type CreateBackupServiceResult,
   type InspectBackupResult,
@@ -73,6 +77,8 @@ const SERVICE_SCOPE = 'BackupService';
 const BACKUP_QUERY_PAGE_SIZE = 200;
 const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
+const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
+const VOICE_NOTES_DIR_NAME = 'voice-notes';
 const SUPPORTED_SCHEMA_VERSIONS = [DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
@@ -152,6 +158,8 @@ type ExtractedBackupArchive = {
   manifest: BackupManifest;
   manifestWarnings: string[];
   data: BackupDataPayload;
+  voiceNotes: BackupVoiceNoteRecord[];
+  voiceParseWarnings: string[];
   archiveFileMap: Map<string, File>;
   imageTotalBytes: number;
   countsFromManifest: BackupCounts;
@@ -166,6 +174,12 @@ type RestoreImageMaterializedResult = {
   failedCount: number;
   skippedCount: number;
   errorCount: number;
+};
+
+type RestoreVoiceMaterializedResult = {
+  resolvedVoiceNotesByReviewRecordId: Map<string, ReviewRecordVoiceNote>;
+  voiceNoteCount: number;
+  restoredVoiceFileCount: number;
 };
 
 type RestoreVerifyResult = {
@@ -249,6 +263,122 @@ function inferArchiveExtension(path: string): string {
 
 function sanitizeFileNameSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function normalizeRequiredText(value: string | null | undefined): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+}
+
+function isValidIsoDateTime(value: string): boolean {
+  if (!value.trim()) {
+    return false;
+  }
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime());
+}
+
+function inferVoiceExtension(uri: string | null, fileName: string | null): string {
+  const fileNameNormalized = normalizeOptionalText(fileName);
+  if (fileNameNormalized) {
+    const matchedFromName = fileNameNormalized.match(/\.([a-zA-Z0-9]{1,8})$/);
+    if (matchedFromName) {
+      return matchedFromName[1].toLowerCase();
+    }
+  }
+
+  if (!uri) {
+    return RESTORE_VOICE_EXTENSION_FALLBACK;
+  }
+  const matchedFromUri = uri.match(/\.([a-zA-Z0-9]{1,8})(?:$|[?#])/);
+  if (!matchedFromUri) {
+    return RESTORE_VOICE_EXTENSION_FALLBACK;
+  }
+  return matchedFromUri[1].toLowerCase();
+}
+
+function buildBackupVoiceFileName(voiceNoteId: string, fileName: string | null, sourceUri: string | null): string {
+  const safeVoiceId = sanitizeFileNameSegment(voiceNoteId.trim());
+  const extension = inferVoiceExtension(sourceUri, fileName);
+  return `voice_note_${safeVoiceId}.${extension}`;
+}
+
+function mapVoiceFilePathForBackup(fileName: string): string {
+  return ensureBackupVoiceFileRelativePath(`${BACKUP_VOICE_FILES_DIR_NAME}/${fileName}`);
+}
+
+function normalizeBackupVoiceFileName(fileName: string | null | undefined): string | null {
+  const normalized = normalizeRequiredText(fileName);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.includes('/') || normalized.includes('\\') || normalized.includes('..')) {
+    return null;
+  }
+  return normalized;
+}
+
+function toIsoStringOrNull(timestampMs: number | null | undefined): string | null {
+  if (typeof timestampMs !== 'number' || !Number.isFinite(timestampMs) || timestampMs <= 0) {
+    return null;
+  }
+  return new Date(timestampMs).toISOString();
+}
+
+function normalizeReviewRecordVoiceNoteForBackup(
+  value: ReviewRecord['voice_note'],
+): ReviewRecordVoiceNote | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const id = normalizeRequiredText(value.id);
+  const fileUri = normalizeRequiredText(value.fileUri);
+  const fileName = normalizeRequiredText(value.fileName);
+  const createdAt = normalizeRequiredText(value.createdAt);
+  const durationMs = ensureNonNegativeNumber(value.durationMs) ? Math.floor(value.durationMs) : NaN;
+  const sizeBytes = ensureNonNegativeNumber(value.sizeBytes) ? Math.floor(value.sizeBytes) : NaN;
+
+  if (!id || !fileUri || !fileName || !createdAt) {
+    return null;
+  }
+  if (!Number.isFinite(durationMs) || !Number.isFinite(sizeBytes)) {
+    return null;
+  }
+  if (!isValidIsoDateTime(createdAt)) {
+    return null;
+  }
+
+  return {
+    id,
+    fileUri,
+    fileName,
+    durationMs,
+    sizeBytes,
+    createdAt,
+  };
+}
+
+function getVoiceNotesDirectory(): Directory {
+  return new Directory(Paths.document, VOICE_NOTES_DIR_NAME);
+}
+
+function resolveVoiceSourceFileForBackup(voiceNote: ReviewRecordVoiceNote): File | null {
+  const normalizedFileName = normalizeBackupVoiceFileName(voiceNote.fileName);
+  if (normalizedFileName) {
+    const fileInVoiceNotesDirectory = new File(getVoiceNotesDirectory(), normalizedFileName);
+    if (fileInVoiceNotesDirectory.exists) {
+      return fileInVoiceNotesDirectory;
+    }
+  }
+
+  const fileFromUri = new File(voiceNote.fileUri);
+  if (fileFromUri.exists) {
+    return fileFromUri;
+  }
+
+  return null;
 }
 
 export function mapImageUriForRestore(image: BackupMistakeImageRecord): string {
@@ -550,6 +680,13 @@ type CollectImageArtifactsResult = {
   copiedImageCount: number;
 };
 
+type CollectVoiceArtifactsResult = {
+  backupVoiceNotes: BackupVoiceNoteRecord[];
+  archiveVoiceFiles: BackupImageArchiveFile[];
+  warnings: string[];
+  copiedVoiceFileCount: number;
+};
+
 async function collectImageArtifacts(
   mistakeImages: Awaited<ReturnType<typeof listAllMistakeImages>>,
 ): Promise<CollectImageArtifactsResult> {
@@ -603,6 +740,165 @@ async function collectImageArtifacts(
     archiveImages,
     warnings,
     copiedImageCount,
+  };
+}
+
+function countVoiceWarnings(warnings: RestoreWarningItem[]): number {
+  let count = 0;
+  for (const warning of warnings) {
+    if (warning.code.startsWith('RESTORE_VOICE_')) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function normalizeBackupVoiceNoteRecord(
+  raw: unknown,
+): BackupVoiceNoteRecord | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const input = raw as Partial<BackupVoiceNoteRecord>;
+  const id = normalizeRequiredText(input.id);
+  const mistakeId = normalizeRequiredText(input.mistakeId);
+  const reviewRecordId = normalizeRequiredText(input.reviewRecordId);
+  const fileName = normalizeBackupVoiceFileName(input.fileName);
+  const durationMs = ensureNonNegativeNumber(input.durationMs) ? Math.floor(input.durationMs) : NaN;
+  const sizeBytes = ensureNonNegativeNumber(input.sizeBytes) ? Math.floor(input.sizeBytes) : NaN;
+  const createdAt = normalizeRequiredText(input.createdAt);
+  const updatedAt = normalizeRequiredText(input.updatedAt);
+
+  if (!id || !mistakeId || !reviewRecordId || !fileName) {
+    return null;
+  }
+  if (!Number.isFinite(durationMs) || !Number.isFinite(sizeBytes)) {
+    return null;
+  }
+
+  const fallbackIso = new Date().toISOString();
+  const normalizedCreatedAt = isValidIsoDateTime(createdAt) ? createdAt : fallbackIso;
+  const normalizedUpdatedAt = isValidIsoDateTime(updatedAt) ? updatedAt : normalizedCreatedAt;
+
+  return {
+    id,
+    mistakeId,
+    reviewRecordId,
+    fileName,
+    durationMs,
+    sizeBytes,
+    createdAt: normalizedCreatedAt,
+    updatedAt: normalizedUpdatedAt,
+  };
+}
+
+function validateBackupVoiceNotesPayload(raw: unknown): {
+  voiceNotes: BackupVoiceNoteRecord[];
+  warnings: string[];
+} {
+  if (raw === null || raw === undefined) {
+    return {
+      voiceNotes: [],
+      warnings: [],
+    };
+  }
+
+  if (!Array.isArray(raw)) {
+    return {
+      voiceNotes: [],
+      warnings: ['VOICE_NOTES_INVALID:voiceNotes.json must be an array.'],
+    };
+  }
+
+  const voiceNotes: BackupVoiceNoteRecord[] = [];
+  const warnings: string[] = [];
+
+  for (let index = 0; index < raw.length; index += 1) {
+    const normalized = normalizeBackupVoiceNoteRecord(raw[index]);
+    if (!normalized) {
+      warnings.push(`VOICE_NOTES_INVALID:invalid voice note record at index=${index}`);
+      continue;
+    }
+    voiceNotes.push(normalized);
+  }
+
+  return {
+    voiceNotes,
+    warnings,
+  };
+}
+
+async function collectVoiceArtifacts(
+  reviewRecords: Awaited<ReturnType<typeof listAllReviewRecords>>,
+): Promise<CollectVoiceArtifactsResult> {
+  const backupVoiceNotes: BackupVoiceNoteRecord[] = [];
+  const archiveVoiceFiles: BackupImageArchiveFile[] = [];
+  const warnings: string[] = [];
+  let copiedVoiceFileCount = 0;
+
+  for (const reviewRecord of reviewRecords) {
+    const normalizedVoiceNote = normalizeReviewRecordVoiceNoteForBackup(reviewRecord.voice_note ?? null);
+    if (!normalizedVoiceNote) {
+      continue;
+    }
+
+    const backupFileName = buildBackupVoiceFileName(
+      normalizedVoiceNote.id,
+      normalizedVoiceNote.fileName,
+      normalizedVoiceNote.fileUri,
+    );
+    const backupRelativePath = mapVoiceFilePathForBackup(backupFileName);
+
+    let sizeBytes = normalizedVoiceNote.sizeBytes;
+    let updatedAt = normalizedVoiceNote.createdAt;
+
+    try {
+      const sourceFile = resolveVoiceSourceFileForBackup(normalizedVoiceNote);
+      if (!sourceFile) {
+        warnings.push(
+          `VOICE_FILE_MISSING:voiceNoteId=${normalizedVoiceNote.id},reviewRecordId=${reviewRecord.id},mistakeId=${reviewRecord.mistake_id},fileName=${normalizedVoiceNote.fileName}`,
+        );
+      } else {
+        archiveVoiceFiles.push({
+          backupRelativePath,
+          bytes: await sourceFile.bytes(),
+        });
+        copiedVoiceFileCount += 1;
+
+        const sourceInfo = sourceFile.info();
+        if (ensureNonNegativeNumber(sourceInfo.size)) {
+          sizeBytes = Math.floor(sourceInfo.size);
+        }
+        const updatedAtFromFile = toIsoStringOrNull(sourceInfo.modificationTime);
+        if (updatedAtFromFile) {
+          updatedAt = updatedAtFromFile;
+        }
+      }
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      warnings.push(
+        `VOICE_FILE_MISSING:voiceNoteId=${normalizedVoiceNote.id},reviewRecordId=${reviewRecord.id},mistakeId=${reviewRecord.mistake_id},error=${errorName}`,
+      );
+    }
+
+    backupVoiceNotes.push({
+      id: normalizedVoiceNote.id,
+      mistakeId: reviewRecord.mistake_id,
+      reviewRecordId: reviewRecord.id,
+      fileName: backupFileName,
+      durationMs: normalizedVoiceNote.durationMs,
+      sizeBytes,
+      createdAt: normalizedVoiceNote.createdAt,
+      updatedAt,
+    });
+  }
+
+  return {
+    backupVoiceNotes,
+    archiveVoiceFiles,
+    warnings,
+    copiedVoiceFileCount,
   };
 }
 
@@ -913,6 +1209,22 @@ async function readBackupPackageFromTemp(options: {
     });
   }
 
+  const voiceNotesWarnings: string[] = [];
+  let voiceNotes: BackupVoiceNoteRecord[] = [];
+  const voiceNotesFile = archiveFileMap.get(BACKUP_VOICE_NOTES_FILE_NAME);
+  if (voiceNotesFile && voiceNotesFile.exists) {
+    try {
+      const rawVoiceNotes = JSON.parse(strFromU8(await voiceNotesFile.bytes()));
+      const parsedVoiceNotes = validateBackupVoiceNotesPayload(rawVoiceNotes);
+      voiceNotes = parsedVoiceNotes.voiceNotes;
+      voiceNotesWarnings.push(...parsedVoiceNotes.warnings);
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : 'UnknownError';
+      voiceNotesWarnings.push(`VOICE_NOTES_INVALID:failed to parse voiceNotes.json,error=${errorName}`);
+      voiceNotes = [];
+    }
+  }
+
   logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_package_read_success', {
     restoreSessionId,
     packageFormat: 'zip',
@@ -922,6 +1234,8 @@ async function readBackupPackageFromTemp(options: {
     appVersionInBackup: manifest.appVersion,
     createdAtInBackup: manifest.createdAt,
     countsFromManifest: manifest.counts,
+    voiceNoteCount: voiceNotes.length,
+    voiceWarningCount: voiceNotesWarnings.length,
     durationMs: nowMs() - readStartedAt,
   });
 
@@ -932,6 +1246,8 @@ async function readBackupPackageFromTemp(options: {
     manifest,
     manifestWarnings: warnings,
     data,
+    voiceNotes,
+    voiceParseWarnings: voiceNotesWarnings,
     archiveFileMap,
     imageTotalBytes,
     countsFromManifest: manifest.counts,
@@ -1137,13 +1453,141 @@ async function materializeRestoredImages(options: {
   };
 }
 
+async function materializeRestoredVoiceNotes(options: {
+  restoreSessionId: string;
+  voiceNotes: BackupVoiceNoteRecord[];
+  reviewRecords: ReviewRecord[];
+  archiveFileMap: Map<string, File>;
+  warnings: RestoreWarningItem[];
+}): Promise<RestoreVoiceMaterializedResult> {
+  const { restoreSessionId, voiceNotes, reviewRecords, archiveFileMap, warnings } = options;
+  const resolvedVoiceNotesByReviewRecordId = new Map<string, ReviewRecordVoiceNote>();
+  const reviewRecordById = new Map<string, ReviewRecord>();
+  let restoredVoiceFileCount = 0;
+
+  for (const reviewRecord of reviewRecords) {
+    reviewRecordById.set(reviewRecord.id, reviewRecord);
+  }
+
+  if (voiceNotes.length <= 0) {
+    return {
+      resolvedVoiceNotesByReviewRecordId,
+      voiceNoteCount: 0,
+      restoredVoiceFileCount: 0,
+    };
+  }
+
+  const voiceDirectory = getVoiceNotesDirectory();
+  voiceDirectory.create({ intermediates: true, idempotent: true });
+
+  for (const voiceNote of voiceNotes) {
+    const reviewRecord = reviewRecordById.get(voiceNote.reviewRecordId);
+    if (!reviewRecord) {
+      appendWarning(warnings, {
+        code: 'RESTORE_VOICE_ORPHAN_RECORD',
+        stage: 'images_restore',
+        message: 'Voice note metadata references a missing review record.',
+        shortTarget: voiceNote.reviewRecordId,
+      });
+      continue;
+    }
+
+    if (reviewRecord.mistake_id !== voiceNote.mistakeId) {
+      appendWarning(warnings, {
+        code: 'RESTORE_VOICE_RELATION_MISMATCH',
+        stage: 'images_restore',
+        message: 'Voice note metadata mistake relation does not match review record relation.',
+        shortTarget: voiceNote.reviewRecordId,
+      });
+    }
+
+    const normalizedFileName = normalizeBackupVoiceFileName(voiceNote.fileName);
+    if (!normalizedFileName) {
+      appendWarning(warnings, {
+        code: 'RESTORE_VOICE_METADATA_INVALID',
+        stage: 'images_restore',
+        message: 'Voice note fileName is invalid.',
+        shortTarget: voiceNote.reviewRecordId,
+      });
+      continue;
+    }
+
+    const targetFile = new File(voiceDirectory, normalizedFileName);
+    const voiceArchivePath = normalizeArchiveEntryPath(mapVoiceFilePathForBackup(normalizedFileName));
+    const sourceFile = archiveFileMap.get(voiceArchivePath);
+    let sizeBytes = voiceNote.sizeBytes;
+
+    if (!sourceFile || !sourceFile.exists) {
+      appendWarning(warnings, {
+        code: 'RESTORE_VOICE_FILE_MISSING',
+        stage: 'images_restore',
+        message: 'Voice note file is missing in backup package.',
+        shortTarget: shortPath(voiceArchivePath) ?? voiceArchivePath,
+      });
+    } else {
+      try {
+        if (targetFile.exists) {
+          targetFile.delete();
+        }
+        sourceFile.copy(targetFile);
+        const targetInfo = targetFile.info();
+        if (ensureNonNegativeNumber(targetInfo.size)) {
+          sizeBytes = Math.floor(targetInfo.size);
+        }
+        restoredVoiceFileCount += 1;
+      } catch (error) {
+        appendWarning(warnings, {
+          code: 'RESTORE_VOICE_COPY_FAILED',
+          stage: 'images_restore',
+          message: 'Failed to restore voice note file.',
+          shortTarget: shortPath(voiceArchivePath) ?? voiceArchivePath,
+          detail: safeError(error).message,
+        });
+      }
+    }
+
+    const resolvedVoiceNote: ReviewRecordVoiceNote = {
+      id: voiceNote.id,
+      fileUri: targetFile.uri,
+      fileName: normalizedFileName,
+      durationMs: voiceNote.durationMs,
+      sizeBytes,
+      createdAt: voiceNote.createdAt,
+    };
+
+    if (resolvedVoiceNotesByReviewRecordId.has(voiceNote.reviewRecordId)) {
+      appendWarning(warnings, {
+        code: 'RESTORE_VOICE_DUPLICATE_RECORD',
+        stage: 'images_restore',
+        message: 'Duplicate voice note metadata found for one review record. Latest one wins.',
+        shortTarget: voiceNote.reviewRecordId,
+      });
+    }
+
+    resolvedVoiceNotesByReviewRecordId.set(voiceNote.reviewRecordId, resolvedVoiceNote);
+  }
+
+  logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_voice_files_done', {
+    restoreSessionId,
+    voiceNoteCount: resolvedVoiceNotesByReviewRecordId.size,
+    restoredVoiceFileCount,
+  });
+
+  return {
+    resolvedVoiceNotesByReviewRecordId,
+    voiceNoteCount: resolvedVoiceNotesByReviewRecordId.size,
+    restoredVoiceFileCount,
+  };
+}
+
 async function runRestoreDatabaseTransaction(options: {
   restoreSessionId: string;
   data: BackupDataPayload;
   restoredImages: RestoredMistakeImageInsert[];
+  resolvedVoiceNotesByReviewRecordId: Map<string, ReviewRecordVoiceNote>;
   errors: RestoreErrorItem[];
 }): Promise<{ counts: BackupCounts; dbClearDurationMs: number }> {
-  const { restoreSessionId, data, restoredImages, errors } = options;
+  const { restoreSessionId, data, restoredImages, resolvedVoiceNotesByReviewRecordId, errors } = options;
   const importStartedAt = nowMs();
   let dbClearDurationMs = 0;
   try {
@@ -1217,9 +1661,10 @@ async function runRestoreDatabaseTransaction(options: {
 
         for (let index = 0; index < data.reviewRecords.length; index += 1) {
           const reviewRecord = data.reviewRecords[index];
-          const voiceNoteJson = reviewRecord.voice_note
-            ? JSON.stringify(reviewRecord.voice_note)
-            : null;
+          const restoredVoiceNote = resolvedVoiceNotesByReviewRecordId.get(reviewRecord.id);
+          const fallbackVoiceNote = normalizeReviewRecordVoiceNoteForBackup(reviewRecord.voice_note ?? null);
+          const resolvedVoiceNote = restoredVoiceNote ?? fallbackVoiceNote;
+          const voiceNoteJson = resolvedVoiceNote ? JSON.stringify(resolvedVoiceNote) : null;
           await db.runAsync(
             INSERT_REVIEW_RECORD_SQL,
             reviewRecord.id,
@@ -1409,7 +1854,9 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
     });
 
     const imageArtifacts = await collectImageArtifacts(mistakeImages);
-    context.warningCount = imageArtifacts.warnings.length;
+    const voiceArtifacts = await collectVoiceArtifacts(reviewRecords);
+    const backupWarnings = [...imageArtifacts.warnings, ...voiceArtifacts.warnings];
+    context.warningCount = backupWarnings.length;
     context.counts = {
       ...context.counts,
       imageFiles: imageArtifacts.copiedImageCount,
@@ -1427,14 +1874,18 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       schemaVersion: DATABASE_VERSION,
       devicePlatform: toBackupDevicePlatform(),
       counts: context.counts,
-      warnings: imageArtifacts.warnings,
+      warnings: backupWarnings,
     });
 
     const data: BackupDataPayload = {
       mistakes,
       mistakeImages: imageArtifacts.backupMistakeImages,
       reviewRecords,
-      extra: { reason },
+      extra: {
+        reason,
+        voiceNoteCount: voiceArtifacts.backupVoiceNotes.length,
+        voiceFileCount: voiceArtifacts.copiedVoiceFileCount,
+      },
     };
 
     const packaged = await zipAdapter.createBackupPackage({
@@ -1442,6 +1893,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       manifest,
       data,
       images: imageArtifacts.archiveImages,
+      voiceNotes: voiceArtifacts.backupVoiceNotes,
+      voiceFiles: voiceArtifacts.archiveVoiceFiles,
     });
 
     logBackupEvent('backup_package_created', sessionId, Date.now() - startedAt, {
@@ -1666,6 +2119,8 @@ export async function restoreFromBackup(
   let beforeRestoreBackupUri: string | undefined;
   let orphanImageSamples: string[] = [];
   let missingImageSamples: string[] = [];
+  let restoredVoiceNoteCount = 0;
+  let restoredVoiceFileCount = 0;
   let tempCopyStartedAt: number | null = null;
   let packageReadStartedAt: number | null = null;
   let validateStartedAt: number | null = null;
@@ -1742,6 +2197,13 @@ export async function restoreFromBackup(
     for (const warningText of extracted.manifestWarnings.slice(0, 20)) {
       appendWarning(warnings, {
         code: 'RESTORE_MANIFEST_WARNING',
+        stage: 'validate',
+        message: warningText,
+      });
+    }
+    for (const warningText of extracted.voiceParseWarnings.slice(0, 20)) {
+      appendWarning(warnings, {
+        code: 'RESTORE_VOICE_METADATA_INVALID',
         stage: 'validate',
         message: warningText,
       });
@@ -1839,10 +2301,32 @@ export async function restoreFromBackup(
       durationMs: durations.imageRestoreDurationMs,
     });
 
+    logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_voice_files_started', {
+      restoreSessionId,
+      voiceNoteCountInPackage: extracted.voiceNotes.length,
+    });
+    const voiceResult = await materializeRestoredVoiceNotes({
+      restoreSessionId,
+      voiceNotes: extracted.voiceNotes,
+      reviewRecords: extracted.data.reviewRecords,
+      archiveFileMap: extracted.archiveFileMap,
+      warnings,
+    });
+    restoredVoiceNoteCount = voiceResult.voiceNoteCount;
+    restoredVoiceFileCount = voiceResult.restoredVoiceFileCount;
+    const voiceWarningCountAfterVoiceRestore = countVoiceWarnings(warnings);
+    logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_voice_files_success', {
+      restoreSessionId,
+      restoredVoiceNoteCount: restoredVoiceNoteCount,
+      restoredVoiceFileCount: restoredVoiceFileCount,
+      voiceWarningCount: voiceWarningCountAfterVoiceRestore,
+    });
+
     const dbTransactionResult = await runRestoreDatabaseTransaction({
       restoreSessionId,
       data: extracted.data,
       restoredImages: imageResult.restoredImages,
+      resolvedVoiceNotesByReviewRecordId: voiceResult.resolvedVoiceNotesByReviewRecordId,
       errors,
     });
     const importedCounts = dbTransactionResult.counts;
@@ -1892,11 +2376,15 @@ export async function restoreFromBackup(
 
     durations.totalDurationMs = nowMs() - startedAt;
     failureContext.warningCount = warnings.length;
+    const voiceWarningCount = countVoiceWarnings(warnings);
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_success', {
       restoreSessionId,
       fileShortInfo,
       totalDurationMs: durations.totalDurationMs,
       finalCounts: importedCounts,
+      voiceNoteCount: restoredVoiceNoteCount,
+      voiceFileCount: restoredVoiceFileCount,
+      voiceWarningCount,
       warningCount: warnings.length,
       hasBeforeRestoreBackup: !!beforeRestoreBackupUri,
       durations,
@@ -1908,6 +2396,9 @@ export async function restoreFromBackup(
       restoredMistakes: importedCounts.mistakes,
       restoredImages: importedCounts.mistakeImages,
       restoredReviewRecords: importedCounts.reviewRecords,
+      voiceNoteCount: restoredVoiceNoteCount,
+      voiceFileCount: restoredVoiceFileCount,
+      voiceWarningCount,
       warningCount: warnings.length,
       errorCount: errors.length,
       hasBeforeRestoreBackup: !!beforeRestoreBackupUri,

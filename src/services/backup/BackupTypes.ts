@@ -44,6 +44,17 @@ export interface BackupMistakeImageRecord {
 
 export type BackupReviewRecord = ReviewRecord;
 
+export interface BackupVoiceNoteRecord {
+  id: string;
+  mistakeId: string;
+  reviewRecordId: string;
+  fileName: string;
+  durationMs: number;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface BackupDataPayload {
   mistakes: BackupMistakeRecord[];
   mistakeImages: BackupMistakeImageRecord[];
@@ -89,6 +100,9 @@ export interface RestoreFromBackupResult {
   restoredMistakes: number;
   restoredImages: number;
   restoredReviewRecords: number;
+  voiceNoteCount: number;
+  voiceFileCount: number;
+  voiceWarningCount: number;
   warningCount: number;
   errorCount: number;
   hasBeforeRestoreBackup: boolean;

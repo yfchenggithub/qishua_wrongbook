@@ -8,7 +8,9 @@ import {
 
 export const BACKUP_MANIFEST_FILE_NAME = 'manifest.json' as const;
 export const BACKUP_DATA_FILE_NAME = 'data.json' as const;
+export const BACKUP_VOICE_NOTES_FILE_NAME = 'voiceNotes.json' as const;
 export const BACKUP_IMAGES_DIR_NAME = 'images' as const;
+export const BACKUP_VOICE_FILES_DIR_NAME = 'voice-files' as const;
 
 export interface CreateManifestInput {
   appName: string;

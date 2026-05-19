@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS module_question_counters (
 `;
 
 export const CREATE_INDEXES_SQL = `
-CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
+  CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
 CREATE INDEX IF NOT EXISTS idx_mistakes_next_review_at ON mistakes(next_review_at);
 CREATE INDEX IF NOT EXISTS idx_mistakes_module ON mistakes(module);
 CREATE INDEX IF NOT EXISTS idx_mistakes_status_next_review_at ON mistakes(status, next_review_at);
