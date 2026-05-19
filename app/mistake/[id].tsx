@@ -37,6 +37,7 @@ import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
+import { formatNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const BRAND = {
   title: '七刷错题本',
@@ -1211,6 +1212,14 @@ export default function MistakeDetailScreen() {
 
             <CardContainer style={styles.reviewRecordsCard} padding={spacing.lg}>
               <SectionTitle title="复做记录" />
+              <Text style={styles.reviewRecordsNextReviewText}>
+                下次复做：
+                {formatNextReviewAtText({
+                  reviewCount: state.detail.reviewCount,
+                  maxReviewCount: state.detail.maxReviewCount,
+                  nextReviewAt: state.detail.nextReviewAt ?? null,
+                })}
+              </Text>
               {state.detail.reviewRecords.length <= 0 ? (
                 <Text style={styles.reviewRecordsEmptyText}>还没有复做记录</Text>
               ) : (
@@ -1481,6 +1490,11 @@ const styles = StyleSheet.create({
   reviewRecordsCard: {
     borderRadius: radius.xl,
     gap: spacing.md,
+  },
+  reviewRecordsNextReviewText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    fontWeight: '600',
   },
   reviewRecordsEmptyText: {
     ...typography.body,

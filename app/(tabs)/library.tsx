@@ -25,55 +25,10 @@ import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
-import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
+import { formatNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const SEARCH_DEBOUNCE_MS = 350;
 const PAGE_SCOPE = 'LibraryScreen';
-
-function formatClockText(date: Date): string {
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
-}
-
-function getDayDiff(baseDate: Date, targetDate: Date): number {
-  const baseDay = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate());
-  const targetDay = new Date(targetDate.getFullYear(), targetDate.getMonth(), targetDate.getDate());
-  return Math.floor((targetDay.getTime() - baseDay.getTime()) / (24 * 60 * 60 * 1000));
-}
-
-function formatNextReviewAtText(item: MistakeListItem): string {
-  if (item.reviewCount >= item.maxReviewCount) {
-    return '无需复做';
-  }
-
-  const parsed = parseLocalDateTime(item.nextReviewAt ?? null);
-  if (!parsed) {
-    return '待安排';
-  }
-
-  const now = new Date();
-  const dayDiff = getDayDiff(now, parsed);
-  // const clockText = formatClockText(parsed);
-
-  if (dayDiff === 0) {
-    return `今天`;
-  }
-  if (dayDiff === 1) {
-    return `明天`;
-  }
-  if (dayDiff === 2) {
-    return `后天`;
-  }
-
-  if (parsed.getFullYear() === now.getFullYear()) {
-    const month = String(parsed.getMonth() + 1).padStart(2, '0');
-    const day = String(parsed.getDate()).padStart(2, '0');
-    return `${month}-${day}`;
-  }
-
-  return `${toDateOnlyString(parsed)}`;
-}
 
 function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListFilter['segment'] {
   if (value === 'pending') {
@@ -159,7 +114,12 @@ function MistakeLibraryCard({
               />
             </View>
             <Text numberOfLines={1} maxFontSizeMultiplier={1.0} style={styles.nextReviewText}>
-              下次复做：{formatNextReviewAtText(item)}
+              下次复做：
+              {formatNextReviewAtText({
+                reviewCount: item.reviewCount,
+                maxReviewCount: item.maxReviewCount,
+                nextReviewAt: item.nextReviewAt ?? null,
+              })}
             </Text>
           </View>
         </View>
