@@ -28,6 +28,8 @@ import type { ReviewResult } from '@/src/models/Mistake';
 import { Logger } from '@/src/services/Logger';
 import type { ReviewSessionQueueItem } from '@/src/services/ReviewSessionService';
 import * as ReviewSessionService from '@/src/services/ReviewSessionService';
+import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
+import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'ReviewSessionPage';
@@ -37,6 +39,7 @@ const QUESTION_PREVIEW_MIN_HEIGHT = 112;
 const QUESTION_PREVIEW_MAX_HEIGHT = 228;
 const QUESTION_PREVIEW_EMPTY_HEIGHT = 148;
 const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
+const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 
 type ToastType = 'success' | 'info' | 'error';
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -125,6 +128,16 @@ function getReviewActionSymbol(tone: 'known' | 'fuzzy' | 'unknown'): string {
     return '?';
   }
   return '\u00D7';
+}
+
+function formatDurationMs(durationMs: number): string {
+  const safeDurationMs = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+  const totalSeconds = Math.floor(safeDurationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60)
+    .toString()
+    .padStart(2, '0');
+  const seconds = (totalSeconds % 60).toString().padStart(2, '0');
+  return `${minutes}:${seconds}`;
 }
 
 function pickSlotImageDimensions(slot?: DetailImageSlot): ImageDimensions | null {
@@ -329,17 +342,26 @@ export default function ReviewSessionPage() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
+  const [voiceNote, setVoiceNote] = useState<VoiceNoteEntity | null>(null);
+  const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const [isVoicePlaying, setIsVoicePlaying] = useState(false);
+  const [isVoiceBusy, setIsVoiceBusy] = useState(false);
 
   const queueRequestIdRef = useRef(0);
   const currentRequestIdRef = useRef(0);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceReplacePendingUriRef = useRef<string | null>(null);
 
   const totalCount = queue.length;
   const hasRemaining = sessionState === 'ready' && currentIndex < totalCount;
   const isCompleted = sessionState === 'ready' && totalCount > 0 && currentIndex >= totalCount;
   const currentQueueItem = hasRemaining ? queue[currentIndex] ?? null : null;
+  const currentQueueItemId = currentQueueItem?.id ?? null;
 
   const hideToast = useCallback(() => {
     Animated.parallel([
@@ -397,6 +419,197 @@ export default function ReviewSessionPage() {
     [hideToast, toastOpacity, toastTranslateY],
   );
 
+  const clearVoicePlaybackResetTimer = useCallback(() => {
+    if (voicePlaybackResetTimerRef.current) {
+      clearTimeout(voicePlaybackResetTimerRef.current);
+      voicePlaybackResetTimerRef.current = null;
+    }
+  }, []);
+
+  const stopVoicePlayback = useCallback(
+    async (showErrorToast = false) => {
+      clearVoicePlaybackResetTimer();
+      setIsVoicePlaying(false);
+
+      const stopResult = await VoiceNoteService.stopPlaying();
+      if (!stopResult.ok && showErrorToast) {
+        showToast(toShortErrorMessage(stopResult.errorMessage), 'error', TOAST_DURATION_LONG);
+      }
+    },
+    [clearVoicePlaybackResetTimer, showToast],
+  );
+
+  const startVoiceRecording = useCallback(
+    async (isRerecord: boolean) => {
+      if (isVoiceBusy || isVoiceRecording || isSubmitting || isLoadingCurrent || !!currentErrorMessage) {
+        return;
+      }
+
+      setIsVoiceBusy(true);
+
+      const permissionResult = await VoiceNoteService.requestPermission();
+      if (!permissionResult.granted) {
+        const friendlyMessage =
+          permissionResult.errorMessage ??
+          '\u672a\u83b7\u5f97\u9ea6\u514b\u98ce\u6743\u9650\uff0c\u65e0\u6cd5\u5f00\u59cb\u5f55\u97f3\u3002';
+        showToast(toShortErrorMessage(friendlyMessage), 'error', TOAST_DURATION_LONG);
+        setIsVoiceBusy(false);
+        return;
+      }
+
+      const existingUri = isRerecord ? voiceNote?.fileUri ?? null : null;
+      voiceReplacePendingUriRef.current = existingUri;
+
+      const startResult = await VoiceNoteService.startRecording();
+      if (!startResult.ok) {
+        voiceReplacePendingUriRef.current = null;
+        showToast(toShortErrorMessage(startResult.errorMessage), 'error', TOAST_DURATION_LONG);
+        setIsVoiceBusy(false);
+        return;
+      }
+
+      await stopVoicePlayback(false);
+      setIsVoiceRecording(true);
+      setRecordingElapsedMs(0);
+      voiceRecordingStartedAtRef.current = Date.now();
+      setIsVoiceBusy(false);
+    },
+    [
+      currentErrorMessage,
+      isLoadingCurrent,
+      isSubmitting,
+      isVoiceBusy,
+      isVoiceRecording,
+      stopVoicePlayback,
+      showToast,
+      voiceNote?.fileUri,
+    ],
+  );
+
+  const stopAndSaveVoiceRecording = useCallback(async () => {
+    if (!isVoiceRecording || isVoiceBusy) {
+      return;
+    }
+
+    setIsVoiceBusy(true);
+    const saveResult = await VoiceNoteService.stopAndSaveRecording();
+    const replaceUri = voiceReplacePendingUriRef.current;
+
+    voiceReplacePendingUriRef.current = null;
+    voiceRecordingStartedAtRef.current = null;
+    setIsVoiceRecording(false);
+    setRecordingElapsedMs(0);
+
+    if (!saveResult.ok) {
+      showToast(toShortErrorMessage(saveResult.errorMessage), 'error', TOAST_DURATION_LONG);
+      setIsVoiceBusy(false);
+      return;
+    }
+
+    const nextVoiceNote = saveResult.voiceNote;
+    setVoiceNote(nextVoiceNote);
+
+    if (replaceUri && replaceUri !== nextVoiceNote.fileUri) {
+      void VoiceNoteService.deleteVoiceNote(replaceUri);
+    }
+
+    showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u4fdd\u5b58', 'success');
+    setIsVoiceBusy(false);
+  }, [isVoiceBusy, isVoiceRecording, showToast]);
+
+  const playVoiceNote = useCallback(async () => {
+    if (!voiceNote || isVoiceBusy || isVoiceRecording) {
+      return;
+    }
+
+    if (isVoicePlaying) {
+      await stopVoicePlayback(true);
+      return;
+    }
+
+    setIsVoiceBusy(true);
+    const playResult = await VoiceNoteService.playVoiceNote(voiceNote.fileUri);
+    if (!playResult.ok) {
+      showToast(toShortErrorMessage(playResult.errorMessage), 'error', TOAST_DURATION_LONG);
+      setIsVoiceBusy(false);
+      return;
+    }
+
+    clearVoicePlaybackResetTimer();
+    setIsVoicePlaying(true);
+    voicePlaybackResetTimerRef.current = setTimeout(() => {
+      setIsVoicePlaying(false);
+      voicePlaybackResetTimerRef.current = null;
+    }, Math.max(voiceNote.durationMs + VOICE_PLAYBACK_END_BUFFER_MS, 1000));
+    setIsVoiceBusy(false);
+  }, [
+    clearVoicePlaybackResetTimer,
+    isVoiceBusy,
+    isVoicePlaying,
+    isVoiceRecording,
+    showToast,
+    stopVoicePlayback,
+    voiceNote,
+  ]);
+
+  const confirmRerecordVoiceNote = useCallback(() => {
+    if (!voiceNote || isVoiceBusy || isVoiceRecording) {
+      return;
+    }
+
+    Alert.alert(
+      '\u786e\u8ba4\u91cd\u5f55',
+      '\u91cd\u5f55\u5c06\u66ff\u6362\u5f53\u524d\u8bb2\u89e3\uff0c\u786e\u5b9a\u7ee7\u7eed\u5417\uff1f',
+      [
+        { text: '\u53d6\u6d88', style: 'cancel' },
+        {
+          text: '\u786e\u8ba4\u91cd\u5f55',
+          style: 'destructive',
+          onPress: () => {
+            void startVoiceRecording(true);
+          },
+        },
+      ],
+    );
+  }, [isVoiceBusy, isVoiceRecording, startVoiceRecording, voiceNote]);
+
+  const deleteCurrentVoiceNote = useCallback(async () => {
+    if (!voiceNote || isVoiceBusy || isVoiceRecording) {
+      return;
+    }
+
+    setIsVoiceBusy(true);
+    await stopVoicePlayback(false);
+    const deleteResult = await VoiceNoteService.deleteVoiceNote(voiceNote.fileUri);
+    if (!deleteResult.ok) {
+      showToast(toShortErrorMessage(deleteResult.errorMessage), 'info');
+      setIsVoiceBusy(false);
+      return;
+    }
+
+    setVoiceNote(null);
+    setIsVoicePlaying(false);
+    showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u5220\u9664', 'info');
+    setIsVoiceBusy(false);
+  }, [isVoiceBusy, isVoiceRecording, showToast, stopVoicePlayback, voiceNote]);
+
+  const confirmDeleteVoiceNote = useCallback(() => {
+    if (!voiceNote || isVoiceBusy || isVoiceRecording) {
+      return;
+    }
+
+    Alert.alert('\u786e\u8ba4\u5220\u9664', '\u5220\u9664\u540e\u5c06\u65e0\u6cd5\u6062\u590d\uff0c\u786e\u5b9a\u5220\u9664\u5417\uff1f', [
+      { text: '\u53d6\u6d88', style: 'cancel' },
+      {
+        text: '\u5220\u9664',
+        style: 'destructive',
+        onPress: () => {
+          void deleteCurrentVoiceNote();
+        },
+      },
+    ]);
+  }, [deleteCurrentVoiceNote, isVoiceBusy, isVoiceRecording, voiceNote]);
+
   const navigateHome = useCallback(() => {
     router.replace('/(tabs)' as never);
   }, [router]);
@@ -448,6 +661,15 @@ export default function ReviewSessionPage() {
     }, [handleRequestExit]),
   );
 
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        void stopVoicePlayback(false);
+      },
+      [stopVoicePlayback],
+    ),
+  );
+
   const loadQueue = useCallback(async () => {
     const requestId = queueRequestIdRef.current + 1;
     queueRequestIdRef.current = requestId;
@@ -459,6 +681,13 @@ export default function ReviewSessionPage() {
     setQueue([]);
     setCurrentIndex(0);
     setResultStats(EMPTY_RESULT_STATS);
+    setVoiceNote(null);
+    setIsVoiceRecording(false);
+    setRecordingElapsedMs(0);
+    setIsVoicePlaying(false);
+    voiceRecordingStartedAtRef.current = null;
+    voiceReplacePendingUriRef.current = null;
+    clearVoicePlaybackResetTimer();
 
     try {
       const todayQueue = await ReviewSessionService.getTodayReviewSessionQueue();
@@ -482,7 +711,7 @@ export default function ReviewSessionPage() {
       setSessionErrorMessage('读取今日复做队列失败，请稍后重试。');
       setSessionState('error');
     }
-  }, []);
+  }, [clearVoicePlaybackResetTimer]);
 
   useEffect(() => {
     void loadQueue();
@@ -494,9 +723,54 @@ export default function ReviewSessionPage() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      clearVoicePlaybackResetTimer();
+      void VoiceNoteService.stopPlaying();
     },
-    [],
+    [clearVoicePlaybackResetTimer],
   );
+
+  useEffect(() => {
+    if (!isVoiceRecording) {
+      return;
+    }
+
+    const updateTimer = () => {
+      const startedAt = voiceRecordingStartedAtRef.current;
+      if (!startedAt) {
+        return;
+      }
+      setRecordingElapsedMs(Math.max(0, Date.now() - startedAt));
+    };
+
+    updateTimer();
+    const intervalId = setInterval(updateTimer, 1000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [isVoiceRecording]);
+
+  useEffect(() => {
+    if (!currentQueueItemId) {
+      setVoiceNote(null);
+      setIsVoiceRecording(false);
+      setRecordingElapsedMs(0);
+      setIsVoicePlaying(false);
+      voiceRecordingStartedAtRef.current = null;
+      voiceReplacePendingUriRef.current = null;
+      clearVoicePlaybackResetTimer();
+      return;
+    }
+
+    setVoiceNote(null);
+    setIsVoiceRecording(false);
+    setRecordingElapsedMs(0);
+    setIsVoicePlaying(false);
+    voiceRecordingStartedAtRef.current = null;
+    voiceReplacePendingUriRef.current = null;
+    clearVoicePlaybackResetTimer();
+    void stopVoicePlayback(false);
+  }, [clearVoicePlaybackResetTimer, currentQueueItemId, stopVoicePlayback]);
 
   useEffect(() => {
     if (!currentQueueItem || sessionState !== 'ready' || isCompleted) {
@@ -557,8 +831,17 @@ export default function ReviewSessionPage() {
 
   const handleSelectResult = useCallback(
     async (result: ReviewResult, statsKey: SessionResultKey) => {
-      if (!currentQueueItem || !currentMeta || isLoadingCurrent || isSubmitting || isCompleted) {
+      if (!currentQueueItem || !currentMeta || isLoadingCurrent || isSubmitting || isCompleted || isVoiceBusy) {
         return;
+      }
+
+      if (isVoiceRecording) {
+        showToast('\u8bf7\u5148\u505c\u6b62\u5e76\u4fdd\u5b58\u8bed\u97f3\u8bb2\u89e3\uff0c\u518d\u63d0\u4ea4\u672c\u9898\u7ed3\u679c\u3002', 'info');
+        return;
+      }
+
+      if (isVoicePlaying) {
+        await stopVoicePlayback(false);
       }
 
       setIsSubmitting(true);
@@ -589,7 +872,21 @@ export default function ReviewSessionPage() {
         setIsSubmitting(false);
       }
     },
-    [currentIndex, currentMeta, currentQueueItem, incrementStats, isCompleted, isLoadingCurrent, isSubmitting, showToast, totalCount],
+    [
+      currentIndex,
+      currentMeta,
+      currentQueueItem,
+      incrementStats,
+      isCompleted,
+      isLoadingCurrent,
+      isSubmitting,
+      isVoicePlaying,
+      isVoiceBusy,
+      isVoiceRecording,
+      showToast,
+      stopVoicePlayback,
+      totalCount,
+    ],
   );
 
   const progressCurrent = totalCount <= 0 ? 0 : Math.min(currentIndex + 1, totalCount);
@@ -725,6 +1022,108 @@ export default function ReviewSessionPage() {
 
             {!isLoadingCurrent && !currentErrorMessage ? (
               <QuestionImageCard slot={currentQuestionSlot} onPreview={handleOpenQuestionPreview} />
+            ) : null}
+
+            {!isLoadingCurrent && !currentErrorMessage ? (
+              <CardContainer style={styles.voiceCard} padding={spacing.lg}>
+                <View style={styles.voiceHeaderRow}>
+                  <View style={styles.voiceIconWrap}>
+                    <MaterialIcons name={isVoiceRecording ? 'mic' : 'record-voice-over'} size={19} color="#0F766E" />
+                  </View>
+                  <View style={styles.voiceHeaderTextWrap}>
+                    <Text style={styles.voiceTitle}>
+                      {isVoiceRecording ? '\u6b63\u5728\u5f55\u97f3' : '\u8bed\u97f3\u8bb2\u89e3'}
+                    </Text>
+                    {!isVoiceRecording && !voiceNote ? (
+                      <Text style={styles.voiceDescription}>
+                        {'\u8bb2\u4e00\u904d\u4f60\u7684\u601d\u8def\uff0c\u4e0b\u6b21\u66f4\u5bb9\u6613\u60f3\u8d77\u6765'}
+                      </Text>
+                    ) : null}
+                  </View>
+                </View>
+
+                {isVoiceRecording ? (
+                  <>
+                    <Text style={styles.voiceTimerText}>{formatDurationMs(recordingElapsedMs)}</Text>
+                    <Text style={styles.voiceHintText}>
+                      {'\u8bf4\u51fa\u5173\u952e\u6761\u4ef6\u3001\u89e3\u9898\u601d\u8def\u548c\u5bb9\u6613\u9519\u7684\u5730\u65b9'}
+                    </Text>
+                    <Pressable
+                      disabled={isVoiceBusy}
+                      onPress={() => {
+                        void stopAndSaveVoiceRecording();
+                      }}
+                      style={({ pressed }) => [
+                        styles.voiceMainButton,
+                        styles.voiceMainButtonDanger,
+                        (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                      ]}>
+                      <Text style={styles.voiceMainButtonText}>
+                        {isVoiceBusy ? '\u4fdd\u5b58\u4e2d...' : '\u505c\u6b62\u5e76\u4fdd\u5b58'}
+                      </Text>
+                    </Pressable>
+                  </>
+                ) : null}
+
+                {!isVoiceRecording && !voiceNote ? (
+                  <Pressable
+                    disabled={isVoiceBusy}
+                    onPress={() => {
+                      void startVoiceRecording(false);
+                    }}
+                    style={({ pressed }) => [
+                      styles.voiceMainButton,
+                      (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                    ]}>
+                    <Text style={styles.voiceMainButtonText}>
+                      {isVoiceBusy ? '\u51c6\u5907\u4e2d...' : '\u5f55\u5236\u8bb2\u89e3'}
+                    </Text>
+                  </Pressable>
+                ) : null}
+
+                {!isVoiceRecording && voiceNote ? (
+                  <>
+                    <Text style={styles.voiceDurationText}>
+                      {`\u65f6\u957f ${formatDurationMs(voiceNote.durationMs)}`}
+                    </Text>
+                    <View style={styles.voiceActionRow}>
+                      <Pressable
+                        disabled={isVoiceBusy}
+                        onPress={() => {
+                          void playVoiceNote();
+                        }}
+                        style={({ pressed }) => [
+                          styles.voiceActionButton,
+                          styles.voiceActionButtonPlay,
+                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                        ]}>
+                        <Text style={styles.voiceActionButtonText}>
+                          {isVoicePlaying ? '\u505c\u6b62\u64ad\u653e' : '\u64ad\u653e'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={isVoiceBusy}
+                        onPress={confirmRerecordVoiceNote}
+                        style={({ pressed }) => [
+                          styles.voiceActionButton,
+                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                        ]}>
+                        <Text style={styles.voiceActionButtonText}>{'\u91cd\u5f55'}</Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={isVoiceBusy}
+                        onPress={confirmDeleteVoiceNote}
+                        style={({ pressed }) => [
+                          styles.voiceActionButton,
+                          styles.voiceActionButtonDanger,
+                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                        ]}>
+                        <Text style={styles.voiceActionButtonDangerText}>{'\u5220\u9664'}</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : null}
+              </CardContainer>
             ) : null}
 
             {!isLoadingCurrent && !currentErrorMessage ? (
@@ -1015,6 +1414,119 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     textAlign: 'center',
     fontWeight: '600',
+  },
+  voiceCard: {
+    borderRadius: radius.xl,
+    gap: spacing.sm,
+  },
+  voiceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  voiceIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#CCFBF1',
+  },
+  voiceHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  voiceTitle: {
+    ...typography.sectionTitle,
+    fontSize: 20,
+    lineHeight: 27,
+    color: '#0F172A',
+    fontWeight: '700',
+  },
+  voiceDescription: {
+    ...typography.bodySmall,
+    fontSize: 14,
+    lineHeight: 19,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  voiceTimerText: {
+    ...typography.titleMedium,
+    fontSize: 28,
+    lineHeight: 34,
+    color: '#0F172A',
+    fontWeight: '800',
+  },
+  voiceHintText: {
+    ...typography.bodySmall,
+    color: '#64748B',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+  },
+  voiceMainButton: {
+    minHeight: 44,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  voiceMainButtonDanger: {
+    borderColor: '#FCA5A5',
+    backgroundColor: '#FEF2F2',
+  },
+  voiceMainButtonText: {
+    ...typography.bodySmall,
+    color: '#1F2937',
+    fontWeight: '700',
+  },
+  voiceDurationText: {
+    ...typography.bodySmall,
+    color: '#334155',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  voiceActionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  voiceActionButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  voiceActionButtonPlay: {
+    borderColor: '#99F6E4',
+    backgroundColor: '#F0FDFA',
+  },
+  voiceActionButtonDanger: {
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+  },
+  voiceActionButtonText: {
+    ...typography.bodySmall,
+    color: '#334155',
+    fontWeight: '700',
+  },
+  voiceActionButtonDangerText: {
+    ...typography.bodySmall,
+    color: '#B91C1C',
+    fontWeight: '700',
+  },
+  voiceButtonPressed: {
+    opacity: 0.78,
   },
   actionSection: {
     gap: spacing.sm,
