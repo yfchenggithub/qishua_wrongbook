@@ -81,6 +81,35 @@ function truncateText(value: string, maxLength: number): string {
   return `${value.slice(0, maxLength)}...[truncated ${value.length - maxLength} chars]`;
 }
 
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function formatRuntimeTimestamp(timestamp: string): string {
+  if (typeof timestamp !== 'string') {
+    return '';
+  }
+
+  const normalized = timestamp.trim();
+  if (!normalized) {
+    return '';
+  }
+
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) {
+    return normalized;
+  }
+
+  const year = parsed.getFullYear();
+  const month = pad2(parsed.getMonth() + 1);
+  const day = pad2(parsed.getDate());
+  const hours = pad2(parsed.getHours());
+  const minutes = pad2(parsed.getMinutes());
+  const seconds = pad2(parsed.getSeconds());
+  const milliseconds = String(parsed.getMilliseconds()).padStart(3, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${milliseconds}`;
+}
+
 function stringifyMetadata(metadata: unknown, maxLength: number): string {
   if (metadata === undefined || metadata === null) {
     return '';
@@ -130,7 +159,8 @@ function formatCopyLine(log: RuntimeLogItem): string {
   const scopePart = log.scope ? ` ${log.scope}` : '';
   const metadataText = stringifyMetadata(log.metadata, METADATA_COPY_LIMIT);
   const metadataPart = metadataText ? ` ${metadataText}` : '';
-  return `[${log.timestamp}] ${level}${scopePart} ${log.message}${metadataPart}`;
+  const displayTimestamp = formatRuntimeTimestamp(log.timestamp) || log.timestamp;
+  return `[${displayTimestamp}] ${level}${scopePart} ${log.message}${metadataPart}`;
 }
 
 function stringifyCopyField(value: unknown): string {
@@ -218,10 +248,12 @@ function getCopyTextField(value: unknown, fallback: string): string {
 function formatSingleLogForCopy(log: RuntimeLogItem): string {
   const extendedLog = log as RuntimeLogItem & Record<string, unknown>;
   const level = getCopyTextField(extendedLog.level, 'info').toUpperCase();
-  const timestamp =
+  const rawTimestamp =
     getCopyTextField(extendedLog.timestamp, '') ||
     getCopyTextField(extendedLog.createdAt, '') ||
     getCopyTextField(extendedLog.time, 'unknown-time');
+  const timestamp =
+    rawTimestamp === 'unknown-time' ? rawTimestamp : formatRuntimeTimestamp(rawTimestamp) || rawTimestamp;
   const scope = getCopyTextField(extendedLog.scope, 'unknown');
   const message = getCopyTextField(extendedLog.message, '');
   const metadataCopyValue = extendedLog.metadata ?? {};
@@ -300,12 +332,14 @@ export default function RuntimeLogsPage() {
     return orderedLogs
       .map((item) => {
         const metadataText = stringifyMetadata(item.metadata, METADATA_PREVIEW_LIMIT);
+        const formattedTimestamp = formatRuntimeTimestamp(item.timestamp) || item.timestamp;
         return {
           item,
           metadataText,
+          formattedTimestamp,
         };
       })
-      .filter(({ item, metadataText }) => {
+      .filter(({ item, metadataText, formattedTimestamp }) => {
         if (levelFilter !== 'all' && item.level !== levelFilter) {
           return false;
         }
@@ -314,8 +348,8 @@ export default function RuntimeLogsPage() {
           return true;
         }
 
-        const haystack = `${item.timestamp} ${item.level} ${item.scope ?? ''} ${item.message} ${metadataText}`
-          .toLowerCase();
+        const haystack =
+          `${item.timestamp} ${formattedTimestamp} ${item.level} ${item.scope ?? ''} ${item.message} ${metadataText}`.toLowerCase();
         return haystack.includes(normalizedKeyword);
       });
   }, [countScope, levelFilter, logs, normalizedKeyword, timeOrder]);
@@ -526,7 +560,7 @@ export default function RuntimeLogsPage() {
           <TextInput
             value={keyword}
             onChangeText={setKeyword}
-            placeholder="搜索 message / scope / metadata"
+            placeholder="搜索 时间 / message / scope / metadata"
             placeholderTextColor={colors.textMuted}
             autoCapitalize="none"
             autoCorrect={false}
@@ -555,7 +589,7 @@ export default function RuntimeLogsPage() {
           {logsForRender.length === 0 ? (
             <Text style={styles.emptyText}>暂无运行日志</Text>
           ) : (
-            logsForRender.map(({ item, metadataText }) => {
+            logsForRender.map(({ item, metadataText, formattedTimestamp }) => {
               const levelStyle = getLevelBadgeStyle(item.level);
               return (
                 <Pressable
@@ -566,7 +600,7 @@ export default function RuntimeLogsPage() {
                   }}
                   style={({ pressed }) => [styles.logCard, pressed ? styles.logCardPressed : null]}>
                   <View style={styles.logHeadRow}>
-                    <Text style={styles.logTimestamp}>{item.timestamp}</Text>
+                    <Text style={styles.logTimestamp}>{formattedTimestamp}</Text>
                     <View
                       style={[
                         styles.levelBadge,
