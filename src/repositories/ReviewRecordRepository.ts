@@ -1,7 +1,11 @@
 import { getDatabase, initDatabase } from '@/src/db';
 import { MAX_REVIEW_COUNT } from '@/src/constants/review';
 import type { ReviewResult } from '@/src/models/Mistake';
-import type { CreateReviewRecordInput, ReviewRecord } from '@/src/models/ReviewRecord';
+import type {
+  CreateReviewRecordInput,
+  ReviewRecord,
+  ReviewRecordVoiceNote,
+} from '@/src/models/ReviewRecord';
 import { Logger } from '@/src/services/Logger';
 import type * as SQLite from 'expo-sqlite';
 
@@ -14,8 +18,9 @@ INSERT INTO review_records (
   review_index,
   result,
   note,
+  voice_note,
   created_at
-) VALUES (?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 `;
 
 const SELECT_REVIEW_RECORD_FIELDS_SQL = `
@@ -25,6 +30,7 @@ SELECT
   review_index,
   result,
   note,
+  voice_note,
   created_at
 FROM review_records
 `;
@@ -40,6 +46,16 @@ export interface ListAllReviewRecordsOptions {
   limit?: number;
   offset?: number;
 }
+
+type ReviewRecordRow = {
+  id: string;
+  mistake_id: string;
+  review_index: number;
+  result: string | null;
+  note?: string | null;
+  voice_note?: string | null;
+  created_at: string;
+};
 
 let databaseReady = false;
 let databaseInitPromise: Promise<void> | null = null;
@@ -97,11 +113,117 @@ function normalizeStoredReviewResult(value: string | null | undefined): string |
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function mapReviewRecordRow(row: ReviewRecord): ReviewRecord {
+function normalizeRequiredText(value: string | null | undefined, fieldName: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${fieldName} must be a non-empty string.`);
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${fieldName} must be a non-empty string.`);
+  }
+
+  return trimmed;
+}
+
+function normalizeReviewRecordVoiceNote(
+  value: unknown,
+  source: 'input' | 'stored',
+): ReviewRecordVoiceNote | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Partial<ReviewRecordVoiceNote>;
+  const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+  const fileUri = typeof candidate.fileUri === 'string' ? candidate.fileUri.trim() : '';
+  const fileName = typeof candidate.fileName === 'string' ? candidate.fileName.trim() : '';
+  const createdAt = typeof candidate.createdAt === 'string' ? candidate.createdAt.trim() : '';
+
+  const durationMsRaw = candidate.durationMs;
+  const sizeBytesRaw = candidate.sizeBytes;
+  const durationMs =
+    typeof durationMsRaw === 'number' && Number.isFinite(durationMsRaw)
+      ? Math.max(0, Math.floor(durationMsRaw))
+      : NaN;
+  const sizeBytes =
+    typeof sizeBytesRaw === 'number' && Number.isFinite(sizeBytesRaw)
+      ? Math.max(0, Math.floor(sizeBytesRaw))
+      : NaN;
+
+  const hasRequiredText = id.length > 0 && fileUri.length > 0 && fileName.length > 0 && createdAt.length > 0;
+  const hasRequiredNumbers = Number.isFinite(durationMs) && Number.isFinite(sizeBytes);
+
+  if (!hasRequiredText || !hasRequiredNumbers) {
+    if (source === 'input') {
+      throw new Error('voice_note has invalid fields.');
+    }
+    return null;
+  }
+
+  if (Number.isNaN(new Date(createdAt).getTime())) {
+    if (source === 'input') {
+      throw new Error('voice_note.createdAt must be a valid ISO datetime string.');
+    }
+    return null;
+  }
+
+  return {
+    id,
+    fileUri,
+    fileName,
+    durationMs,
+    sizeBytes,
+    createdAt,
+  };
+}
+
+function parseStoredReviewRecordVoiceNote(
+  value: string | null | undefined,
+  reviewRecordId: string,
+): ReviewRecordVoiceNote | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    const normalized = normalizeReviewRecordVoiceNote(parsed, 'stored');
+    if (!normalized) {
+      Logger.warn(REPO_SCOPE, 'Stored review_record.voice_note is invalid. Fallback to null.', {
+        reviewRecordId,
+      });
+      return null;
+    }
+    return normalized;
+  } catch (error) {
+    Logger.warn(REPO_SCOPE, 'Failed to parse review_record.voice_note JSON. Fallback to null.', {
+      reviewRecordId,
+      error,
+    });
+    return null;
+  }
+}
+
+function serializeReviewRecordVoiceNote(value: ReviewRecordVoiceNote | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  const normalized = normalizeReviewRecordVoiceNote(value, 'input');
+  return normalized ? JSON.stringify(normalized) : null;
+}
+
+function mapReviewRecordRow(row: ReviewRecordRow): ReviewRecord {
   return {
     ...row,
     review_index: Number(row.review_index),
     result: normalizeStoredReviewResult(row.result),
+    voice_note: parseStoredReviewRecordVoiceNote(row.voice_note, row.id),
   };
 }
 
@@ -160,19 +282,21 @@ function buildReviewRecord(
   input: CreateReviewRecordInput & { id?: string; createdAt?: string },
 ): ReviewRecord {
   const note = typeof input.note === 'string' ? input.note.trim() : '';
+  const normalizedVoiceNote = normalizeReviewRecordVoiceNote(input.voice_note ?? null, 'input');
   return {
     id: input.id?.trim() || buildReviewRecordId(),
     mistake_id: input.mistake_id,
     review_index: normalizeReviewIndex(input.review_index),
     result: input.result,
     note: note.length > 0 ? note : null,
+    voice_note: normalizedVoiceNote,
     created_at: input.createdAt ?? nowIso(),
   };
 }
 
 async function getReviewRecordByIdInternal(id: string): Promise<ReviewRecord | null> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<ReviewRecord>(
+  const row = await db.getFirstAsync<ReviewRecordRow>(
     `${SELECT_REVIEW_RECORD_FIELDS_SQL}
 WHERE id = ?
 LIMIT 1;`,
@@ -209,7 +333,7 @@ export const ReviewRecordRepository = {
     try {
       await ensureDatabaseReady();
       const db = await getDatabase();
-      const rows = await db.getAllAsync<ReviewRecord>(
+      const rows = await db.getAllAsync<ReviewRecordRow>(
         `${SELECT_REVIEW_RECORD_FIELDS_SQL}
 WHERE mistake_id = ?
 ORDER BY review_index ASC, created_at ASC;`,
@@ -243,7 +367,7 @@ ORDER BY review_index ASC, created_at ASC;`,
     try {
       await ensureDatabaseReady();
       const db = await getDatabase();
-      const row = await db.getFirstAsync<ReviewRecord>(
+      const row = await db.getFirstAsync<ReviewRecordRow>(
         `${SELECT_REVIEW_RECORD_FIELDS_SQL}
 WHERE mistake_id = ?
 ORDER BY review_index DESC, created_at DESC
@@ -283,7 +407,7 @@ LIMIT 1;`,
         paginationParams.push(offset);
       }
 
-      const rows = await db.getAllAsync<ReviewRecord>(
+      const rows = await db.getAllAsync<ReviewRecordRow>(
         `${SELECT_REVIEW_RECORD_FIELDS_SQL}
 ORDER BY created_at ASC, id ASC${paginationSql};`,
         ...paginationParams,
@@ -305,7 +429,7 @@ ORDER BY created_at ASC, id ASC${paginationSql};`,
       const db = await getDatabase();
       const normalizedStart = normalizeRangeIso(startInclusiveIso, 'startInclusiveIso');
       const normalizedEnd = normalizeRangeIso(endInclusiveIso, 'endInclusiveIso');
-      const rows = await db.getAllAsync<ReviewRecord>(
+      const rows = await db.getAllAsync<ReviewRecordRow>(
         `${SELECT_REVIEW_RECORD_FIELDS_SQL}
 WHERE created_at >= ?
   AND created_at <= ?
@@ -411,6 +535,7 @@ FROM review_records;`,
   ): Promise<ReviewRecord> {
     try {
       const record = buildReviewRecord(input);
+      const voiceNoteJson = serializeReviewRecordVoiceNote(record.voice_note ?? null);
       await db.runAsync(
         INSERT_REVIEW_RECORD_SQL,
         record.id,
@@ -418,12 +543,51 @@ FROM review_records;`,
         record.review_index,
         record.result,
         record.note ?? null,
+        voiceNoteJson,
         record.created_at,
       );
 
-      return mapReviewRecordRow(record);
+      return {
+        ...record,
+        result: normalizeStoredReviewResult(record.result),
+      };
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createReviewRecordInTransaction failed.', { input, error });
+      throw error;
+    }
+  },
+
+  async updateReviewRecordVoiceNoteInTransaction(
+    db: SQLite.SQLiteDatabase,
+    reviewRecordId: string,
+    voiceNote: ReviewRecordVoiceNote | null,
+  ): Promise<boolean> {
+    try {
+      const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
+      const voiceNoteJson = serializeReviewRecordVoiceNote(voiceNote);
+
+      const result = await db.runAsync(
+        `UPDATE review_records
+SET voice_note = ?
+WHERE id = ?;`,
+        voiceNoteJson,
+        normalizedReviewRecordId,
+      );
+
+      if (result.changes <= 0) {
+        Logger.warn(REPO_SCOPE, 'updateReviewRecordVoiceNoteInTransaction skipped because review_record was not found.', {
+          reviewRecordId: normalizedReviewRecordId,
+        });
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateReviewRecordVoiceNoteInTransaction failed.', {
+        reviewRecordId,
+        hasVoiceNote: voiceNote !== null,
+        error,
+      });
       throw error;
     }
   },

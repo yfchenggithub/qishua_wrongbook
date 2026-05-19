@@ -2,6 +2,7 @@ import { withDatabaseTransaction } from '@/src/db';
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type { CompleteReviewInput, CompleteReviewResult } from '@/src/models/ReviewFlow';
 import type { ReviewResult } from '@/src/models/Mistake';
+import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
@@ -17,11 +18,14 @@ const SERVICE_SCOPE = 'CompleteReviewService';
 const REVIEW_STATE_CHANGED_MESSAGE = '复做状态已变化，请返回详情页刷新';
 const UNKNOWN_ERROR_MESSAGE = '提交复做失败，请稍后重试。';
 const REVIEW_RESULT_VALUES: ReviewResult[] = ['mastered', 'unsure', 'wrong'];
+const VOICE_NOTE_BINDING_FAILED_MESSAGE = '复做已保存，但语音讲解未能绑定到本次记录。';
 
 interface NormalizedCompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
   solutionImageUri: string | null;
+  voiceNote: ReviewRecordVoiceNote | null;
+  voiceNoteDropped: boolean;
   result: ReviewResult;
   cleanupImageOnFailure: boolean;
 }
@@ -55,6 +59,46 @@ function normalizeReviewResult(result: ReviewResult): ReviewResult | null {
   return null;
 }
 
+function normalizeReviewRecordVoiceNote(
+  value: ReviewRecordVoiceNote | null | undefined,
+): ReviewRecordVoiceNote | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const id = typeof value.id === 'string' ? value.id.trim() : '';
+  const fileUri = typeof value.fileUri === 'string' ? value.fileUri.trim() : '';
+  const fileName = typeof value.fileName === 'string' ? value.fileName.trim() : '';
+  const createdAt = typeof value.createdAt === 'string' ? value.createdAt.trim() : '';
+  const durationMs =
+    typeof value.durationMs === 'number' && Number.isFinite(value.durationMs)
+      ? Math.max(0, Math.floor(value.durationMs))
+      : NaN;
+  const sizeBytes =
+    typeof value.sizeBytes === 'number' && Number.isFinite(value.sizeBytes)
+      ? Math.max(0, Math.floor(value.sizeBytes))
+      : NaN;
+
+  if (!id || !fileUri || !fileName || !createdAt) {
+    return null;
+  }
+  if (!Number.isFinite(durationMs) || !Number.isFinite(sizeBytes)) {
+    return null;
+  }
+  if (Number.isNaN(new Date(createdAt).getTime())) {
+    return null;
+  }
+
+  return {
+    id,
+    fileUri,
+    fileName,
+    durationMs,
+    sizeBytes,
+    createdAt,
+  };
+}
+
 function normalizeCompleteReviewInput(input: CompleteReviewInput): {
   ok: true;
   value: NormalizedCompleteReviewInput;
@@ -84,6 +128,9 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
   const solutionImageUriRaw =
     typeof input.solutionImageUri === 'string' ? input.solutionImageUri.trim() : '';
   const solutionImageUri = solutionImageUriRaw.length > 0 ? solutionImageUriRaw : null;
+  const voiceNoteFromInput = input.voiceNote ?? null;
+  const voiceNote = normalizeReviewRecordVoiceNote(voiceNoteFromInput);
+  const voiceNoteDropped = voiceNoteFromInput !== null && voiceNote === null;
 
   const result = normalizeReviewResult(input.result);
   if (!result) {
@@ -99,6 +146,8 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
       mistakeId,
       reviewIndex: input.reviewIndex,
       solutionImageUri,
+      voiceNote,
+      voiceNoteDropped,
       result,
       cleanupImageOnFailure: input.cleanupImageOnFailure !== false,
     },
@@ -121,6 +170,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     reviewIndex: input.reviewIndex,
     cleanupImageOnFailure: input.cleanupImageOnFailure !== false,
     solutionImageUriShort: toShortUri(input.solutionImageUri),
+    hasVoiceNote: !!input.voiceNote,
   });
 
   const normalizedInputResult = normalizeCompleteReviewInput(input);
@@ -137,6 +187,15 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
   }
 
   const normalizedInput = normalizedInputResult.value;
+  let warningMessage: string | undefined;
+
+  if (normalizedInput.voiceNoteDropped) {
+    warningMessage = VOICE_NOTE_BINDING_FAILED_MESSAGE;
+    Logger.warn(SERVICE_SCOPE, 'Voice note payload was dropped because it was invalid.', {
+      mistakeId: normalizedInput.mistakeId,
+      reviewIndex: normalizedInput.reviewIndex,
+    });
+  }
 
   try {
     const mistake = await MistakeRepository.getMistakeById(normalizedInput.mistakeId);
@@ -200,6 +259,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     const newStatus = getReviewStatusAfterComplete(newReviewCount);
     const nextReviewAt = calculateNextReviewAt(newReviewCount);
     const nowIso = new Date().toISOString();
+    let voiceNoteBindingFailed = normalizedInput.voiceNoteDropped;
     Logger.info(SERVICE_SCOPE, 'Calculated review progress update in completeReview.', {
       mistakeId: normalizedInput.mistakeId,
       reviewIndex: normalizedInput.reviewIndex,
@@ -207,6 +267,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
       newReviewCount,
       newStatus,
       nextReviewAt,
+      hasVoiceNote: normalizedInput.voiceNote !== null,
     });
 
     try {
@@ -260,6 +321,47 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           );
         }
 
+        if (normalizedInput.voiceNote) {
+          try {
+            const bound = await ReviewRecordRepository.updateReviewRecordVoiceNoteInTransaction(
+              db,
+              createdReviewRecord.id,
+              normalizedInput.voiceNote,
+            );
+
+            if (!bound) {
+              voiceNoteBindingFailed = true;
+              Logger.warn(SERVICE_SCOPE, 'review_record voice note binding skipped because target record was not found.', {
+                mistakeId: normalizedInput.mistakeId,
+                reviewRecordId: createdReviewRecord.id,
+                reviewIndex: normalizedInput.reviewIndex,
+              });
+            } else {
+              Logger.info(SERVICE_SCOPE, 'Bound voice note to review_record successfully.', {
+                mistakeId: normalizedInput.mistakeId,
+                reviewRecordId: createdReviewRecord.id,
+                reviewIndex: normalizedInput.reviewIndex,
+                voiceNoteId: normalizedInput.voiceNote.id,
+              });
+            }
+          } catch (voiceNoteError) {
+            voiceNoteBindingFailed = true;
+            Logger.error(SERVICE_SCOPE, 'Failed to bind voice note to review_record. Keep main review flow unchanged.', {
+              mistakeId: normalizedInput.mistakeId,
+              reviewRecordId: createdReviewRecord.id,
+              reviewIndex: normalizedInput.reviewIndex,
+              voiceNoteId: normalizedInput.voiceNote.id,
+              voiceNoteError,
+            });
+          }
+        } else {
+          Logger.info(SERVICE_SCOPE, 'Skipped review_record voice note binding because no voice note was provided.', {
+            mistakeId: normalizedInput.mistakeId,
+            reviewRecordId: createdReviewRecord.id,
+            reviewIndex: normalizedInput.reviewIndex,
+          });
+        }
+
         const affectedRows = await MistakeRepository.updateReviewProgressInTransaction(db, {
           mistakeId: normalizedInput.mistakeId,
           oldReviewCount: mistake.review_count,
@@ -291,7 +393,12 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
         newReviewCount,
         newStatus,
         nextReviewAt,
+        voiceNoteBindingSuccess: !voiceNoteBindingFailed,
       });
+
+      if (voiceNoteBindingFailed) {
+        warningMessage = VOICE_NOTE_BINDING_FAILED_MESSAGE;
+      }
     } catch (error) {
       if (normalizedInput.cleanupImageOnFailure && normalizedInput.solutionImageUri) {
         Logger.warn(SERVICE_SCOPE, 'Attempting to cleanup orphan review image after transaction failure.', {
@@ -346,6 +453,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
       newReviewCount,
       newStatus,
       nextReviewAt: newStatus === REVIEW_STATUS.MASTERED ? null : nextReviewAt,
+      hasWarningMessage: !!warningMessage,
     });
     void ReviewReminderService.refreshReminderSchedule({ reason: 'complete_review' }).catch((error) => {
       Logger.warn(SERVICE_SCOPE, 'Reminder schedule refresh failed after completing review.', {
@@ -361,6 +469,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
       newReviewCount,
       newStatus,
       nextReviewAt: newStatus === REVIEW_STATUS.MASTERED ? null : nextReviewAt,
+      warningMessage,
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'completeReview failed unexpectedly.', {

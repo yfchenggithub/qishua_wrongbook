@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS review_records (
   review_index INTEGER NOT NULL CHECK (review_index BETWEEN 1 AND ${MAX_REVIEW_COUNT}),
   result TEXT NOT NULL CHECK (result IN ('mastered', 'unsure', 'wrong')),
   note TEXT,
+  voice_note TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
 );

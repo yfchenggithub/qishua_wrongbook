@@ -15,6 +15,10 @@ type TableRow = {
   name: string;
 };
 
+type TableColumnRow = {
+  name: string;
+};
+
 export interface DatabaseHealthReport {
   ok: boolean;
   version: number;
@@ -42,6 +46,18 @@ async function setUserVersion(db: SQLite.SQLiteDatabase, version: number): Promi
 
 async function applyBaseSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(CREATE_SCHEMA_SQL);
+}
+
+async function ensureReviewRecordsVoiceNoteColumn(db: SQLite.SQLiteDatabase): Promise<void> {
+  const columnRows = await db.getAllAsync<TableColumnRow>('PRAGMA table_info(review_records);');
+  const hasVoiceNoteColumn = columnRows.some((row) => row.name === 'voice_note');
+
+  if (hasVoiceNoteColumn) {
+    return;
+  }
+
+  Logger.info(DB_SCOPE, 'Adding missing review_records.voice_note column for backward compatibility.');
+  await db.execAsync('ALTER TABLE review_records ADD COLUMN voice_note TEXT;');
 }
 
 async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -172,6 +188,7 @@ export async function initDatabase(): Promise<void> {
 
     const currentVersion = await readUserVersion(db);
     await runMigrationToCurrentVersion(db, currentVersion);
+    await ensureReviewRecordsVoiceNoteColumn(db);
 
     const finalVersion = await readUserVersion(db);
     Logger.info(DB_SCOPE, 'Database initialized.', {

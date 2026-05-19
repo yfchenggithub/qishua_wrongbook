@@ -1,4 +1,5 @@
 import type { MistakeStatus, ReviewResult } from '@/src/models/Mistake';
+import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 
 export interface ReviewSession {
   mistakeId: string;
@@ -16,6 +17,7 @@ export interface CompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
   solutionImageUri?: string | null;
+  voiceNote?: ReviewRecordVoiceNote | null;
   result: ReviewResult;
   cleanupImageOnFailure?: boolean;
 }
@@ -27,5 +29,6 @@ export interface CompleteReviewResult {
   newReviewCount?: number;
   newStatus?: MistakeStatus;
   nextReviewAt?: string | null;
+  warningMessage?: string;
   errorMessage?: string;
 }

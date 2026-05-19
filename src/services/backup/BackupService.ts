@@ -103,8 +103,9 @@ INSERT INTO review_records (
   review_index,
   result,
   note,
+  voice_note,
   created_at
-) VALUES (?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 `;
 
 const INSERT_MISTAKE_IMAGE_SQL = `
@@ -1216,6 +1217,9 @@ async function runRestoreDatabaseTransaction(options: {
 
         for (let index = 0; index < data.reviewRecords.length; index += 1) {
           const reviewRecord = data.reviewRecords[index];
+          const voiceNoteJson = reviewRecord.voice_note
+            ? JSON.stringify(reviewRecord.voice_note)
+            : null;
           await db.runAsync(
             INSERT_REVIEW_RECORD_SQL,
             reviewRecord.id,
@@ -1223,6 +1227,7 @@ async function runRestoreDatabaseTransaction(options: {
             reviewRecord.review_index,
             reviewRecord.result,
             reviewRecord.note ?? null,
+            voiceNoteJson,
             reviewRecord.created_at,
           );
 

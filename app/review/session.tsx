@@ -25,6 +25,7 @@ import {
 } from '@/src/components';
 import type { DetailImageSlot } from '@/src/models/MistakeDetailViewModel';
 import type { ReviewResult } from '@/src/models/Mistake';
+import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import { Logger } from '@/src/services/Logger';
 import type { ReviewSessionQueueItem } from '@/src/services/ReviewSessionService';
 import * as ReviewSessionService from '@/src/services/ReviewSessionService';
@@ -138,6 +139,21 @@ function formatDurationMs(durationMs: number): string {
     .padStart(2, '0');
   const seconds = (totalSeconds % 60).toString().padStart(2, '0');
   return `${minutes}:${seconds}`;
+}
+
+function toReviewRecordVoiceNote(value: VoiceNoteEntity | null): ReviewRecordVoiceNote | null {
+  if (!value) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    fileUri: value.fileUri,
+    fileName: value.fileName,
+    durationMs: value.durationMs,
+    sizeBytes: value.sizeBytes,
+    createdAt: value.createdAt,
+  };
 }
 
 function pickSlotImageDimensions(slot?: DetailImageSlot): ImageDimensions | null {
@@ -850,6 +866,7 @@ export default function ReviewSessionPage() {
           mistakeId: currentQueueItem.id,
           reviewIndex: currentMeta.nextReviewIndex,
           result,
+          voiceNote: toReviewRecordVoiceNote(voiceNote),
         });
 
         if (!submitResult.ok) {
@@ -859,7 +876,11 @@ export default function ReviewSessionPage() {
 
         incrementStats(statsKey);
         const isLast = currentIndex >= totalCount - 1;
-        showToast(isLast ? '已记录，今日复做完成' : '已记录，进入下一题', 'success');
+        if (submitResult.warningMessage) {
+          showToast(toShortErrorMessage(submitResult.warningMessage), 'info', TOAST_DURATION_LONG);
+        } else {
+          showToast(isLast ? '已记录，今日复做完成' : '已记录，进入下一题', 'success');
+        }
         setCurrentIndex((prev) => prev + 1);
       } catch (error) {
         Logger.error(PAGE_SCOPE, 'Failed to submit session review result.', {
@@ -886,6 +907,7 @@ export default function ReviewSessionPage() {
       showToast,
       stopVoicePlayback,
       totalCount,
+      voiceNote,
     ],
   );
 

@@ -1,4 +1,5 @@
 import type { ReviewResult } from '@/src/models/Mistake';
+import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import type { ReviewPageData } from '@/src/services/ReviewFlowService';
 import * as CompleteReviewService from '@/src/services/CompleteReviewService';
 import { Logger } from '@/src/services/Logger';
@@ -105,12 +106,14 @@ export async function submitTodayReviewResult(input: {
   mistakeId: string;
   reviewIndex: number;
   result: ReviewResult;
+  voiceNote?: ReviewRecordVoiceNote | null;
 }) {
   return CompleteReviewService.completeReview({
     mistakeId: input.mistakeId,
     reviewIndex: input.reviewIndex,
     result: input.result,
     solutionImageUri: null,
+    voiceNote: input.voiceNote ?? null,
     cleanupImageOnFailure: false,
   });
 }
