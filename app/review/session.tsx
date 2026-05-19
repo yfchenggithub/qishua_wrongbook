@@ -6,6 +6,7 @@ import {
   Animated,
   BackHandler,
   Image,
+  type LayoutChangeEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -13,7 +14,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BrandHeader, CardContainer, PrimaryButton, ScreenContainer } from '@/src/components';
+import {
+  BrandHeader,
+  calculateImagePreviewHeight,
+  CardContainer,
+  ImagePreviewModal,
+  PrimaryButton,
+  ScreenContainer,
+} from '@/src/components';
 import type { DetailImageSlot } from '@/src/models/MistakeDetailViewModel';
 import type { ReviewResult } from '@/src/models/Mistake';
 import { Logger } from '@/src/services/Logger';
@@ -24,6 +32,10 @@ import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 const PAGE_SCOPE = 'ReviewSessionPage';
 const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
+const QUESTION_PREVIEW_MIN_HEIGHT = 72;
+const QUESTION_PREVIEW_MAX_HEIGHT = 280;
+const QUESTION_PREVIEW_EMPTY_HEIGHT = 160;
+const QUESTION_PREVIEW_FALLBACK_HEIGHT = 160;
 
 type ToastType = 'success' | 'info' | 'error';
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -34,6 +46,17 @@ interface SessionResultStats {
   fuzzy: number;
   unknown: number;
 }
+
+type ImageDimensions = {
+  width: number;
+  height: number;
+};
+
+type QuestionImageSizeState = ImageDimensions | null | 'unresolved';
+type PreviewImageState = {
+  uri: string;
+  title: string;
+};
 
 const EMPTY_RESULT_STATS: SessionResultStats = {
   known: 0,
@@ -89,17 +112,121 @@ function toShortErrorMessage(input?: string): string {
   return `${normalized.slice(0, 60)}...`;
 }
 
-function QuestionImageCard({ slot }: { slot?: DetailImageSlot }) {
+function isPositiveFinite(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function pickSlotImageDimensions(slot?: DetailImageSlot): ImageDimensions | null {
+  const candidates: [number | null | undefined, number | null | undefined][] = [
+    [slot?.imageWidth, slot?.imageHeight],
+    [slot?.width, slot?.height],
+  ];
+
+  for (const [widthValue, heightValue] of candidates) {
+    if (isPositiveFinite(widthValue) && isPositiveFinite(heightValue)) {
+      return {
+        width: widthValue,
+        height: heightValue,
+      };
+    }
+  }
+
+  return null;
+}
+
+function QuestionImageCard({
+  slot,
+  onPreview,
+}: {
+  slot?: DetailImageSlot;
+  onPreview?: (uri: string) => void;
+}) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  const [measuredDimensions, setMeasuredDimensions] = useState<QuestionImageSizeState>('unresolved');
 
   const normalizedUri = useMemo(() => {
     const rawUri = typeof slot?.uri === 'string' ? slot.uri.trim() : '';
     return rawUri.length > 0 ? rawUri : null;
   }, [slot?.uri]);
 
+  const providedDimensions = useMemo(
+    () => pickSlotImageDimensions(slot),
+    [slot?.height, slot?.imageHeight, slot?.imageWidth, slot?.width],
+  );
+
+  const activeDimensions = useMemo(() => {
+    if (providedDimensions) {
+      return providedDimensions;
+    }
+    if (measuredDimensions && measuredDimensions !== 'unresolved') {
+      return measuredDimensions;
+    }
+    return null;
+  }, [measuredDimensions, providedDimensions]);
+
   useEffect(() => {
     setImageFailed(false);
+    setMeasuredDimensions('unresolved');
   }, [normalizedUri]);
+
+  useEffect(() => {
+    if (!normalizedUri || providedDimensions || measuredDimensions !== 'unresolved') {
+      return;
+    }
+
+    let cancelled = false;
+    Image.getSize(
+      normalizedUri,
+      (nextWidth, nextHeight) => {
+        if (cancelled) {
+          return;
+        }
+        if (!isPositiveFinite(nextWidth) || !isPositiveFinite(nextHeight)) {
+          setMeasuredDimensions(null);
+          return;
+        }
+        setMeasuredDimensions({ width: nextWidth, height: nextHeight });
+      },
+      () => {
+        if (cancelled) {
+          return;
+        }
+        setMeasuredDimensions(null);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [measuredDimensions, normalizedUri, providedDimensions]);
+
+  const computedPreviewHeight = useMemo(
+    () =>
+      calculateImagePreviewHeight({
+        containerWidth: previewWidth,
+        imageWidth: activeDimensions?.width,
+        imageHeight: activeDimensions?.height,
+        minHeight: QUESTION_PREVIEW_MIN_HEIGHT,
+        maxHeight: QUESTION_PREVIEW_MAX_HEIGHT,
+        fallbackHeight: QUESTION_PREVIEW_FALLBACK_HEIGHT,
+      }),
+    [activeDimensions?.height, activeDimensions?.width, previewWidth],
+  );
+
+  const handleQuestionImageLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = event.nativeEvent.layout.width;
+    if (!isPositiveFinite(nextWidth)) {
+      return;
+    }
+
+    setPreviewWidth((current) => {
+      if (Math.abs(current - nextWidth) < 0.5) {
+        return current;
+      }
+      return nextWidth;
+    });
+  }, []);
 
   const hasUri = !!normalizedUri;
   const canShowImage = hasUri && slot?.exists === true && !imageFailed;
@@ -109,19 +236,56 @@ function QuestionImageCard({ slot }: { slot?: DetailImageSlot }) {
   return (
     <CardContainer style={styles.questionCard} padding={spacing.lg}>
       <Text style={styles.questionTitle}>题目图片</Text>
-      <View style={[styles.questionImageWrap, !hasUri && styles.questionImageWrapEmpty]}>
+      <View
+        onLayout={handleQuestionImageLayout}
+        style={[
+          styles.questionImageWrap,
+          hasUri ? { height: computedPreviewHeight } : styles.questionImageWrapEmpty,
+          !hasUri ? { height: QUESTION_PREVIEW_EMPTY_HEIGHT } : null,
+        ]}>
         {canShowImage ? (
-          <Image
-            source={{ uri: normalizedUri! }}
-            style={styles.questionImage}
-            resizeMode="contain"
-            onError={() => setImageFailed(true)}
-          />
+          <>
+            {onPreview ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="题目图片，点击查看大图"
+                onPress={() => {
+                  onPreview(normalizedUri!);
+                }}
+                style={({ pressed }) => [styles.questionImagePressable, pressed && styles.questionImagePressablePressed]}>
+                <Image
+                  source={{ uri: normalizedUri! }}
+                  style={styles.questionImage}
+                  resizeMode="contain"
+                  onError={() => setImageFailed(true)}
+                />
+              </Pressable>
+            ) : (
+              <Image
+                source={{ uri: normalizedUri! }}
+                style={styles.questionImage}
+                resizeMode="contain"
+                onError={() => setImageFailed(true)}
+              />
+            )}
+            {onPreview ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="查看题目大图"
+                onPress={() => {
+                  onPreview(normalizedUri!);
+                }}
+                style={styles.questionPreviewButton}>
+                <Text style={styles.questionPreviewButtonText}>查看大图</Text>
+              </Pressable>
+            ) : null}
+          </>
         ) : null}
         {!hasUri ? <Text style={styles.questionPlaceholderText}>还没有上传题目图片</Text> : null}
         {fileMissing ? <Text style={styles.questionErrorText}>题目图片文件不存在</Text> : null}
         {loadFailed ? <Text style={styles.questionErrorText}>题目图片加载失败</Text> : null}
       </View>
+      {canShowImage && onPreview ? <Text style={styles.questionPreviewHint}>单击图片预览 · 双击大图关闭</Text> : null}
     </CardContainer>
   );
 }
@@ -146,6 +310,7 @@ export default function ReviewSessionPage() {
     title: string;
     nextReviewIndex: number;
   } | null>(null);
+  const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -220,6 +385,21 @@ export default function ReviewSessionPage() {
   const navigateHome = useCallback(() => {
     router.replace('/(tabs)' as never);
   }, [router]);
+
+  const handleOpenQuestionPreview = useCallback((uri: string) => {
+    const normalizedUri = uri.trim();
+    if (!normalizedUri) {
+      return;
+    }
+    setPreviewImage({
+      uri: normalizedUri,
+      title: '题目图片',
+    });
+  }, []);
+
+  const handleClosePreview = useCallback(() => {
+    setPreviewImage(null);
+  }, []);
 
   const handleRequestExit = useCallback(() => {
     if (!hasRemaining || isCompleted) {
@@ -513,7 +693,9 @@ export default function ReviewSessionPage() {
               </CardContainer>
             ) : null}
 
-            {!isLoadingCurrent && !currentErrorMessage ? <QuestionImageCard slot={currentQuestionSlot} /> : null}
+            {!isLoadingCurrent && !currentErrorMessage ? (
+              <QuestionImageCard slot={currentQuestionSlot} onPreview={handleOpenQuestionPreview} />
+            ) : null}
 
             {!isLoadingCurrent && !currentErrorMessage ? (
               <View style={styles.actionSection}>
@@ -542,6 +724,13 @@ export default function ReviewSessionPage() {
           </>
         ) : null}
       </ScreenContainer>
+
+      <ImagePreviewModal
+        visible={previewImage !== null}
+        uri={previewImage?.uri ?? null}
+        title={previewImage?.title ?? ''}
+        onClose={handleClosePreview}
+      />
 
       {toastVisible ? (
         <Animated.View
@@ -619,7 +808,7 @@ const styles = StyleSheet.create({
     lineHeight: 30,
   },
   questionImageWrap: {
-    height: 320,
+    width: '100%',
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -627,7 +816,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    padding: spacing.md,
   },
   questionImageWrapEmpty: {
     borderStyle: 'dashed',
@@ -635,6 +823,36 @@ const styles = StyleSheet.create({
   questionImage: {
     width: '100%',
     height: '100%',
+  },
+  questionImagePressable: {
+    width: '100%',
+    height: '100%',
+  },
+  questionImagePressablePressed: {
+    opacity: 0.94,
+  },
+  questionPreviewButton: {
+    position: 'absolute',
+    right: spacing.sm,
+    bottom: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+  },
+  questionPreviewButtonText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
+  },
+  questionPreviewHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'right',
   },
   questionPlaceholderText: {
     ...typography.body,

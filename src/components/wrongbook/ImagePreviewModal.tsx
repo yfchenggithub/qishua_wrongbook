@@ -80,10 +80,14 @@ export function ImagePreviewModal({
               onError={() => setImageFailed(true)}
             />
           ) : (
-            <Text style={styles.errorText}>
-              {normalizedUri ? '图片加载失败，请返回重试' : '暂无可预览图片'}
-            </Text>
+            <Text style={styles.errorText}>{normalizedUri ? '图片加载失败，请返回重试' : '暂无可预览图片'}</Text>
           )}
+
+          {canShowImage ? (
+            <View pointerEvents="none" style={styles.gestureHintWrap}>
+              <Text style={styles.gestureHintText}>双击关闭预览</Text>
+            </View>
+          ) : null}
         </Pressable>
       </View>
     </Modal>
@@ -132,6 +136,7 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
+    position: 'relative',
   },
   contentPressed: {
     opacity: 0.96,
@@ -144,5 +149,23 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: '#D8D8D8',
     textAlign: 'center',
+  },
+  gestureHintWrap: {
+    position: 'absolute',
+    bottom: spacing.md,
+    alignSelf: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    backgroundColor: 'rgba(0, 0, 0, 0.34)',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  gestureHintText: {
+    ...typography.caption,
+    color: '#E5E7EB',
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '600',
   },
 });
