@@ -323,11 +323,15 @@ export function MistakeImageSection({
                 onDelete();
               }}
               disabled={!canDelete}
-              style={[styles.deleteButton, !canDelete && styles.deleteButtonDisabled]}>
+              style={({ pressed }) => [
+                styles.deleteButton,
+                pressed && canDelete && styles.deleteButtonPressed,
+                !canDelete && styles.deleteButtonDisabled,
+              ]}>
               {isDeleteLoading ? (
-                <ActivityIndicator size="small" color={colors.white} />
+                <ActivityIndicator size="small" color={colors.textSecondary} />
               ) : (
-                <Text style={styles.deleteButtonText}>X</Text>
+                <Text style={styles.deleteButtonText}>×</Text>
               )}
             </Pressable>
           </>
@@ -432,20 +436,28 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: spacing.sm,
     right: spacing.sm,
-    width: 28,
-    height: 28,
+    width: 26,
+    height: 26,
     borderRadius: radius.pill,
-    backgroundColor: 'rgba(200, 36, 36, 0.95)',
+    borderWidth: 1,
+    borderColor: 'rgba(17, 17, 17, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.88)',
     alignItems: 'center',
     justifyContent: 'center',
   },
+  deleteButtonPressed: {
+    borderColor: 'rgba(216, 74, 74, 0.35)',
+    backgroundColor: 'rgba(216, 74, 74, 0.12)',
+  },
   deleteButtonDisabled: {
-    opacity: 0.6,
+    opacity: 0.42,
   },
   deleteButtonText: {
     ...typography.caption,
-    color: colors.white,
+    color: colors.textSecondary,
     fontWeight: '700',
+    fontSize: 14,
+    lineHeight: 16,
   },
   emptyText: {
     ...typography.body,

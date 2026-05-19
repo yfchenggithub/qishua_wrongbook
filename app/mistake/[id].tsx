@@ -706,50 +706,63 @@ export default function MistakeDetailScreen() {
     [handleAddReviewImage, handleReplaceReviewImage],
   );
 
+  const handleEditReviewImage = useCallback(
+    (record: DetailReviewRecordItem) => {
+      if (state.kind !== 'success') {
+        return;
+      }
+
+      const normalizedUri = normalizePreviewUri(record.solutionImageUri);
+      if (!normalizedUri || record.solutionImageExists === false) {
+        showToast('图片不可用，请重新添加。', 'info');
+        return;
+      }
+
+      Logger.info(PAGE_SCOPE, 'Edit review record image clicked.', {
+        mistakeId: state.detail.id,
+        reviewRecordId: record.id,
+        reviewIndex: record.reviewIndex,
+        sourceUriLength: normalizedUri.length,
+      });
+
+      router.push(
+        {
+          pathname: '/mistake/[id]/image-edit',
+          params: {
+            id: state.detail.id,
+            imageType: 'review_solution',
+            imageSlot: 'solution',
+            sourceUri: normalizedUri,
+            oldImageUri: normalizedUri,
+            reviewRecordId: record.id,
+          },
+        } as never,
+      );
+    },
+    [router, showToast, state],
+  );
+
   const handleOpenReviewImageActions = useCallback(
     (record: DetailReviewRecordItem) => {
       Alert.alert('复做图片操作', '请选择操作', [
         { text: '取消', style: 'cancel' },
         {
-          text: '查看大图',
+          text: '编辑',
           onPress: () => {
-            const normalizedUri = normalizePreviewUri(record.solutionImageUri);
-            if (!normalizedUri || record.solutionImageExists === false) {
-              showToast('图片不可用，请重新添加。', 'info');
-              return;
-            }
-            handleOpenPreview(normalizedUri, getReviewPreviewTitle(record));
+            handleEditReviewImage(record);
           },
         },
         {
-          text: '更多操作',
+          text: '删除照片',
+          style: 'destructive',
           onPress: () => {
-            Alert.alert('更多操作', '请选择操作', [
+            Alert.alert('删除复做图片？', '只会删除这条复做记录的图片，不会删除复做记录。', [
               { text: '取消', style: 'cancel' },
               {
-                text: '替换图片',
-                onPress: () => {
-                  openReviewImagePickerActionSheet(record, 'replace');
-                },
-              },
-              {
-                text: '删除图片',
+                text: '删除',
                 style: 'destructive',
                 onPress: () => {
-                  Alert.alert(
-                    '删除复做图片？',
-                    '只会删除这条复做记录的图片，不会删除复做记录。',
-                    [
-                      { text: '取消', style: 'cancel' },
-                      {
-                        text: '删除',
-                        style: 'destructive',
-                        onPress: () => {
-                          void handleDeleteReviewImage(record);
-                        },
-                      },
-                    ],
-                  );
+                  void handleDeleteReviewImage(record);
                 },
               },
             ]);
@@ -757,7 +770,7 @@ export default function MistakeDetailScreen() {
         },
       ]);
     },
-    [handleDeleteReviewImage, handleOpenPreview, openReviewImagePickerActionSheet, showToast],
+    [handleDeleteReviewImage, handleEditReviewImage],
   );
 
   const isReviewRecordImageBusy = useCallback(

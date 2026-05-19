@@ -21,6 +21,7 @@ import * as ImageStorageService from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
 import type { ManagedDetailImageType } from '@/src/services/MistakeDetailService';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
+import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'MistakeImageCropScreen';
@@ -59,6 +60,8 @@ type DebugProbePreview = {
   createdAt: string;
 };
 
+type CropImageType = ManagedDetailImageType | 'review_solution';
+
 type PageState =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
@@ -66,7 +69,8 @@ type PageState =
       kind: 'success';
       mistakeId: string;
       imageSlot: ImageSlot;
-      imageType: ManagedDetailImageType;
+      imageType: CropImageType;
+      reviewRecordId: string | null;
       title: string;
       sourceUri: string;
       sourceWidth: number;
@@ -90,9 +94,9 @@ function normalizeRouteText(value: string | string[] | undefined): string | null
   return trimmed.length > 0 ? trimmed : null;
 }
 
-function normalizeImageType(value: string | string[] | undefined): ManagedDetailImageType | null {
+function normalizeImageType(value: string | string[] | undefined): CropImageType | null {
   const raw = Array.isArray(value) ? value[0] : value;
-  if (raw === 'question' || raw === 'my_solution' || raw === 'answer') {
+  if (raw === 'question' || raw === 'my_solution' || raw === 'answer' || raw === 'review_solution') {
     return raw;
   }
   return null;
@@ -131,7 +135,10 @@ function createCropDebugSessionId(): string {
   return `crop-${Date.now().toString(36)}-${randomPart}`;
 }
 
-function getImageTitle(slot: ImageSlot): string {
+function getImageTitle(slot: ImageSlot, imageType: CropImageType): string {
+  if (imageType === 'review_solution') {
+    return '裁剪复做图片';
+  }
   if (slot === 'question') {
     return '裁剪题目图片';
   }
@@ -151,14 +158,17 @@ function mapSlotToImageType(slot: ImageSlot): ManagedDetailImageType {
   return 'answer';
 }
 
-function mapImageTypeToSlot(type: ManagedDetailImageType): ImageSlot {
+function mapImageTypeToSlot(type: CropImageType): ImageSlot {
   if (type === 'question') {
     return 'question';
   }
   if (type === 'my_solution') {
     return 'solution';
   }
-  return 'answer';
+  if (type === 'answer') {
+    return 'answer';
+  }
+  return 'solution';
 }
 
 function buildDisplayedImageRect(container: ImageSize, imageSize: ImageSize): ImageRect | null {
@@ -347,12 +357,13 @@ function parseCropRectToSourceRect(
 export default function MistakeImageEditScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id, imageSlot, imageType, sourceUri, oldImageUri } = useLocalSearchParams<{
+  const { id, imageSlot, imageType, sourceUri, oldImageUri, reviewRecordId } = useLocalSearchParams<{
     id?: string | string[];
     imageSlot?: string | string[];
     imageType?: string | string[];
     sourceUri?: string | string[];
     oldImageUri?: string | string[];
+    reviewRecordId?: string | string[];
   }>();
 
   const routeMistakeId = useMemo(() => normalizeRouteText(id), [id]);
@@ -360,6 +371,7 @@ export default function MistakeImageEditScreen() {
   const routeImageType = useMemo(() => normalizeImageType(imageType), [imageType]);
   const routeSourceUri = useMemo(() => normalizeRouteText(sourceUri), [sourceUri]);
   const routeOldImageUri = useMemo(() => normalizeRouteText(oldImageUri), [oldImageUri]);
+  const routeReviewRecordId = useMemo(() => normalizeRouteText(reviewRecordId), [reviewRecordId]);
 
   const [state, setState] = useState<PageState>({ kind: 'loading' });
   const [isImageSizeLoading, setIsImageSizeLoading] = useState(true);
@@ -479,12 +491,21 @@ export default function MistakeImageEditScreen() {
         });
         return;
       }
+      const isReviewImage = resolvedImageType === 'review_solution';
+      if (isReviewImage && !routeReviewRecordId) {
+        setState({
+          kind: 'error',
+          message: '复做记录参数无效，请返回重试。',
+        });
+        return;
+      }
 
       const resolvedImageSlot = routeImageSlot ?? mapImageTypeToSlot(resolvedImageType);
 
       setState({ kind: 'loading' });
       Logger.info(PAGE_SCOPE, 'Enter crop image page.', {
         mistakeId: routeMistakeId,
+        reviewRecordId: routeReviewRecordId,
         imageSlot: resolvedImageSlot,
         imageType: resolvedImageType,
         sourceUriShort: toShortUri(routeSourceUri),
@@ -504,8 +525,43 @@ export default function MistakeImageEditScreen() {
         return;
       }
 
-      const slot = detailResult.detail.imageSlots.find((item) => item.type === resolvedImageType);
-      const detailUri = typeof slot?.uri === 'string' ? slot.uri.trim() : '';
+      const detailUri =
+        resolvedImageType === 'review_solution'
+          ? (() => {
+              const record = detailResult.detail.reviewRecords.find((item) => item.id === routeReviewRecordId);
+              if (!record) {
+                setState({
+                  kind: 'error',
+                  message: '复做记录不存在，请返回重试。',
+                });
+                return null;
+              }
+              const uri = typeof record.solutionImageUri === 'string' ? record.solutionImageUri.trim() : '';
+              if (record.solutionImageExists === false && !routeSourceUri) {
+                setState({
+                  kind: 'error',
+                  message: '图片文件不存在，请重新拍照。',
+                });
+                return null;
+              }
+              return uri;
+            })()
+          : (() => {
+              const slot = detailResult.detail.imageSlots.find((item) => item.type === resolvedImageType);
+              const uri = typeof slot?.uri === 'string' ? slot.uri.trim() : '';
+              if (slot?.exists === false && !routeSourceUri) {
+                setState({
+                  kind: 'error',
+                  message: '图片文件不存在，请重新拍照。',
+                });
+                return null;
+              }
+              return uri;
+            })();
+      if (detailUri === null) {
+        return;
+      }
+
       const nextSourceUri = routeSourceUri ?? detailUri;
       if (!nextSourceUri) {
         setState({
@@ -515,17 +571,10 @@ export default function MistakeImageEditScreen() {
         return;
       }
 
-      if (slot?.exists === false) {
-        setState({
-          kind: 'error',
-          message: '图片文件不存在，请重新拍照。',
-        });
-        return;
-      }
-
       const sourceExists = new File(nextSourceUri).exists;
       Logger.info(PAGE_SCOPE, 'Source image prepared for crop page.', {
         mistakeId: routeMistakeId,
+        reviewRecordId: routeReviewRecordId,
         imageSlot: resolvedImageSlot,
         sourceUriShort: toShortUri(nextSourceUri),
         sourceExists,
@@ -575,6 +624,7 @@ export default function MistakeImageEditScreen() {
 
       Logger.info(PAGE_SCOPE, 'Prepared crop source image for crop page.', {
         mistakeId: routeMistakeId,
+        reviewRecordId: routeReviewRecordId,
         imageSlot: resolvedImageSlot,
         sourceUriShort: toShortUri(nextSourceUri),
         preparedUriShort: toShortUri(preparedSource.uri),
@@ -588,7 +638,8 @@ export default function MistakeImageEditScreen() {
         mistakeId: routeMistakeId,
         imageSlot: resolvedImageSlot,
         imageType: resolvedImageType,
-        title: getImageTitle(resolvedImageSlot),
+        reviewRecordId: resolvedImageType === 'review_solution' ? routeReviewRecordId : null,
+        title: getImageTitle(resolvedImageSlot, resolvedImageType),
         sourceUri: preparedSource.uri,
         sourceWidth: preparedSource.width,
         sourceHeight: preparedSource.height,
@@ -602,7 +653,7 @@ export default function MistakeImageEditScreen() {
     return () => {
       cancelled = true;
     };
-  }, [routeImageSlot, routeImageType, routeMistakeId, routeOldImageUri, routeSourceUri]);
+  }, [routeImageSlot, routeImageType, routeMistakeId, routeOldImageUri, routeReviewRecordId, routeSourceUri]);
 
   useEffect(() => {
     if (state.kind !== 'success') {
@@ -761,11 +812,41 @@ export default function MistakeImageEditScreen() {
 
       Logger.info(PAGE_SCOPE, 'Start database update for cropped image.', {
         mistakeId: state.mistakeId,
+        reviewRecordId: state.reviewRecordId,
         imageSlot: state.imageSlot,
         imageType: state.imageType,
         newImageUriShort: toShortUri(nextImageUri),
         fileSize: nextFileSize,
       });
+
+      if (state.imageType === 'review_solution') {
+        if (!state.reviewRecordId) {
+          throw new Error('复做记录参数无效，请返回重试。');
+        }
+        const updateResult = await ReviewRecordImageService.updateReviewRecordImage({
+          mistakeId: state.mistakeId,
+          reviewRecordId: state.reviewRecordId,
+          imageUri: nextImageUri,
+        });
+
+        if (!updateResult.ok) {
+          Logger.error(PAGE_SCOPE, 'Database update failed for cropped review image.', {
+            mistakeId: state.mistakeId,
+            reviewRecordId: state.reviewRecordId,
+            imageSlot: state.imageSlot,
+            errorMessage: updateResult.errorMessage ?? null,
+          });
+          throw new Error(updateResult.errorMessage ?? '数据库更新失败');
+        }
+
+        Logger.info(PAGE_SCOPE, 'Database update succeeded for cropped review image.', {
+          mistakeId: state.mistakeId,
+          reviewRecordId: state.reviewRecordId,
+          imageSlot: state.imageSlot,
+          imageId: updateResult.imageId ?? null,
+        });
+        return;
+      }
 
       const updateResult = await MistakeDetailService.upsertMistakeDetailImage({
         mistakeId: state.mistakeId,
