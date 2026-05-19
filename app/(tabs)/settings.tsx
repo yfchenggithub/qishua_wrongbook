@@ -1324,28 +1324,34 @@ export default function SettingsScreen() {
           offlineLabel="离线"
         />
 
-        <CardContainer style={styles.card} padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconGreen]}>
-              <MaterialIcons color="#2A9D50" name="security" size={30} />
+        <CardContainer style={[styles.card, styles.backupCard]} padding={spacing.md}>
+          <View style={styles.backupCardRow}>
+            <View style={[styles.iconBadge, styles.iconGreen, styles.backupIconBadge]}>
+              <MaterialIcons color="#2A9D50" name="security" size={38} />
             </View>
-            <View style={styles.cardMain}>
-              <View style={styles.titleRow}>
-                <Text style={styles.cardTitle}>数据备份与恢复</Text>
-                <View style={styles.recommendBadge}>
-                  <Text style={styles.recommendText}>推荐</Text>
+            <View style={styles.backupMain}>
+              <View style={styles.backupHeaderRow}>
+                <View style={styles.backupTitleWrap}>
+                  <Text style={[styles.cardTitle, styles.backupTitle]}>数据备份与恢复</Text>
+                  <View style={styles.recommendBadge}>
+                    <Text style={styles.recommendText}>推荐</Text>
+                  </View>
                 </View>
+                <MaterialIcons color="#A0A7B2" name="chevron-right" size={22} style={styles.backupChevron} />
               </View>
-              <Text style={styles.cardDescription}>
+              <Text style={[styles.cardDescription, styles.backupDescription]}>
                 保护错题、复做记录和图片，换手机或重装 App 后可恢复数据。
               </Text>
-              <Text style={styles.metaText}>
-                上次备份：
-                <Text style={styles.metaStrong}>
-                  {lastBackupAt ? formatBackupCreatedAt(lastBackupAt) : '未备份'}
+              <View style={styles.backupMetaRow}>
+                <MaterialIcons color="#2A9D50" name="schedule" size={18} />
+                <Text style={[styles.metaText, styles.backupMetaText]}>
+                  上次备份：
+                  <Text style={[styles.metaStrong, styles.backupMetaStrong]}>
+                    {lastBackupAt ? formatBackupCreatedAt(lastBackupAt) : '未备份'}
+                  </Text>
                 </Text>
-              </Text>
-              <View style={styles.actionRow}>
+              </View>
+              <View style={styles.backupActionRow}>
                 <Pressable
                   accessibilityLabel={
                     isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'
@@ -1356,11 +1362,17 @@ export default function SettingsScreen() {
                   style={[
                     styles.actionButton,
                     styles.actionButtonGreen,
+                    styles.backupActionButton,
                     isBackupBusy ? styles.disabledButton : null,
                   ]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    {isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'}
-                  </Text>
+                  <View style={styles.backupActionContent}>
+                    <MaterialIcons color="#238B49" name="backup" size={18} />
+                    <Text
+                      numberOfLines={2}
+                      style={[styles.actionButtonText, styles.actionButtonTextGreen, styles.backupActionText]}>
+                      {isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'}
+                    </Text>
+                  </View>
                 </Pressable>
                 <Pressable
                   accessibilityLabel={
@@ -1372,14 +1384,23 @@ export default function SettingsScreen() {
                   style={[
                     styles.actionButton,
                     styles.actionButtonGreen,
+                    styles.backupActionButton,
                     isRestoreBusy ? styles.disabledButton : null,
                   ]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    {isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
-                  </Text>
+                  <View style={styles.backupActionContent}>
+                    <MaterialIcons color="#238B49" name="restore" size={18} />
+                    <Text
+                      numberOfLines={2}
+                      style={[styles.actionButtonText, styles.actionButtonTextGreen, styles.backupActionText]}>
+                      {isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
+                    </Text>
+                  </View>
                 </Pressable>
               </View>
-              <Text style={styles.metaText}>选择之前导出的七刷备份文件，恢复到当前设备。</Text>
+              <View style={styles.backupHintRow}>
+                <MaterialIcons color="#2A9D50" name="verified-user" size={16} />
+                <Text style={styles.backupHintText}>选择之前导出的七刷备份文件，恢复到当前设备。</Text>
+              </View>
             </View>
           </View>
         </CardContainer>
@@ -1675,7 +1696,22 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: radius.xl,
   },
+  backupCard: {
+    borderRadius: 22,
+    borderColor: 'rgba(34, 197, 94, 0.18)',
+    backgroundColor: '#F8FFFA',
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 2,
+  },
   cardRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+  },
+  backupCardRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.md,
@@ -1692,6 +1728,11 @@ const styles = StyleSheet.create({
   iconGreen: {
     backgroundColor: '#EAF8EE',
     borderColor: '#C6EAD3',
+  },
+  backupIconBadge: {
+    width: 76,
+    height: 76,
+    borderRadius: 22,
   },
   iconBlue: {
     backgroundColor: '#EAF2FF',
@@ -1714,11 +1755,30 @@ const styles = StyleSheet.create({
     minWidth: 0,
     gap: spacing.sm,
   },
+  backupMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: 10,
+  },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
+  },
+  backupHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  backupTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
   },
   cardTitle: {
     ...typography.sectionTitle,
@@ -1726,17 +1786,44 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     color: colors.textPrimary,
   },
+  backupTitle: {
+    fontSize: 20,
+    lineHeight: 27,
+    fontWeight: '800',
+  },
+  backupChevron: {
+    flexShrink: 0,
+    marginLeft: spacing.xs,
+  },
   cardDescription: {
     ...typography.body,
     color: colors.textSecondary,
+  },
+  backupDescription: {
+    color: '#4B5563',
+    lineHeight: 22,
   },
   metaText: {
     ...typography.bodySmall,
     color: colors.textSecondary,
   },
+  backupMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  backupMetaText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#4B5563',
+  },
   metaStrong: {
     color: '#2A9D50',
     fontWeight: '700',
+  },
+  backupMetaStrong: {
+    color: '#16A34A',
+    fontWeight: '800',
   },
   recommendBadge: {
     borderRadius: radius.pill,
@@ -1757,6 +1844,12 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  backupActionRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
   actionButton: {
     minHeight: 44,
     borderRadius: radius.pill,
@@ -1769,6 +1862,27 @@ const styles = StyleSheet.create({
   actionButtonText: {
     ...typography.bodySmall,
     fontWeight: '700',
+  },
+  backupActionButton: {
+    minHeight: 46,
+    borderRadius: 15,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 104,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  backupActionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  backupActionText: {
+    flexShrink: 1,
+    textAlign: 'center',
+    lineHeight: 20,
   },
   actionButtonGreen: {
     borderColor: '#72C490',
@@ -1790,6 +1904,18 @@ const styles = StyleSheet.create({
   },
   actionButtonTextBlue: {
     color: '#2D74D6',
+  },
+  backupHintRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  backupHintText: {
+    ...typography.caption,
+    flex: 1,
+    color: '#6B7280',
+    lineHeight: 18,
   },
   refreshWrap: {
     flexDirection: 'row',
