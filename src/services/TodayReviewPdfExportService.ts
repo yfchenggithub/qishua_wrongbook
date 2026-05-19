@@ -277,10 +277,7 @@ function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): s
       <div class="write-block">
         <div class="answer-area">
           <div class="answer-title">我的解答：</div>
-          <div class="answer-line"></div>
-          <div class="answer-line"></div>
-          <div class="answer-line"></div>
-          <div class="answer-line"></div>
+          <div class="answer-lines-fill" aria-hidden="true"></div>
         </div>
         <div class="result-area">
           <div class="result-title">本次结果：</div>
@@ -295,9 +292,30 @@ function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): s
   `;
 }
 
+function buildWorksheetPageHtml(
+  item: TodayReviewPdfRenderItem,
+  index: number,
+  totalCount: number,
+  dateString: string,
+): string {
+  const questionCardHtml = buildQuestionCardHtml(item, index);
+  return `
+    <section class="worksheet-page">
+      <header class="sheet-header">
+        <h1 class="sheet-title">七刷错题本 · 今日复做练习卷</h1>
+        <p class="sheet-meta">日期：${escapeHtml(dateString)}　　共 ${totalCount} 道题</p>
+        <p class="sheet-tip">请先独立完成，完成后由家长在 App 中录入结果。</p>
+      </header>
+      ${questionCardHtml}
+      <footer class="footer">完成后请在 App 中录入：会了 / 模糊 / 不会</footer>
+    </section>
+  `;
+}
+
 function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): string {
-  const cardsHtml = items.map((item, index) => buildQuestionCardHtml(item, index)).join('\n');
-  const compactClass = items.length <= 3 ? 'compact-sheet' : '';
+  const pagesHtml = items
+    .map((item, index) => buildWorksheetPageHtml(item, index, items.length, dateString))
+    .join('\n');
 
   return `
     <!DOCTYPE html>
@@ -325,13 +343,25 @@ function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): st
           .sheet {
             width: 100%;
           }
+          .worksheet-page {
+            min-height: calc(297mm - 28mm);
+            display: flex;
+            flex-direction: column;
+            page-break-after: always;
+            break-after: page;
+          }
+          .worksheet-page:last-of-type {
+            page-break-after: auto;
+            break-after: auto;
+          }
           .sheet-header {
             border: 1px solid #dddddd;
             border-radius: 10px;
             padding: 14px 18px;
-            margin-bottom: 16px;
+            margin-bottom: 12px;
             page-break-after: avoid;
             break-after: avoid;
+            flex-shrink: 0;
           }
           .sheet-title {
             font-size: 22px;
@@ -352,9 +382,13 @@ function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): st
             border: 1px solid #dddddd;
             border-radius: 10px;
             padding: 14px 16px;
-            margin-bottom: 16px;
+            margin-bottom: 0;
             page-break-inside: avoid;
             break-inside: avoid;
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
           }
           .problem-title {
             font-size: 18px;
@@ -409,21 +443,40 @@ function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): st
           .write-block {
             page-break-inside: avoid;
             break-inside: avoid;
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
           }
           .answer-area {
             margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-height: 0;
           }
           .answer-title {
             font-weight: 700;
             margin-bottom: 8px;
           }
-          .answer-line {
-            height: 34px;
-            border-bottom: 1px solid #333333;
+          .answer-lines-fill {
+            flex: 1 1 auto;
+            min-height: 140px;
+            background-image: repeating-linear-gradient(
+              to bottom,
+              transparent 0,
+              transparent 31px,
+              #333333 31px,
+              #333333 32px
+            );
+            background-repeat: repeat-y;
+            background-size: 100% 32px;
           }
           .result-area {
-            margin-top: 12px;
+            margin-top: auto;
+            padding-top: 10px;
             font-size: 15px;
+            flex-shrink: 0;
           }
           .result-title {
             font-weight: 700;
@@ -453,26 +506,13 @@ function buildPdfHtml(items: TodayReviewPdfRenderItem[], dateString: string): st
             color: #777777;
             page-break-inside: avoid;
             break-inside: avoid;
-          }
-          .compact-sheet .sheet-header {
-            margin-bottom: 12px;
-            padding-top: 12px;
-            padding-bottom: 12px;
-          }
-          .compact-sheet .problem-card {
-            margin-bottom: 12px;
+            flex-shrink: 0;
           }
         </style>
       </head>
       <body>
-        <main class="sheet ${compactClass}">
-          <header class="sheet-header">
-            <h1 class="sheet-title">七刷错题本 · 今日复做练习卷</h1>
-            <p class="sheet-meta">日期：${escapeHtml(dateString)}　　共 ${items.length} 道题</p>
-            <p class="sheet-tip">请先独立完成，完成后由家长在 App 中录入结果。</p>
-          </header>
-          ${cardsHtml}
-          <footer class="footer">完成后请在 App 中录入：会了 / 模糊 / 不会</footer>
+        <main class="sheet">
+          ${pagesHtml}
         </main>
       </body>
     </html>
