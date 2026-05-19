@@ -37,6 +37,7 @@ import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
+import { formatDateShort } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const BRAND = {
@@ -46,6 +47,7 @@ const BRAND = {
 
 const PAGE_SCOPE = 'MistakeDetailScreen';
 const TOAST_DURATION_DEFAULT = 2000;
+const TITLE_DOUBLE_TAP_WINDOW_MS = 280;
 
 type ToastType = 'success' | 'info' | 'error';
 
@@ -409,9 +411,11 @@ export default function MistakeDetailScreen() {
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
+  const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
 
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
@@ -861,6 +865,10 @@ export default function MistakeDetailScreen() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      if (titleTapTimerRef.current) {
+        clearTimeout(titleTapTimerRef.current);
+        titleTapTimerRef.current = null;
+      }
     },
     [],
   );
@@ -982,38 +990,51 @@ export default function MistakeDetailScreen() {
     [router, showToast, state],
   );
 
-  const handleStartTitleEdit = useCallback(() => {
-    if (state.kind !== 'success') {
+  const handleStartTitleEdit = useCallback((options?: { selectAll?: boolean }) => {
+    if (state.kind !== 'success' || isSavingTitle) {
       return;
     }
+    const shouldSelectAll = options?.selectAll === true;
     setTitleInput(state.detail.title);
+    setTitleSelectAllOnFocus(shouldSelectAll);
     setIsTitleEditing(true);
-  }, [state]);
+  }, [isSavingTitle, state]);
 
-  const handleCancelTitleEdit = useCallback(() => {
-    if (state.kind === 'success') {
-      setTitleInput(state.detail.title);
+  const handlePressTitle = useCallback(() => {
+    if (titleTapTimerRef.current) {
+      clearTimeout(titleTapTimerRef.current);
+      titleTapTimerRef.current = null;
+      handleStartTitleEdit({ selectAll: true });
+      return;
     }
-    setIsTitleEditing(false);
-  }, [state]);
+
+    titleTapTimerRef.current = setTimeout(() => {
+      titleTapTimerRef.current = null;
+      handleStartTitleEdit({ selectAll: false });
+    }, TITLE_DOUBLE_TAP_WINDOW_MS);
+  }, [handleStartTitleEdit]);
 
   const handleSaveTitle = useCallback(async () => {
     if (state.kind !== 'success' || isSavingTitle) {
       return;
     }
 
+    const currentTitle = state.detail.title;
     const normalizedTitle = titleInput.trim();
     if (!normalizedTitle) {
+      setTitleInput(currentTitle);
+      setIsTitleEditing(false);
       showToast('题目名字不能为空。', 'error');
       return;
     }
 
-    if (normalizedTitle === state.detail.title.trim()) {
+    if (normalizedTitle === currentTitle.trim()) {
+      setTitleInput(currentTitle);
       setIsTitleEditing(false);
-      showToast('题目名字未变化。', 'info');
       return;
     }
 
+    setIsTitleEditing(false);
     setIsSavingTitle(true);
     try {
       const result = await MistakeDetailService.updateMistakeTitle({
@@ -1085,7 +1106,9 @@ export default function MistakeDetailScreen() {
         {state.kind === 'success' ? (
           <>
             <CardContainer style={styles.summaryCard} padding={spacing.xl}>
-              <Text style={styles.summaryMeta}>{state.detail.module}</Text>
+              <View style={styles.summaryMetaRow}>
+                <Text style={styles.summaryMeta}>{state.detail.module}</Text>
+              </View>
               <View style={styles.summaryTitleRow}>
                 {isTitleEditing ? (
                   <TextInput
@@ -1098,45 +1121,52 @@ export default function MistakeDetailScreen() {
                     maxLength={80}
                     autoFocus
                     returnKeyType="done"
+                    blurOnSubmit
+                    selectTextOnFocus={titleSelectAllOnFocus}
+                    onFocus={() => {
+                      if (titleSelectAllOnFocus) {
+                        setTitleSelectAllOnFocus(false);
+                      }
+                    }}
+                    onBlur={() => {
+                      void handleSaveTitle();
+                    }}
                     onSubmitEditing={() => {
                       void handleSaveTitle();
                     }}
                   />
                 ) : (
-                  <Text style={styles.summaryTitle}>{state.detail.title}</Text>
-                )}
-                <Pressable
-                  onPress={isTitleEditing ? handleCancelTitleEdit : handleStartTitleEdit}
-                  disabled={isSavingTitle}
-                  style={({ pressed }) => [
-                    styles.titleEditButton,
-                    pressed && styles.titleEditButtonPressed,
-                    isSavingTitle && styles.titleEditButtonDisabled,
-                  ]}>
-                  <Text style={styles.titleEditButtonText}>
-                    {isTitleEditing ? '取消' : '编辑'}
-                  </Text>
-                </Pressable>
-              </View>
-              {isTitleEditing ? (
-                <View style={styles.summaryTitleActionRow}>
                   <Pressable
-                    onPress={() => {
-                      void handleSaveTitle();
-                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="点击编辑题目名字"
+                    onPress={handlePressTitle}
                     disabled={isSavingTitle}
                     style={({ pressed }) => [
-                      styles.titleSaveButton,
-                      pressed && styles.titleSaveButtonPressed,
-                      isSavingTitle && styles.titleSaveButtonDisabled,
+                      styles.summaryTitlePressable,
+                      pressed && styles.summaryTitlePressablePressed,
                     ]}>
-                    <Text style={styles.titleSaveButtonText}>
-                      {isSavingTitle ? '保存中...' : '保存题目名字'}
+                    <Text numberOfLines={1} ellipsizeMode="tail" style={styles.summaryTitle}>
+                      {state.detail.title}
                     </Text>
                   </Pressable>
+                )}
+                {isSavingTitle ? (
+                  <View style={styles.titleSavingWrap}>
+                    <View style={styles.titleSavingDot} />
+                    <Text style={styles.titleSavingText}>保存中...</Text>
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.summaryInfoRow}>
+                <View style={styles.summaryDateWrap}>
+                  <MaterialIcons name="calendar-month" size={18} color={colors.textMuted} />
+                  <Text style={styles.summaryDateText}>{formatDateShort(state.detail.createdAt)}</Text>
                 </View>
-              ) : null}
-              <Text style={styles.summarySubtitle}>{state.detail.subtitle}</Text>
+                <Text style={styles.summaryInfoDot}>·</Text>
+                <Text style={styles.summaryDifficultyText}>难度 {state.detail.difficulty}</Text>
+              </View>
+
+              <View style={styles.summaryDivider} />
 
               <View style={styles.summaryBottomRow}>
                 <View style={styles.progressLabelWrap}>
@@ -1155,7 +1185,6 @@ export default function MistakeDetailScreen() {
               </View>
 
               <View style={styles.summaryInfoList}>
-                <Text style={styles.summaryInfoText}>难度：{state.detail.difficulty}</Text>
                 {state.detail.errorReason ? (
                   <Text style={styles.summaryInfoText}>错因：{state.detail.errorReason}</Text>
                 ) : null}
@@ -1362,84 +1391,105 @@ const styles = StyleSheet.create({
   summaryCard: {
     borderRadius: radius.xl,
   },
+  summaryMetaRow: {
+    alignSelf: 'flex-start',
+    borderRadius: radius.md,
+    backgroundColor: '#EDF2EE',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
   summaryMeta: {
     ...typography.body,
-    color: colors.textSecondary,
+    color: '#4E5A52',
     fontWeight: '700',
   },
   summaryTitle: {
     ...typography.titleMedium,
-    fontSize: 32,
-    lineHeight: 40,
+    fontSize: 22,
+    lineHeight: 30,
+    color: colors.success,
+    fontWeight: '800',
+    includeFontPadding: false,
+  },
+  summaryTitlePressable: {
     flex: 1,
+    minHeight: 32,
+    justifyContent: 'center',
+  },
+  summaryTitlePressablePressed: {
+    opacity: 0.86,
   },
   summaryTitleRow: {
-    marginTop: spacing.xs,
+    marginTop: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    minHeight: 36,
   },
   summaryTitleInput: {
     ...typography.titleMedium,
     flex: 1,
-    fontSize: 28,
-    lineHeight: 36,
+    fontSize: 22,
+    lineHeight: 30,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
-    color: colors.textPrimary,
+    color: colors.success,
+    fontWeight: '800',
+    includeFontPadding: false,
   },
-  titleEditButton: {
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+  titleSavingWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
-  titleEditButtonPressed: {
-    opacity: 0.86,
+  titleSavingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: radius.pill,
+    backgroundColor: colors.success,
   },
-  titleEditButtonDisabled: {
-    opacity: 0.6,
-  },
-  titleEditButtonText: {
+  titleSavingText: {
     ...typography.caption,
-    color: colors.textPrimary,
+    color: colors.textMuted,
     fontWeight: '700',
   },
-  summaryTitleActionRow: {
-    marginTop: spacing.sm,
+  summaryInfoRow: {
+    marginTop: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
-  titleSaveButton: {
-    alignSelf: 'flex-start',
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.black,
-    backgroundColor: colors.black,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  summaryDateWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
-  titleSaveButtonPressed: {
-    opacity: 0.88,
-  },
-  titleSaveButtonDisabled: {
-    opacity: 0.6,
-  },
-  titleSaveButtonText: {
-    ...typography.caption,
-    color: colors.white,
-    fontWeight: '700',
-  },
-  summarySubtitle: {
+  summaryDateText: {
     ...typography.body,
-    marginTop: spacing.sm,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  summaryInfoDot: {
+    ...typography.body,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  summaryDifficultyText: {
+    ...typography.body,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  summaryDivider: {
+    marginTop: spacing.md,
+    height: 1,
+    backgroundColor: colors.border,
   },
   summaryBottomRow: {
-    marginTop: spacing.lg,
+    marginTop: spacing.md,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
