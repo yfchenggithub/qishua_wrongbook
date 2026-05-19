@@ -25,7 +25,7 @@ import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
-import { formatNextReviewAtText } from '@/src/utils/reviewSchedule';
+import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const SEARCH_DEBOUNCE_MS = 350;
 const PAGE_SCOPE = 'LibraryScreen';
@@ -69,6 +69,15 @@ function MistakeLibraryCard({
   }, [item.thumbnailUri]);
 
   const showImage = !!item.thumbnailUri && !imageFailed;
+  const nextReviewInfo = useMemo(
+    () =>
+      resolveNextReviewAtText({
+        reviewCount: item.reviewCount,
+        maxReviewCount: item.maxReviewCount,
+        nextReviewAt: item.nextReviewAt ?? null,
+      }),
+    [item.maxReviewCount, item.nextReviewAt, item.reviewCount],
+  );
 
   return (
     <Pressable onPress={onPress} style={styles.cardPressable}>
@@ -113,14 +122,22 @@ function MistakeLibraryCard({
                 completed={item.reviewCount}
               />
             </View>
-            <Text numberOfLines={1} maxFontSizeMultiplier={1.0} style={styles.nextReviewText}>
-              下次复做：
-              {formatNextReviewAtText({
-                reviewCount: item.reviewCount,
-                maxReviewCount: item.maxReviewCount,
-                nextReviewAt: item.nextReviewAt ?? null,
-              })}
-            </Text>
+            <View style={styles.nextReviewWrap}>
+              <Text maxFontSizeMultiplier={1.0} style={styles.nextReviewLabel}>
+                下一次复做
+              </Text>
+              <Text
+                numberOfLines={2}
+                maxFontSizeMultiplier={1.0}
+                style={[
+                  styles.nextReviewText,
+                  nextReviewInfo.tone === 'success' && styles.nextReviewTextSuccess,
+                  nextReviewInfo.tone === 'muted' && styles.nextReviewTextMuted,
+                  nextReviewInfo.tone === 'danger' && styles.nextReviewTextDanger,
+                ]}>
+                {nextReviewInfo.displayText}
+              </Text>
+            </View>
           </View>
         </View>
       </CardContainer>
@@ -534,10 +551,27 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     gap: spacing.sm,
   },
+  nextReviewWrap: {
+    gap: 2,
+  },
+  nextReviewLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
   nextReviewText: {
     ...typography.bodySmall,
     color: colors.textSecondary,
     fontWeight: '600',
+  },
+  nextReviewTextSuccess: {
+    color: colors.success,
+  },
+  nextReviewTextMuted: {
+    color: colors.textMuted,
+  },
+  nextReviewTextDanger: {
+    color: colors.danger,
   },
   thumb: {
     width: 92,

@@ -37,7 +37,7 @@ import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
-import { formatNextReviewAtText } from '@/src/utils/reviewSchedule';
+import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const BRAND = {
   title: '七刷错题本',
@@ -892,6 +892,17 @@ export default function MistakeDetailScreen() {
   });
 
   const managedSlots = useMemo(() => sortManagedImageSlots(orderedSlots), [orderedSlots]);
+  const nextReviewInfo = useMemo(() => {
+    if (state.kind !== 'success') {
+      return null;
+    }
+
+    return resolveNextReviewAtText({
+      reviewCount: state.detail.reviewCount,
+      maxReviewCount: state.detail.maxReviewCount,
+      nextReviewAt: state.detail.nextReviewAt ?? null,
+    });
+  }, [state]);
 
   const handlePressDelete = useCallback(
     (type: ManagedDetailType) => {
@@ -1212,14 +1223,18 @@ export default function MistakeDetailScreen() {
 
             <CardContainer style={styles.reviewRecordsCard} padding={spacing.lg}>
               <SectionTitle title="复做记录" />
-              <Text style={styles.reviewRecordsNextReviewText}>
-                下次复做：
-                {formatNextReviewAtText({
-                  reviewCount: state.detail.reviewCount,
-                  maxReviewCount: state.detail.maxReviewCount,
-                  nextReviewAt: state.detail.nextReviewAt ?? null,
-                })}
-              </Text>
+              <View style={styles.reviewRecordsNextReviewWrap}>
+                <Text style={styles.reviewRecordsNextReviewLabel}>下一次复做</Text>
+                <Text
+                  style={[
+                    styles.reviewRecordsNextReviewText,
+                    nextReviewInfo?.tone === 'success' && styles.reviewRecordsNextReviewTextSuccess,
+                    nextReviewInfo?.tone === 'muted' && styles.reviewRecordsNextReviewTextMuted,
+                    nextReviewInfo?.tone === 'danger' && styles.reviewRecordsNextReviewTextDanger,
+                  ]}>
+                  {nextReviewInfo?.displayText ?? '⏳ 待安排（完成本次复做后自动生成）'}
+                </Text>
+              </View>
               {state.detail.reviewRecords.length <= 0 ? (
                 <Text style={styles.reviewRecordsEmptyText}>还没有复做记录</Text>
               ) : (
@@ -1491,10 +1506,27 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     gap: spacing.md,
   },
+  reviewRecordsNextReviewWrap: {
+    gap: 2,
+  },
+  reviewRecordsNextReviewLabel: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
   reviewRecordsNextReviewText: {
     ...typography.bodySmall,
     color: colors.textSecondary,
     fontWeight: '600',
+  },
+  reviewRecordsNextReviewTextSuccess: {
+    color: colors.success,
+  },
+  reviewRecordsNextReviewTextMuted: {
+    color: colors.textMuted,
+  },
+  reviewRecordsNextReviewTextDanger: {
+    color: colors.danger,
   },
   reviewRecordsEmptyText: {
     ...typography.body,
