@@ -8,14 +8,19 @@ import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
 import {
   cleanupPrintEnhancedTempFiles,
   enhanceImageForPdfPrint,
+  type PrintEnhanceEngine,
+  type PrintEnhanceOutputFormat,
 } from '@/src/services/export/PrintImageEnhancer';
 import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
+  DEFAULT_BW_SCAN_STRENGTH,
   DEFAULT_PRINT_ENHANCE_MODE,
   getPrintEnhanceCssFilter,
+  toActiveBwScanStrength,
   toActivePrintEnhanceMode,
+  type PrintEnhanceBwScanStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
 
@@ -40,6 +45,7 @@ const EMPTY_MESSAGE = '今天没有待复做题，无需导出练习卷';
 export type ExportTodayReviewPdfOptions = {
   date?: string;
   printEnhanceMode?: PrintEnhanceMode;
+  printEnhanceBwScanStrength?: PrintEnhanceBwScanStrength;
   onProgress?: (progress: ExportTodayReviewPdfProgress) => void;
 };
 
@@ -89,9 +95,23 @@ type TodayReviewPdfRenderItem = {
   questionImageSrc: string | null;
 };
 
+type QuestionImageEnhanceTrace = {
+  mode: PrintEnhanceMode;
+  bwScanStrength: PrintEnhanceBwScanStrength;
+  sourceUri: string;
+  enhancedUri: string;
+  selectedUri: string | null;
+  engine: PrintEnhanceEngine;
+  outputFormat: PrintEnhanceOutputFormat;
+  success: boolean;
+  usedFallback: boolean;
+  durationMs: number;
+};
+
 type BuildQuestionImageSrcResult = {
   imageDataUri: string | null;
   temporaryEnhancedUri: string | null;
+  trace: QuestionImageEnhanceTrace | null;
 };
 
 type BuildRenderItemsResult = {
@@ -257,16 +277,18 @@ async function toImageDataUri(uri: string): Promise<string | null> {
 async function buildQuestionImageSrc(
   uri: string,
   printEnhanceMode: PrintEnhanceMode,
+  bwScanStrength: PrintEnhanceBwScanStrength,
 ): Promise<BuildQuestionImageSrcResult> {
   const normalizedUri = normalizeOptionalText(uri);
   if (!normalizedUri) {
     return {
       imageDataUri: null,
       temporaryEnhancedUri: null,
+      trace: null,
     };
   }
 
-  const enhanceResult = await enhanceImageForPdfPrint(normalizedUri, printEnhanceMode);
+  const enhanceResult = await enhanceImageForPdfPrint(normalizedUri, printEnhanceMode, bwScanStrength);
   const enhancedUri = normalizeOptionalText(enhanceResult.outputUri) ?? normalizedUri;
   const temporaryEnhancedUri = (enhancedUri !== normalizedUri)
     ? enhancedUri
@@ -276,9 +298,22 @@ async function buildQuestionImageSrc(
   for (const candidateUri of candidateUris) {
     const dataUri = await toImageDataUri(candidateUri);
     if (dataUri) {
+      const trace: QuestionImageEnhanceTrace = {
+        mode: printEnhanceMode,
+        bwScanStrength,
+        sourceUri: normalizedUri,
+        enhancedUri,
+        selectedUri: candidateUri,
+        engine: enhanceResult.engine,
+        outputFormat: enhanceResult.outputFormat,
+        success: enhanceResult.success,
+        usedFallback: enhanceResult.usedFallback,
+        durationMs: enhanceResult.durationMs,
+      };
       return {
         imageDataUri: dataUri,
         temporaryEnhancedUri,
+        trace,
       };
     }
   }
@@ -294,6 +329,18 @@ async function buildQuestionImageSrc(
   return {
     imageDataUri: null,
     temporaryEnhancedUri,
+    trace: {
+      mode: printEnhanceMode,
+      bwScanStrength,
+      sourceUri: normalizedUri,
+      enhancedUri,
+      selectedUri: null,
+      engine: enhanceResult.engine,
+      outputFormat: enhanceResult.outputFormat,
+      success: enhanceResult.success,
+      usedFallback: enhanceResult.usedFallback,
+      durationMs: enhanceResult.durationMs,
+    },
   };
 }
 
@@ -632,6 +679,7 @@ function buildPdfHtml(
 async function buildRenderItems(
   items: TodayReviewExportItem[],
   printEnhanceMode: PrintEnhanceMode,
+  bwScanStrength: PrintEnhanceBwScanStrength,
 ): Promise<BuildRenderItemsResult> {
   const renderItems: TodayReviewPdfRenderItem[] = [];
   const temporaryEnhancedUris: string[] = [];
@@ -639,14 +687,36 @@ async function buildRenderItems(
   for (const item of items) {
     const questionImageUri = normalizeOptionalText(item.questionImageUri);
     const imageResult = questionImageUri
-      ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode)
+      ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, bwScanStrength)
       : {
         imageDataUri: null,
         temporaryEnhancedUri: null,
+        trace: null,
       };
 
     if (imageResult.temporaryEnhancedUri) {
       temporaryEnhancedUris.push(imageResult.temporaryEnhancedUri);
+    }
+
+    if (imageResult.trace) {
+      Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_enhance_trace', {
+        mistakeId: item.mistakeId,
+        printEnhanceMode: imageResult.trace.mode,
+        bwScanStrength: imageResult.trace.bwScanStrength,
+        enhanceEngine: imageResult.trace.engine,
+        outputFormat: imageResult.trace.outputFormat,
+        enhanceSuccess: imageResult.trace.success,
+        enhanceUsedFallback: imageResult.trace.usedFallback,
+        enhanceDurationMs: imageResult.trace.durationMs,
+        sourceUriPreview: toSafeUriPreview(imageResult.trace.sourceUri),
+        enhancedUriPreview: toSafeUriPreview(imageResult.trace.enhancedUri),
+        selectedUriPreview: toSafeUriPreview(imageResult.trace.selectedUri),
+        hasImageData: imageResult.imageDataUri !== null,
+      });
+    } else {
+      Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_missing', {
+        mistakeId: item.mistakeId,
+      });
     }
 
     renderItems.push({
@@ -702,6 +772,9 @@ export async function exportTodayReviewPdf(
   const activePrintEnhanceMode = toActivePrintEnhanceMode(
     options?.printEnhanceMode ?? DEFAULT_EXPORT_PRINT_ENHANCE_MODE,
   );
+  const activeBwScanStrength = toActiveBwScanStrength(
+    options?.printEnhanceBwScanStrength ?? DEFAULT_BW_SCAN_STRENGTH,
+  );
   const imageFilterCss = getPrintEnhanceCssFilter(activePrintEnhanceMode);
 
   try {
@@ -717,7 +790,11 @@ export async function exportTodayReviewPdf(
     }
 
     reportExportProgress(onProgress, 'prepare_items', exportItems.length);
-    const renderResult = await buildRenderItems(exportItems, activePrintEnhanceMode);
+    const renderResult = await buildRenderItems(
+      exportItems,
+      activePrintEnhanceMode,
+      activeBwScanStrength,
+    );
     temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
     const html = buildPdfHtml(renderResult.renderItems, dateString, imageFilterCss);
 
@@ -751,6 +828,7 @@ export async function exportTodayReviewPdf(
       exportedCount: exportItems.length,
       fileUriPreview: toSafeUriPreview(exportedFileUri),
       printEnhanceMode: activePrintEnhanceMode,
+      bwScanStrength: activeBwScanStrength,
       enhancedImageCount: renderResult.temporaryEnhancedUris.length,
     });
 

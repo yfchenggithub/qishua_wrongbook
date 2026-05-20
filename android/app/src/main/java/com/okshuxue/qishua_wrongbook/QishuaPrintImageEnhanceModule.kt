@@ -20,6 +20,7 @@ import org.opencv.android.Utils
 import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
+import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.CLAHE
 import org.opencv.imgproc.Imgproc
@@ -28,6 +29,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class QishuaPrintImageEnhanceModule(
@@ -39,10 +41,24 @@ class QishuaPrintImageEnhanceModule(
     BW_SCAN,
   }
 
+  private enum class BwScanStrength {
+    WEAK,
+    MEDIUM,
+    STRONG,
+  }
+
+  private data class BwScanParams(
+    val illuminationSigma: Double,
+    val adaptiveBlockSize: Int,
+    val adaptiveC: Double,
+    val minComponentAreaPx: Int,
+  )
+
   private data class EnhanceRequest(
     val sourceUri: String,
     val outputUri: String,
     val mode: EnhanceMode,
+    val bwScanStrength: BwScanStrength,
     val maxLongEdgePx: Int,
     val jpegQualityPercent: Int,
   )
@@ -58,7 +74,9 @@ class QishuaPrintImageEnhanceModule(
       request = request,
       promise = promise,
       engineName = "opencv",
-      enhance = { sourceBitmap, mode -> enhanceWithOpenCv(sourceBitmap, mode) },
+      enhance = { sourceBitmap, mode, bwScanStrength ->
+        enhanceWithOpenCv(sourceBitmap, mode, bwScanStrength)
+      },
     )
   }
 
@@ -68,7 +86,9 @@ class QishuaPrintImageEnhanceModule(
       request = request,
       promise = promise,
       engineName = "bitmap_fallback",
-      enhance = { sourceBitmap, mode -> enhanceWithBitmap(sourceBitmap, mode) },
+      enhance = { sourceBitmap, mode, bwScanStrength ->
+        enhanceWithBitmap(sourceBitmap, mode, bwScanStrength)
+      },
     )
   }
 
@@ -76,7 +96,7 @@ class QishuaPrintImageEnhanceModule(
     request: ReadableMap,
     promise: Promise,
     engineName: String,
-    enhance: (sourceBitmap: Bitmap, mode: EnhanceMode) -> Bitmap,
+    enhance: (sourceBitmap: Bitmap, mode: EnhanceMode, bwScanStrength: BwScanStrength) -> Bitmap,
   ) {
     val startedAt = SystemClock.elapsedRealtime()
     try {
@@ -86,7 +106,7 @@ class QishuaPrintImageEnhanceModule(
         if (engineName == "opencv") {
           ensureOpenCvInitialized()
         }
-        enhance(sourceBitmap, parsedRequest.mode)
+        enhance(sourceBitmap, parsedRequest.mode, parsedRequest.bwScanStrength)
       } finally {
         sourceBitmap.recycle()
       }
@@ -97,6 +117,7 @@ class QishuaPrintImageEnhanceModule(
         writeBitmapToUri(
           bitmap = enhancedBitmap,
           outputUriText = parsedRequest.outputUri,
+          mode = parsedRequest.mode,
           jpegQualityPercent = parsedRequest.jpegQualityPercent,
         )
       } finally {
@@ -107,6 +128,8 @@ class QishuaPrintImageEnhanceModule(
         putBoolean("success", true)
         putString("outputUri", parsedRequest.outputUri)
         putString("engine", engineName)
+        putString("outputFormat", if (parsedRequest.mode == EnhanceMode.BW_SCAN) "png" else "jpeg")
+        putString("bwScanStrength", parsedRequest.bwScanStrength.name.lowercase())
         putInt("width", outputWidth)
         putInt("height", outputHeight)
         putDouble("durationMs", (SystemClock.elapsedRealtime() - startedAt).toDouble())
@@ -126,6 +149,7 @@ class QishuaPrintImageEnhanceModule(
     val sourceUri = readRequiredString(request, "sourceUri")
     val outputUri = readRequiredString(request, "outputUri")
     val mode = parseMode(readRequiredString(request, "mode"))
+    val bwScanStrength = parseBwScanStrength(request)
     val maxLongEdgePx = parseMaxLongEdge(request)
     val jpegQualityPercent = parseJpegQualityPercent(request)
 
@@ -133,6 +157,7 @@ class QishuaPrintImageEnhanceModule(
       sourceUri = sourceUri,
       outputUri = outputUri,
       mode = mode,
+      bwScanStrength = bwScanStrength,
       maxLongEdgePx = maxLongEdgePx,
       jpegQualityPercent = jpegQualityPercent,
     )
@@ -154,6 +179,20 @@ class QishuaPrintImageEnhanceModule(
       "clear_print" -> EnhanceMode.CLEAR_PRINT
       "bw_scan" -> EnhanceMode.BW_SCAN
       else -> throw IllegalArgumentException("Unsupported enhance mode: $rawMode")
+    }
+  }
+
+  private fun parseBwScanStrength(request: ReadableMap): BwScanStrength {
+    val raw = if (request.hasKey("bwScanStrength") && !request.isNull("bwScanStrength")) {
+      request.getString("bwScanStrength")?.trim()?.lowercase()
+    } else {
+      null
+    }
+
+    return when (raw) {
+      "weak" -> BwScanStrength.WEAK
+      "strong" -> BwScanStrength.STRONG
+      else -> BwScanStrength.MEDIUM
     }
   }
 
@@ -295,7 +334,11 @@ class QishuaPrintImageEnhanceModule(
     }
   }
 
-  private fun enhanceWithOpenCv(sourceBitmap: Bitmap, mode: EnhanceMode): Bitmap {
+  private fun enhanceWithOpenCv(
+    sourceBitmap: Bitmap,
+    mode: EnhanceMode,
+    bwScanStrength: BwScanStrength,
+  ): Bitmap {
     val rgba = Mat()
     Utils.bitmapToMat(sourceBitmap, rgba)
     if (rgba.type() != CvType.CV_8UC4) {
@@ -307,7 +350,7 @@ class QishuaPrintImageEnhanceModule(
 
     val processedGray = when (mode) {
       EnhanceMode.CLEAR_PRINT -> buildClearPrintMat(gray)
-      EnhanceMode.BW_SCAN -> buildBwScanMat(gray)
+      EnhanceMode.BW_SCAN -> buildBwScanMat(gray, bwScanStrength)
     }
 
     val outputRgba = Mat()
@@ -327,57 +370,507 @@ class QishuaPrintImageEnhanceModule(
     val denoised = Mat()
     Photo.fastNlMeansDenoising(gray, denoised)
 
+    val illuminationNormalized = normalizeIlluminationForScan(
+      denoised,
+      34.0,
+    )
+
     val contrastEnhanced = Mat()
-    val clahe: CLAHE = Imgproc.createCLAHE(2.2, Size(8.0, 8.0))
-    clahe.apply(denoised, contrastEnhanced)
+    val clahe: CLAHE = Imgproc.createCLAHE(2.4, Size(8.0, 8.0))
+    clahe.apply(illuminationNormalized, contrastEnhanced)
 
     val edges = Mat()
     Imgproc.Laplacian(contrastEnhanced, edges, CvType.CV_8U, 3, 1.0, 0.0)
 
     val sharpened = Mat()
-    Core.addWeighted(contrastEnhanced, 1.18, edges, -0.22, 8.0, sharpened)
+    Core.addWeighted(contrastEnhanced, 1.22, edges, -0.18, 10.0, sharpened)
 
-    val normalized = Mat()
-    Core.normalize(sharpened, normalized, 0.0, 255.0, Core.NORM_MINMAX)
+    val lifted = Mat()
+    Core.convertScaleAbs(sharpened, lifted, 1.06, 18.0)
 
     denoised.release()
+    illuminationNormalized.release()
     contrastEnhanced.release()
     edges.release()
     sharpened.release()
 
-    return normalized
+    return lifted
   }
 
-  private fun buildBwScanMat(gray: Mat): Mat {
-    val blurred = Mat()
-    Imgproc.GaussianBlur(gray, blurred, Size(3.0, 3.0), 0.0)
+  private fun resolveBwScanParams(strength: BwScanStrength): BwScanParams {
+    return when (strength) {
+      BwScanStrength.WEAK -> BwScanParams(
+        illuminationSigma = 29.0,
+        adaptiveBlockSize = 41,
+        adaptiveC = 9.0,
+        minComponentAreaPx = 14,
+      )
+      BwScanStrength.STRONG -> BwScanParams(
+        illuminationSigma = 42.0,
+        adaptiveBlockSize = 63,
+        adaptiveC = 19.0,
+        minComponentAreaPx = 36,
+      )
+      BwScanStrength.MEDIUM -> BwScanParams(
+        illuminationSigma = 35.0,
+        adaptiveBlockSize = 51,
+        adaptiveC = 9.0,
+        minComponentAreaPx = 24,
+      )
+    }
+  }
+
+  private fun buildBwScanMat(gray: Mat, strength: BwScanStrength): Mat {
+    if (strength == BwScanStrength.WEAK) {
+      val weakResult = buildBwScanMatWeak(gray)
+      if (!isBwScanResultPlausible(weakResult)) {
+        weakResult.release()
+        return buildBwScanMat(gray, BwScanStrength.MEDIUM)
+      }
+      return weakResult
+    }
+
+    val params = resolveBwScanParams(strength)
+    val denoised = Mat()
+    Photo.fastNlMeansDenoising(gray, denoised)
+
+    val illuminationNormalized = normalizeIlluminationForScan(
+      denoised,
+      params.illuminationSigma,
+    )
+
+    val contrastEnhanced = Mat()
+    val clahe: CLAHE = Imgproc.createCLAHE(2.0, Size(8.0, 8.0))
+    clahe.apply(illuminationNormalized, contrastEnhanced)
 
     val binary = Mat()
     Imgproc.adaptiveThreshold(
-      blurred,
+      contrastEnhanced,
       binary,
       255.0,
       Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
       Imgproc.THRESH_BINARY,
-      35,
-      11.0,
+      params.adaptiveBlockSize,
+      params.adaptiveC,
     )
 
-    val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(2.0, 2.0))
-    val cleaned = Mat()
-    Imgproc.morphologyEx(binary, cleaned, Imgproc.MORPH_OPEN, kernel)
+    val median = Mat()
+    Imgproc.medianBlur(binary, median, 3)
 
-    blurred.release()
+    val openKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(2.0, 2.0))
+    val opened = Mat()
+    Imgproc.morphologyEx(median, opened, Imgproc.MORPH_OPEN, openKernel)
+
+    val closeKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(2.0, 2.0))
+    val closed = Mat()
+    Imgproc.morphologyEx(opened, closed, Imgproc.MORPH_CLOSE, closeKernel)
+
+    val cleaned = removeTinyDarkComponents(closed, params.minComponentAreaPx)
+    val normalizedBinary = Mat()
+    Imgproc.threshold(cleaned, normalizedBinary, 0.0, 255.0, Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU)
+    val output = if (strength == BwScanStrength.STRONG) {
+      normalizedBinary
+    } else {
+      val soft = composeSoftBwScanFromBinary(
+        textSourceGray = contrastEnhanced,
+        binary = normalizedBinary,
+        textAlpha = 1.3,
+        textBeta = -70.0,
+        maskDilateKernel = 2,
+        backgroundGray = 250.0,
+      )
+      normalizedBinary.release()
+      soft
+    }
+
+    denoised.release()
+    illuminationNormalized.release()
+    contrastEnhanced.release()
     binary.release()
-    kernel.release()
+    median.release()
+    openKernel.release()
+    opened.release()
+    closeKernel.release()
+    closed.release()
+    cleaned.release()
+
+    return output
+  }
+
+  private fun buildBwScanMatWeak(gray: Mat): Mat {
+    // Weak mode prioritizes legibility over aggressive whitening.
+    val denoised = Mat()
+    Photo.fastNlMeansDenoising(gray, denoised)
+
+    val illuminationNormalized = normalizeIlluminationForScan(
+      denoised,
+      24.0,
+    )
+
+    val contrastEnhanced = Mat()
+    val clahe: CLAHE = Imgproc.createCLAHE(1.5, Size(8.0, 8.0))
+    clahe.apply(illuminationNormalized, contrastEnhanced)
+
+    val globalBinary = Mat()
+    Imgproc.threshold(
+      contrastEnhanced,
+      globalBinary,
+      0.0,
+      255.0,
+      Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU,
+    )
+
+    val adaptiveBinary = Mat()
+    Imgproc.adaptiveThreshold(
+      contrastEnhanced,
+      adaptiveBinary,
+      255.0,
+      Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+      Imgproc.THRESH_BINARY,
+      35,
+      4.0,
+    )
+
+    val globalDark = Mat()
+    val adaptiveDark = Mat()
+    Core.bitwise_not(globalBinary, globalDark)
+    Core.bitwise_not(adaptiveBinary, adaptiveDark)
+
+    val mergedDark = Mat()
+    Core.bitwise_or(globalDark, adaptiveDark, mergedDark)
+
+    val mergedBinary = Mat()
+    Core.bitwise_not(mergedDark, mergedBinary)
+
+    val closeKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(2.0, 2.0))
+    val closed = Mat()
+    Imgproc.morphologyEx(mergedBinary, closed, Imgproc.MORPH_CLOSE, closeKernel)
+
+    val darkMask = Mat()
+    Core.bitwise_not(closed, darkMask)
+    val dilateKernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(2.0, 2.0))
+    val thickDarkMask = Mat()
+    Imgproc.dilate(darkMask, thickDarkMask, dilateKernel)
+    val thickBinary = Mat()
+    Core.bitwise_not(thickDarkMask, thickBinary)
+
+    val cleaned = removeTinyDarkComponents(thickBinary, 6)
+    val trimmed = removeLargeBorderDarkComponents(cleaned, 900, 0.028)
+    val softOutput = composeSoftBwScanFromBinary(
+      textSourceGray = contrastEnhanced,
+      binary = trimmed,
+      textAlpha = 1.26,
+      textBeta = -60.0,
+      maskDilateKernel = 2,
+      backgroundGray = 248.0,
+    )
+
+    denoised.release()
+    illuminationNormalized.release()
+    contrastEnhanced.release()
+    globalBinary.release()
+    adaptiveBinary.release()
+    globalDark.release()
+    adaptiveDark.release()
+    mergedDark.release()
+    mergedBinary.release()
+    closeKernel.release()
+    closed.release()
+    darkMask.release()
+    dilateKernel.release()
+    thickDarkMask.release()
+    thickBinary.release()
+    cleaned.release()
+    trimmed.release()
+
+    return softOutput
+  }
+
+  private fun normalizeIlluminationForScan(gray: Mat, sigma: Double): Mat {
+    val background = Mat()
+    Imgproc.GaussianBlur(gray, background, Size(0.0, 0.0), sigma)
+
+    val gray32 = Mat()
+    val background32 = Mat()
+    gray.convertTo(gray32, CvType.CV_32F)
+    background.convertTo(background32, CvType.CV_32F)
+    Core.add(background32, Scalar(1.0), background32)
+
+    val normalized32 = Mat()
+    Core.divide(gray32, background32, normalized32, 255.0)
+
+    val normalized = Mat()
+    normalized32.convertTo(normalized, CvType.CV_8U)
+
+    background.release()
+    gray32.release()
+    background32.release()
+    normalized32.release()
+
+    return normalized
+  }
+
+  private fun removeTinyDarkComponents(binary: Mat, minAreaPx: Int): Mat {
+    if (minAreaPx <= 1) {
+      return binary.clone()
+    }
+
+    val inverted = Mat()
+    Core.bitwise_not(binary, inverted)
+
+    val labels = Mat()
+    val stats = Mat()
+    val centroids = Mat()
+    val componentCount = Imgproc.connectedComponentsWithStats(
+      inverted,
+      labels,
+      stats,
+      centroids,
+      8,
+      CvType.CV_32S,
+    )
+
+    val keptComponents = Mat.zeros(inverted.size(), CvType.CV_8UC1)
+    val labelMask = Mat()
+    for (label in 1 until componentCount) {
+      val area = statValueAsInt(stats, label, Imgproc.CC_STAT_AREA, 0)
+      if (area >= minAreaPx) {
+        Core.compare(labels, Scalar(label.toDouble()), labelMask, Core.CMP_EQ)
+        keptComponents.setTo(Scalar(255.0), labelMask)
+      }
+    }
+
+    val cleaned = Mat()
+    Core.bitwise_not(keptComponents, cleaned)
+
+    inverted.release()
+    labels.release()
+    stats.release()
+    centroids.release()
+    keptComponents.release()
+    labelMask.release()
 
     return cleaned
   }
 
-  private fun enhanceWithBitmap(sourceBitmap: Bitmap, mode: EnhanceMode): Bitmap {
+  private fun removeLargeBorderDarkComponents(
+    binary: Mat,
+    minLargeAreaPx: Int,
+    maxAreaRatio: Double,
+  ): Mat {
+    val rows = binary.rows()
+    val cols = binary.cols()
+    if (rows <= 0 || cols <= 0) {
+      return binary.clone()
+    }
+
+    val totalPixels = rows * cols
+    val dynamicAreaThreshold = (totalPixels.toDouble() * maxAreaRatio).roundToInt()
+    val largeAreaThreshold = max(minLargeAreaPx, dynamicAreaThreshold)
+
+    val inverted = Mat()
+    Core.bitwise_not(binary, inverted)
+
+    val labels = Mat()
+    val stats = Mat()
+    val centroids = Mat()
+    val componentCount = Imgproc.connectedComponentsWithStats(
+      inverted,
+      labels,
+      stats,
+      centroids,
+      8,
+      CvType.CV_32S,
+    )
+
+    val keptComponents = Mat.zeros(inverted.size(), CvType.CV_8UC1)
+    val labelMask = Mat()
+    for (label in 1 until componentCount) {
+      val area = statValueAsInt(stats, label, Imgproc.CC_STAT_AREA, 0)
+      val left = statValueAsInt(stats, label, Imgproc.CC_STAT_LEFT, 0)
+      val top = statValueAsInt(stats, label, Imgproc.CC_STAT_TOP, 0)
+      val width = statValueAsInt(stats, label, Imgproc.CC_STAT_WIDTH, 0)
+      val height = statValueAsInt(stats, label, Imgproc.CC_STAT_HEIGHT, 0)
+      val right = left + width
+      val bottom = top + height
+      val touchesBorder =
+        left <= 1 || top <= 1 || right >= cols - 1 || bottom >= rows - 1
+      val isLarge = area >= largeAreaThreshold
+
+      if (!(touchesBorder && isLarge)) {
+        Core.compare(labels, Scalar(label.toDouble()), labelMask, Core.CMP_EQ)
+        keptComponents.setTo(Scalar(255.0), labelMask)
+      }
+    }
+
+    val cleaned = Mat()
+    Core.bitwise_not(keptComponents, cleaned)
+
+    inverted.release()
+    labels.release()
+    stats.release()
+    centroids.release()
+    keptComponents.release()
+    labelMask.release()
+
+    return cleaned
+  }
+
+  private fun isBwScanResultPlausible(binary: Mat): Boolean {
+    val darkRatio = computeDarkPixelRatio(binary)
+    val borderDarkRatio = computeBorderDarkRatio(binary)
+    val largestDarkComponentRatio = computeLargestDarkComponentRatio(binary)
+
+    if (darkRatio < 0.012 || darkRatio > 0.34) {
+      return false
+    }
+    if (largestDarkComponentRatio > 0.16) {
+      return false
+    }
+    if (borderDarkRatio > 0.34 && largestDarkComponentRatio > 0.045) {
+      return false
+    }
+    return true
+  }
+
+  private fun computeDarkPixelRatio(binary: Mat): Double {
+    val rows = binary.rows()
+    val cols = binary.cols()
+    if (rows <= 0 || cols <= 0) {
+      return 0.0
+    }
+
+    val total = rows.toLong() * cols.toLong()
+    if (total <= 0L) {
+      return 0.0
+    }
+    val whitePixels = Core.countNonZero(binary).toLong().coerceIn(0L, total)
+    val darkPixels = total - whitePixels
+    return darkPixels.toDouble() / total.toDouble()
+  }
+
+  private fun computeBorderDarkRatio(binary: Mat): Double {
+    val rows = binary.rows()
+    val cols = binary.cols()
+    if (rows <= 0 || cols <= 0) {
+      return 0.0
+    }
+
+    val band = max(1, min(rows, cols) / 30)
+    if (rows <= band * 2 || cols <= band * 2) {
+      return computeDarkPixelRatio(binary)
+    }
+
+    val total = rows.toLong() * cols.toLong()
+    val inner = binary.submat(band, rows - band, band, cols - band)
+    val innerTotal = inner.rows().toLong() * inner.cols().toLong()
+    val innerWhite = Core.countNonZero(inner).toLong().coerceIn(0L, innerTotal)
+    inner.release()
+
+    val totalWhite = Core.countNonZero(binary).toLong().coerceIn(0L, total)
+    val totalDark = total - totalWhite
+    val innerDark = innerTotal - innerWhite
+    val borderTotal = total - innerTotal
+    if (borderTotal <= 0L) {
+      return 0.0
+    }
+    val borderDark = (totalDark - innerDark).coerceAtLeast(0L)
+    return borderDark.toDouble() / borderTotal.toDouble()
+  }
+
+  private fun computeLargestDarkComponentRatio(binary: Mat): Double {
+    val rows = binary.rows()
+    val cols = binary.cols()
+    if (rows <= 0 || cols <= 0) {
+      return 0.0
+    }
+    val totalPixels = rows.toLong() * cols.toLong()
+    if (totalPixels <= 0L) {
+      return 0.0
+    }
+
+    val inverted = Mat()
+    Core.bitwise_not(binary, inverted)
+    val labels = Mat()
+    val stats = Mat()
+    val centroids = Mat()
+    val componentCount = Imgproc.connectedComponentsWithStats(
+      inverted,
+      labels,
+      stats,
+      centroids,
+      8,
+      CvType.CV_32S,
+    )
+
+    var largestArea = 0
+    for (label in 1 until componentCount) {
+      val area = statValueAsInt(stats, label, Imgproc.CC_STAT_AREA, 0)
+      if (area > largestArea) {
+        largestArea = area
+      }
+    }
+
+    inverted.release()
+    labels.release()
+    stats.release()
+    centroids.release()
+
+    return largestArea.toDouble() / totalPixels.toDouble()
+  }
+
+  private fun composeSoftBwScanFromBinary(
+    textSourceGray: Mat,
+    binary: Mat,
+    textAlpha: Double,
+    textBeta: Double,
+    maskDilateKernel: Int,
+    backgroundGray: Double,
+  ): Mat {
+    val textTone = Mat()
+    Core.convertScaleAbs(textSourceGray, textTone, textAlpha, textBeta)
+
+    val darkMask = Mat()
+    Core.bitwise_not(binary, darkMask)
+
+    val finalMask = if (maskDilateKernel > 1) {
+      val kernel = Imgproc.getStructuringElement(
+        Imgproc.MORPH_RECT,
+        Size(maskDilateKernel.toDouble(), maskDilateKernel.toDouble()),
+      )
+      val dilatedMask = Mat()
+      Imgproc.dilate(darkMask, dilatedMask, kernel)
+      kernel.release()
+      darkMask.release()
+      dilatedMask
+    } else {
+      darkMask
+    }
+
+    val output = Mat(binary.size(), CvType.CV_8UC1, Scalar(backgroundGray.coerceIn(236.0, 255.0)))
+    textTone.copyTo(output, finalMask)
+
+    textTone.release()
+    finalMask.release()
+    return output
+  }
+
+  private fun statValueAsInt(stats: Mat, row: Int, column: Int, fallback: Int): Int {
+    val raw = stats.get(row, column) ?: return fallback
+    if (raw.isEmpty()) {
+      return fallback
+    }
+    return raw[0].roundToInt()
+  }
+
+  private fun enhanceWithBitmap(
+    sourceBitmap: Bitmap,
+    mode: EnhanceMode,
+    bwScanStrength: BwScanStrength,
+  ): Bitmap {
     return when (mode) {
       EnhanceMode.CLEAR_PRINT -> enhanceBitmapClearPrint(sourceBitmap)
-      EnhanceMode.BW_SCAN -> enhanceBitmapBwScan(sourceBitmap)
+      EnhanceMode.BW_SCAN -> enhanceBitmapBwScan(sourceBitmap, bwScanStrength)
     }
   }
 
@@ -410,7 +903,7 @@ class QishuaPrintImageEnhanceModule(
     return output
   }
 
-  private fun enhanceBitmapBwScan(sourceBitmap: Bitmap): Bitmap {
+  private fun enhanceBitmapBwScan(sourceBitmap: Bitmap, strength: BwScanStrength): Bitmap {
     val width = sourceBitmap.width
     val height = sourceBitmap.height
     val pixelCount = width * height
@@ -426,7 +919,12 @@ class QishuaPrintImageEnhanceModule(
       luminance[index] = ((0.299 * r) + (0.587 * g) + (0.114 * b)).roundToInt().coerceIn(0, 255)
     }
 
-    val threshold = computeOtsuThreshold(luminance).coerceIn(75, 210)
+    val thresholdOffset = when (strength) {
+      BwScanStrength.WEAK -> -8
+      BwScanStrength.STRONG -> 12
+      BwScanStrength.MEDIUM -> 0
+    }
+    val threshold = (computeOtsuThreshold(luminance) + thresholdOffset).coerceIn(60, 220)
     val outputPixels = IntArray(pixelCount)
     for (index in 0 until pixelCount) {
       val value = if (luminance[index] >= threshold) 255 else 0
@@ -488,8 +986,13 @@ class QishuaPrintImageEnhanceModule(
   private fun writeBitmapToUri(
     bitmap: Bitmap,
     outputUriText: String,
+    mode: EnhanceMode,
     jpegQualityPercent: Int,
   ) {
+    val usePng = mode == EnhanceMode.BW_SCAN
+    val compressFormat = if (usePng) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+    val compressQuality = if (usePng) 100 else jpegQualityPercent
+
     val outputUri = Uri.parse(outputUriText)
     when (outputUri.scheme?.lowercase()) {
       "file", null -> {
@@ -497,7 +1000,7 @@ class QishuaPrintImageEnhanceModule(
         val outputFile = File(path)
         outputFile.parentFile?.mkdirs()
         FileOutputStream(outputFile).use { stream ->
-          if (!bitmap.compress(Bitmap.CompressFormat.JPEG, jpegQualityPercent, stream)) {
+          if (!bitmap.compress(compressFormat, compressQuality, stream)) {
             throw IllegalStateException("Failed to compress output bitmap.")
           }
           stream.flush()
@@ -509,7 +1012,7 @@ class QishuaPrintImageEnhanceModule(
           if (stream == null) {
             throw IllegalStateException("Cannot open output stream: $outputUriText")
           }
-          if (!bitmap.compress(Bitmap.CompressFormat.JPEG, jpegQualityPercent, stream)) {
+          if (!bitmap.compress(compressFormat, compressQuality, stream)) {
             throw IllegalStateException("Failed to compress output bitmap.")
           }
           stream.flush()

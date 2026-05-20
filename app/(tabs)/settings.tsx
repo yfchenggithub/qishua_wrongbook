@@ -30,7 +30,11 @@ import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsSt
 import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
-import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
+import {
+  DEFAULT_BW_SCAN_STRENGTH,
+  type PrintEnhanceBwScanStrength,
+  type PrintEnhanceMode,
+} from '@/src/utils/image/printEnhanceConfig';
 
 const PAGE_SCOPE = 'SettingsScreen';
 const VERSION_VALUE = '0.1.0';
@@ -65,6 +69,12 @@ type ExportImageModeOption = {
   recommended?: boolean;
 };
 
+type BwScanStrengthOption = {
+  value: PrintEnhanceBwScanStrength;
+  title: string;
+  description: string;
+};
+
 const DEFAULT_DATA_OVERVIEW_STATS: SettingsStats = {
   totalMistakes: 0,
   dueToday: 0,
@@ -86,6 +96,7 @@ const DEFAULT_REMINDER_SETTINGS: ReviewReminderSettings = {
 };
 
 const DEFAULT_EXPORT_IMAGE_MODE: PrintEnhanceMode = 'clear_print';
+const DEFAULT_EXPORT_BW_SCAN_STRENGTH: PrintEnhanceBwScanStrength = DEFAULT_BW_SCAN_STRENGTH;
 
 const EXPORT_IMAGE_MODE_OPTIONS: ExportImageModeOption[] = [
   {
@@ -103,6 +114,24 @@ const EXPORT_IMAGE_MODE_OPTIONS: ExportImageModeOption[] = [
     mode: 'bw_scan',
     title: '黑白扫描，省墨',
     description: '生成接近扫描件的白底黑字效果，适合纯文字题目，可能损失浅色细节。',
+  },
+];
+
+const BW_SCAN_STRENGTH_OPTIONS: BwScanStrengthOption[] = [
+  {
+    value: 'weak',
+    title: '弱',
+    description: '保留更多浅色细节，白底力度较柔和',
+  },
+  {
+    value: 'medium',
+    title: '中',
+    description: '白底与细节平衡，适合大多数题目',
+  },
+  {
+    value: 'strong',
+    title: '强',
+    description: '更接近扫描件白底黑字，浅色细节损失更多',
   },
 ];
 
@@ -339,6 +368,8 @@ export default function SettingsScreen() {
   const [worksheetExportStage, setWorksheetExportStage] =
     useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
   const [exportImageMode, setExportImageMode] = useState<PrintEnhanceMode>(DEFAULT_EXPORT_IMAGE_MODE);
+  const [exportBwScanStrength, setExportBwScanStrength] =
+    useState<PrintEnhanceBwScanStrength>(DEFAULT_EXPORT_BW_SCAN_STRENGTH);
   const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
   const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -483,7 +514,9 @@ export default function SettingsScreen() {
     try {
       const mode = await ExportImageModeService.loadExportImageMode();
       setExportImageMode(mode);
-      Logger.info(PAGE_SCOPE, 'Loaded export image mode successfully.', { mode });
+      Logger.info(PAGE_SCOPE, 'Loaded export image mode successfully.', {
+        mode,
+      });
     } catch (error) {
       Logger.warn(PAGE_SCOPE, 'Failed to load export image mode, fallback to default.', { error });
       setExportImageMode(DEFAULT_EXPORT_IMAGE_MODE);
@@ -1015,6 +1048,56 @@ export default function SettingsScreen() {
     ],
   );
 
+  const handleSelectBwScanStrength = useCallback(
+    async (nextStrength: PrintEnhanceBwScanStrength) => {
+      if (isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving || exportImageMode !== 'bw_scan') {
+        return;
+      }
+
+      if (nextStrength === exportBwScanStrength) {
+        return;
+      }
+
+      setIsExportImageModeSaving(true);
+      Logger.info(PAGE_SCOPE, 'Start saving bw_scan strength.', {
+        mode: exportImageMode,
+        previousBwScanStrength: exportBwScanStrength,
+        nextBwScanStrength: nextStrength,
+      });
+      try {
+        const savedSettings = await ExportImageModeService.saveExportImageSettings(
+          exportImageMode,
+          nextStrength,
+        );
+        setExportImageMode(savedSettings.mode);
+        setExportBwScanStrength(savedSettings.bwScanStrength);
+        Logger.info(PAGE_SCOPE, 'Saved bw_scan strength successfully.', {
+          mode: savedSettings.mode,
+          bwScanStrength: savedSettings.bwScanStrength,
+        });
+        showToast('黑白扫描强度已更新', 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to save bw_scan strength.', {
+          mode: exportImageMode,
+          previousBwScanStrength: exportBwScanStrength,
+          nextBwScanStrength: nextStrength,
+          error,
+        });
+        showToast('黑白扫描强度保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
+      } finally {
+        setIsExportImageModeSaving(false);
+      }
+    },
+    [
+      exportBwScanStrength,
+      exportImageMode,
+      isExportImageModeLoading,
+      isExportImageModeSaving,
+      isExportingWorksheet,
+      showToast,
+    ],
+  );
+
   const handleExportTodayWorksheet = useCallback(async () => {
     if (isExportingWorksheet) {
       return;
@@ -1036,12 +1119,14 @@ export default function SettingsScreen() {
       Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_start', {
         dueToday,
         printEnhanceMode: exportImageMode,
+        printEnhanceBwScanStrength: exportBwScanStrength,
       });
 
       try {
         const result = await TodayWorksheetExportService.exportTodayWorksheet({
           expectedPendingCount: dueToday,
           printEnhanceMode: exportImageMode,
+          printEnhanceBwScanStrength: exportBwScanStrength,
           onProgress: (progress) => {
             setWorksheetExportStage(progress.stage);
           },
@@ -1115,11 +1200,13 @@ export default function SettingsScreen() {
     Logger.info(PAGE_SCOPE, 'Start exporting today worksheet from settings.', {
       dueToday: dataOverview.dueToday,
       printEnhanceMode: exportImageMode,
+      printEnhanceBwScanStrength: exportBwScanStrength,
     });
     try {
       const result = await TodayWorksheetExportService.exportTodayWorksheet({
         expectedPendingCount: dataOverview.dueToday,
         printEnhanceMode: exportImageMode,
+        printEnhanceBwScanStrength: exportBwScanStrength,
         onProgress: (progress) => {
           setWorksheetExportStage(progress.stage);
         },
@@ -1170,7 +1257,7 @@ export default function SettingsScreen() {
       setIsExportingWorksheet(false);
       setWorksheetExportStage(null);
     }
-  }, [dataOverview.dueToday, exportImageMode, isExportingWorksheet, router, showToast]);
+  }, [dataOverview.dueToday, exportBwScanStrength, exportImageMode, isExportingWorksheet, router, showToast]);
 
   const handleToggleReminder = useCallback(
     async (nextValue: boolean) => {
@@ -1352,6 +1439,12 @@ export default function SettingsScreen() {
       EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)
       ?? EXPORT_IMAGE_MODE_OPTIONS[1],
     [exportImageMode],
+  );
+  const selectedBwScanStrengthOption = useMemo(
+    () =>
+      BW_SCAN_STRENGTH_OPTIONS.find((item) => item.value === exportBwScanStrength)
+      ?? BW_SCAN_STRENGTH_OPTIONS[1],
+    [exportBwScanStrength],
   );
   const exportImageModeStatusText = isExportImageModeLoading
     ? '正在读取导出图片模式...'
@@ -1685,7 +1778,7 @@ export default function SettingsScreen() {
               <View style={styles.exportModeSection}>
                 <Text style={styles.metaText}>导出图片模式</Text>
                 <View style={styles.exportModeList}>
-                  {EXPORT_IMAGE_MODE_OPTIONS.map((option) => {
+                  {EXPORT_IMAGE_MODE_OPTIONS.filter((option) => option.mode !== 'bw_scan').map((option) => {
                     const isSelected = option.mode === exportImageMode;
                     return (
                       <Pressable
@@ -1732,6 +1825,40 @@ export default function SettingsScreen() {
                     );
                   })}
                 </View>
+                {/*
+                  <View style={styles.bwScanStrengthSection}>
+                    <Text style={styles.metaText}>黑白扫描强度</Text>
+                    <View style={[styles.bwScanStrengthTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
+                      {BW_SCAN_STRENGTH_OPTIONS.map((option) => {
+                        const isSelected = option.value === exportBwScanStrength;
+                        return (
+                          <Pressable
+                            key={option.value}
+                            accessibilityRole="button"
+                            disabled={isExportImageModeBusy}
+                            onPress={() => {
+                              void handleSelectBwScanStrength(option.value);
+                            }}
+                            style={[
+                              styles.bwScanStrengthStop,
+                              isSelected ? styles.bwScanStrengthStopSelected : null,
+                            ]}>
+                            <Text
+                              style={[
+                                styles.bwScanStrengthStopText,
+                                isSelected ? styles.bwScanStrengthStopTextSelected : null,
+                              ]}>
+                              {option.title}
+                            </Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <Text style={styles.bwScanStrengthDescription}>
+                      {selectedBwScanStrengthOption.description}
+                    </Text>
+                  </View>
+                */}
                 <Text style={styles.metaText}>{exportImageModeStatusText}</Text>
               </View>
               <Pressable
@@ -2236,6 +2363,47 @@ const styles = StyleSheet.create({
   },
   exportModeDescriptionSelected: {
     color: '#875321',
+  },
+  bwScanStrengthSection: {
+    marginTop: spacing.xs,
+    gap: spacing.xs,
+  },
+  bwScanStrengthTrack: {
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#E9DAC3',
+    backgroundColor: '#FFFDF9',
+    padding: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  bwScanStrengthStop: {
+    flex: 1,
+    minHeight: 34,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+  },
+  bwScanStrengthStopSelected: {
+    borderColor: '#D1A15D',
+    backgroundColor: '#FFF6E8',
+  },
+  bwScanStrengthStopText: {
+    ...typography.caption,
+    color: '#6D5A45',
+    fontWeight: '700',
+  },
+  bwScanStrengthStopTextSelected: {
+    color: '#A86A12',
+  },
+  bwScanStrengthDescription: {
+    ...typography.caption,
+    color: '#6D5A45',
+    lineHeight: 18,
   },
   backupHintRow: {
     marginTop: spacing.xs,

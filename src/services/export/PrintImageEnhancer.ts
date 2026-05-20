@@ -6,7 +6,9 @@ import { Logger } from '@/src/services/Logger';
 import {
   CLEAR_PRINT_ENHANCE_CONFIG,
   PRINT_ENHANCE_TEMP_DIR_PARTS,
+  toActiveBwScanStrength,
   toActivePrintEnhanceMode,
+  type PrintEnhanceBwScanStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
 
@@ -23,10 +25,13 @@ export type PrintEnhanceEngine =
   | 'bitmap_fallback'
   | 'original_fallback';
 
+export type PrintEnhanceOutputFormat = 'jpeg' | 'png';
+
 export type PrintEnhanceResult = {
   success: boolean;
   outputUri: string;
   engine: PrintEnhanceEngine;
+  outputFormat: PrintEnhanceOutputFormat;
   usedFallback: boolean;
   durationMs: number;
 };
@@ -42,6 +47,7 @@ type ProviderSuccessResult = {
   success: true;
   provider: ProviderName;
   outputUri: string;
+  outputFormat: PrintEnhanceOutputFormat;
   outputSize: ImageSize | null;
   outputFileSize: number | null;
   durationMs: number;
@@ -60,6 +66,7 @@ type ProviderResult = ProviderSuccessResult | ProviderFailedResult;
 type OpenCvNativeEnhanceResponse = {
   success?: boolean;
   outputUri?: string;
+  outputFormat?: string;
   error?: string;
 };
 
@@ -67,6 +74,7 @@ type OpenCvNativeEnhanceRequest = {
   sourceUri: string;
   outputUri: string;
   mode: Exclude<PrintEnhanceMode, 'original'>;
+  bwScanStrength: PrintEnhanceBwScanStrength;
   maxLongEdgePx: number;
   jpegQuality: number;
 };
@@ -162,10 +170,52 @@ function ensureTempDirectory(): Directory {
   return tempDirectory;
 }
 
-function createUniqueTempFile(tempDirectory: Directory): File {
+function getPreferredOutputFormat(
+  mode: Exclude<PrintEnhanceMode, 'original'>,
+): PrintEnhanceOutputFormat {
+  return mode === 'bw_scan' ? 'png' : 'jpeg';
+}
+
+function getExtensionByOutputFormat(format: PrintEnhanceOutputFormat): string {
+  return format === 'png' ? 'png' : 'jpg';
+}
+
+function inferOutputFormatFromUri(uri: string | null | undefined): PrintEnhanceOutputFormat | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+  const normalized = uri.trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.endsWith('.png')) {
+    return 'png';
+  }
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) {
+    return 'jpeg';
+  }
+  return null;
+}
+
+function normalizeOutputFormat(value: unknown): PrintEnhanceOutputFormat | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'png') {
+    return 'png';
+  }
+  if (normalized === 'jpeg' || normalized === 'jpg') {
+    return 'jpeg';
+  }
+  return null;
+}
+
+function createUniqueTempFile(tempDirectory: Directory, extension: string): File {
   const timestamp = Date.now();
+  const normalizedExt = extension.trim().replace(/^\./, '') || 'jpg';
   for (let index = 0; index < MAX_TEMP_NAME_ATTEMPTS; index += 1) {
-    const candidateName = `print_${timestamp}_${index}.jpg`;
+    const candidateName = `print_${timestamp}_${index}.${normalizedExt}`;
     const candidate = new File(tempDirectory, candidateName);
     if (!candidate.exists) {
       return candidate;
@@ -173,7 +223,7 @@ function createUniqueTempFile(tempDirectory: Directory): File {
   }
   return new File(
     tempDirectory,
-    `print_${timestamp}_${Math.floor(Math.random() * 100_000)}.jpg`,
+    `print_${timestamp}_${Math.floor(Math.random() * 100_000)}.${normalizedExt}`,
   );
 }
 
@@ -212,8 +262,10 @@ function resolveNativeEnhanceModule(): OpenCvNativeEnhanceModule | null {
 async function runOpenCvEnhanceProvider(
   sourceUri: string,
   mode: Exclude<PrintEnhanceMode, 'original'>,
+  bwScanStrength: PrintEnhanceBwScanStrength,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
+  const preferredOutputFormat = getPreferredOutputFormat(mode);
 
   if (Platform.OS !== 'android') {
     return {
@@ -235,7 +287,10 @@ async function runOpenCvEnhanceProvider(
   }
 
   const tempDirectory = ensureTempDirectory();
-  const tempOutputFile = createUniqueTempFile(tempDirectory);
+  const tempOutputFile = createUniqueTempFile(
+    tempDirectory,
+    getExtensionByOutputFormat(preferredOutputFormat),
+  );
   if (tempOutputFile.exists) {
     tempOutputFile.delete();
   }
@@ -245,6 +300,7 @@ async function runOpenCvEnhanceProvider(
       sourceUri,
       outputUri: tempOutputFile.uri,
       mode,
+      bwScanStrength,
       maxLongEdgePx: CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx,
       jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
     });
@@ -287,6 +343,10 @@ async function runOpenCvEnhanceProvider(
       success: true,
       provider: 'opencv',
       outputUri: resolvedOutputUri,
+      outputFormat:
+        normalizeOutputFormat(response?.outputFormat)
+        ?? inferOutputFormatFromUri(resolvedOutputUri)
+        ?? preferredOutputFormat,
       outputSize,
       outputFileSize: safeReadFileSize(resolvedOutputUri),
       durationMs: Date.now() - startedAt,
@@ -306,8 +366,10 @@ async function runOpenCvEnhanceProvider(
 async function runBitmapFallbackEnhanceProvider(
   sourceUri: string,
   mode: Exclude<PrintEnhanceMode, 'original'>,
+  bwScanStrength: PrintEnhanceBwScanStrength,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
+  const preferredOutputFormat = getPreferredOutputFormat(mode);
   if (Platform.OS === 'android') {
     const nativeModule = resolveNativeEnhanceModule();
     if (!nativeModule || typeof nativeModule.enhanceForPdfPrintBitmap !== 'function') {
@@ -320,7 +382,10 @@ async function runBitmapFallbackEnhanceProvider(
     }
 
     const tempDirectory = ensureTempDirectory();
-    const tempOutputFile = createUniqueTempFile(tempDirectory);
+    const tempOutputFile = createUniqueTempFile(
+      tempDirectory,
+      getExtensionByOutputFormat(preferredOutputFormat),
+    );
     if (tempOutputFile.exists) {
       tempOutputFile.delete();
     }
@@ -330,6 +395,7 @@ async function runBitmapFallbackEnhanceProvider(
         sourceUri,
         outputUri: tempOutputFile.uri,
         mode,
+        bwScanStrength,
         maxLongEdgePx: CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx,
         jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
       });
@@ -372,6 +438,10 @@ async function runBitmapFallbackEnhanceProvider(
         success: true,
         provider: 'bitmap_fallback',
         outputUri: resolvedOutputUri,
+        outputFormat:
+          normalizeOutputFormat(response?.outputFormat)
+          ?? inferOutputFormatFromUri(resolvedOutputUri)
+          ?? preferredOutputFormat,
         outputSize,
         outputFileSize: safeReadFileSize(resolvedOutputUri),
         durationMs: Date.now() - startedAt,
@@ -407,8 +477,8 @@ async function runBitmapFallbackEnhanceProvider(
       : null;
 
     const manipulated = await manipulateAsync(sourceUri, resize ? [{ resize }] : [], {
-      compress: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
-      format: SaveFormat.JPEG,
+      compress: mode === 'bw_scan' ? 1 : CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
+      format: mode === 'bw_scan' ? SaveFormat.PNG : SaveFormat.JPEG,
       base64: false,
     });
     const manipulatedUri = normalizeRequiredUri(manipulated.uri);
@@ -420,7 +490,10 @@ async function runBitmapFallbackEnhanceProvider(
     });
 
     const tempDirectory = ensureTempDirectory();
-    const tempOutputFile = createUniqueTempFile(tempDirectory);
+    const tempOutputFile = createUniqueTempFile(
+      tempDirectory,
+      getExtensionByOutputFormat(preferredOutputFormat),
+    );
     if (tempOutputFile.exists) {
       tempOutputFile.delete();
     }
@@ -430,6 +503,7 @@ async function runBitmapFallbackEnhanceProvider(
       success: true,
       provider: 'bitmap_fallback',
       outputUri: tempOutputFile.uri,
+      outputFormat: inferOutputFormatFromUri(tempOutputFile.uri) ?? preferredOutputFormat,
       outputSize,
       outputFileSize: safeReadFileSize(tempOutputFile.uri),
       durationMs: Date.now() - startedAt,
@@ -452,16 +526,20 @@ async function runBitmapFallbackEnhanceProvider(
 export async function enhanceImageForPdfPrint(
   sourceUriInput: string,
   modeInput?: PrintEnhanceMode,
+  bwScanStrengthInput?: PrintEnhanceBwScanStrength,
 ): Promise<PrintEnhanceResult> {
   const startedAt = Date.now();
   const sourceUri = normalizeRequiredUri(sourceUriInput);
   const mode = toActivePrintEnhanceMode(modeInput);
+  const bwScanStrength = toActiveBwScanStrength(bwScanStrengthInput);
 
   if (mode === 'original') {
+    const outputFormat = inferOutputFormatFromUri(sourceUri) ?? 'jpeg';
     return {
       success: true,
       outputUri: sourceUri,
       engine: 'original',
+      outputFormat,
       usedFallback: false,
       durationMs: Date.now() - startedAt,
     };
@@ -485,18 +563,21 @@ export async function enhanceImageForPdfPrint(
 
     Logger.info(SERVICE_SCOPE, 'print_image_enhance_start', {
       mode,
+      bwScanStrength,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
       originalFileSize,
     });
 
-    const openCvResult = await runOpenCvEnhanceProvider(sourceUri, mode);
+    const openCvResult = await runOpenCvEnhanceProvider(sourceUri, mode, bwScanStrength);
     if (openCvResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
         mode,
+        bwScanStrength,
         engine: 'opencv',
+        outputFormat: openCvResult.outputFormat,
         sourceUriPreview: toShortUri(sourceUri),
         outputUriPreview: toShortUri(openCvResult.outputUri),
         originalWidth: originalSize?.width ?? null,
@@ -517,6 +598,7 @@ export async function enhanceImageForPdfPrint(
         success: true,
         outputUri: openCvResult.outputUri,
         engine: 'opencv',
+        outputFormat: openCvResult.outputFormat,
         usedFallback: false,
         durationMs,
       };
@@ -533,12 +615,18 @@ export async function enhanceImageForPdfPrint(
             : undefined,
     });
 
-    const bitmapFallbackResult = await runBitmapFallbackEnhanceProvider(sourceUri, mode);
+    const bitmapFallbackResult = await runBitmapFallbackEnhanceProvider(
+      sourceUri,
+      mode,
+      bwScanStrength,
+    );
     if (bitmapFallbackResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
         mode,
+        bwScanStrength,
         engine: 'bitmap_fallback',
+        outputFormat: bitmapFallbackResult.outputFormat,
         sourceUriPreview: toShortUri(sourceUri),
         outputUriPreview: toShortUri(bitmapFallbackResult.outputUri),
         originalWidth: originalSize?.width ?? null,
@@ -559,6 +647,7 @@ export async function enhanceImageForPdfPrint(
         success: true,
         outputUri: bitmapFallbackResult.outputUri,
         engine: 'bitmap_fallback',
+        outputFormat: bitmapFallbackResult.outputFormat,
         usedFallback: true,
         durationMs,
       };
@@ -578,6 +667,7 @@ export async function enhanceImageForPdfPrint(
     const durationMs = Date.now() - startedAt;
     Logger.warn(SERVICE_SCOPE, 'print_image_enhance_failed_fallback_original', {
       mode,
+      bwScanStrength,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
@@ -590,6 +680,7 @@ export async function enhanceImageForPdfPrint(
       success: false,
       outputUri: sourceUri,
       engine: 'original_fallback',
+      outputFormat: inferOutputFormatFromUri(sourceUri) ?? 'jpeg',
       usedFallback: true,
       durationMs,
     };
@@ -597,6 +688,7 @@ export async function enhanceImageForPdfPrint(
     const durationMs = Date.now() - startedAt;
     Logger.warn(SERVICE_SCOPE, 'print_image_enhance_failed_fallback_original', {
       mode,
+      bwScanStrength,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
@@ -610,6 +702,7 @@ export async function enhanceImageForPdfPrint(
       success: false,
       outputUri: sourceUri,
       engine: 'original_fallback',
+      outputFormat: inferOutputFormatFromUri(sourceUri) ?? 'jpeg',
       usedFallback: true,
       durationMs,
     };
