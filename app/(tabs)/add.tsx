@@ -436,9 +436,9 @@ function QuestionPhotoQueueCard({
           </ScrollView>
         ) : (
           <View style={styles.capturePlaceholder}>
-            <View style={styles.cameraBody}>
+            {/* <View style={styles.cameraBody}>
               <View style={styles.cameraLens} />
-            </View>
+            </View> */}
             <Text maxFontSizeMultiplier={1.1} style={styles.capturePlaceholderText}>
               暂无题目照片
             </Text>
