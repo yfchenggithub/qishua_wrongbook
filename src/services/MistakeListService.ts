@@ -285,11 +285,11 @@ export async function getMistakeListItems(filter: MistakeListFilter): Promise<Mi
     });
     const options = buildListQueryOptions(filter);
     const mistakes = await MistakeRepository.listMistakes(options);
-    const listItems = await Promise.all(
-      mistakes.map(async (mistake) => {
-        const coverImage = await MistakeImageRepository.getCoverImageForMistake(mistake.id);
-        return mapMistakeToListItem(mistake, coverImage?.uri ?? null);
-      }),
+    const coverMap = await MistakeImageRepository.getCoverImagesForMistakes(
+      mistakes.map((mistake) => mistake.id),
+    );
+    const listItems = mistakes.map((mistake) =>
+      mapMistakeToListItem(mistake, coverMap.get(mistake.id)?.uri ?? null),
     );
     Logger.info(SERVICE_SCOPE, 'Loaded mistake list items successfully.', {
       segment: filter.segment,

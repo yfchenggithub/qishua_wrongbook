@@ -122,6 +122,20 @@ function normalizeSortOrder(value: number | undefined, fallbackOrder: number): n
   return normalized;
 }
 
+function normalizeMistakeIdsForBatch(mistakeIds: string[]): string[] {
+  if (!Array.isArray(mistakeIds)) {
+    throw new Error('mistakeIds must be an array.');
+  }
+
+  const dedupedIds = new Set<string>();
+  for (const mistakeId of mistakeIds) {
+    const normalizedMistakeId = normalizeRequiredText(mistakeId, 'mistakeId');
+    dedupedIds.add(normalizedMistakeId);
+  }
+
+  return Array.from(dedupedIds);
+}
+
 function normalizeLimit(value?: number): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -359,6 +373,59 @@ LIMIT 1;`,
       return null;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'getCoverImageForMistake failed.', { mistakeId, error });
+      throw error;
+    }
+  },
+
+  async getCoverImagesForMistakes(mistakeIds: string[]): Promise<Map<string, MistakeImage>> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedMistakeIds = normalizeMistakeIdsForBatch(mistakeIds);
+      if (normalizedMistakeIds.length <= 0) {
+        return new Map();
+      }
+
+      const placeholders = normalizedMistakeIds.map(() => '?').join(', ');
+      const rows = await db.getAllAsync<MistakeImage>(
+        `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+WHERE id IN (
+  SELECT id
+  FROM (
+    SELECT
+      id,
+      ROW_NUMBER() OVER (
+        PARTITION BY mistake_id
+        ORDER BY
+          CASE type
+            WHEN 'question' THEN 0
+            WHEN 'my_solution' THEN 1
+            ELSE 2
+          END ASC,
+          sort_order ASC,
+          created_at ASC,
+          id ASC
+      ) AS row_no
+    FROM mistake_images
+    WHERE mistake_id IN (${placeholders})
+      AND type IN ('question', 'my_solution')
+  )
+  WHERE row_no = 1
+);`,
+        ...normalizedMistakeIds,
+      );
+
+      const coverMap = new Map<string, MistakeImage>();
+      for (const row of rows) {
+        const mappedRow = mapMistakeImageRow(row);
+        coverMap.set(mappedRow.mistake_id, mappedRow);
+      }
+      return coverMap;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'getCoverImagesForMistakes failed.', {
+        mistakeIds,
+        error,
+      });
       throw error;
     }
   },
