@@ -1,9 +1,10 @@
-﻿import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+﻿import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Animated,
+  BackHandler,
   Image,
   Linking,
   Pressable,
@@ -32,10 +33,13 @@ import type {
   DetailReviewRecordItem,
   MistakeDetailViewModel,
 } from '@/src/models/MistakeDetailViewModel';
+import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
+import * as ReviewRecordVoiceService from '@/src/services/ReviewRecordVoiceService';
+import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { formatDateShort } from '@/src/utils/date';
@@ -48,8 +52,12 @@ const BRAND = {
 
 const PAGE_SCOPE = 'MistakeDetailScreen';
 const TOAST_DURATION_DEFAULT = 2000;
+const TOAST_DURATION_LONG = 3200;
+const TOAST_DURATION_SHORT = 1400;
 const TITLE_DOUBLE_TAP_WINDOW_MS = 280;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
+const VOICE_RECORDING_MIN_DURATION_MS = 3000;
+const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
 const VOICE_FILE_MISSING_MESSAGE = '语音文件不存在，可能已被删除或未恢复';
 
 type ToastType = 'success' | 'info' | 'error';
@@ -146,6 +154,21 @@ function formatDurationMs(durationMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${pad2(minutes)}:${pad2(seconds)}`;
+}
+
+function toReviewRecordVoiceNote(value: VoiceNoteEntity | null): ReviewRecordVoiceNote | null {
+  if (!value) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    fileUri: value.fileUri,
+    fileName: value.fileName,
+    durationMs: value.durationMs,
+    sizeBytes: value.sizeBytes,
+    createdAt: value.createdAt,
+  };
 }
 
 function normalizePreviewUri(uri: string | null | undefined): string | null {
@@ -269,19 +292,31 @@ function ReviewRecordCard({
   isBusy = false,
   isVoicePlaying = false,
   isVoiceBusy = false,
+  isVoicePlaybackLocked = false,
+  isVoiceRecording = false,
+  recordingElapsedMs = 0,
+  isVoiceLocked = false,
   onAddImage,
   onPreview,
   onOpenImageActions,
   onToggleVoicePlayback,
+  onStartVoiceRecording,
+  onStopAndSaveVoiceRecording,
 }: {
   record: DetailReviewRecordItem;
   isBusy?: boolean;
   isVoicePlaying?: boolean;
   isVoiceBusy?: boolean;
+  isVoicePlaybackLocked?: boolean;
+  isVoiceRecording?: boolean;
+  recordingElapsedMs?: number;
+  isVoiceLocked?: boolean;
   onAddImage?: (record: DetailReviewRecordItem) => void;
   onPreview?: (uri: string, title: string) => void;
   onOpenImageActions?: (record: DetailReviewRecordItem) => void;
   onToggleVoicePlayback?: (record: DetailReviewRecordItem) => void;
+  onStartVoiceRecording?: (record: DetailReviewRecordItem) => void;
+  onStopAndSaveVoiceRecording?: (record: DetailReviewRecordItem) => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => {
@@ -294,6 +329,8 @@ function ReviewRecordCard({
   const canShowImage = hasImage && imageExists && !imageFailed;
   const previewTitle = getReviewPreviewTitle(record);
   const voiceNote = record.voiceNote ?? null;
+  const voiceAddDisabled = isVoiceBusy || isVoiceLocked;
+  const voiceAddButtonText = isVoiceLocked ? '其他录音中' : isVoiceBusy ? '处理中...' : '补充语音';
 
   return (
     <View style={styles.reviewRecordRow}>
@@ -309,13 +346,13 @@ function ReviewRecordCard({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={isVoicePlaying ? '停止语音讲解' : '播放语音讲解'}
-              disabled={isVoiceBusy}
+              disabled={isVoiceBusy || isVoicePlaybackLocked}
               onPress={() => {
                 onToggleVoicePlayback?.(record);
               }}
               style={({ pressed }) => [
                 styles.reviewRecordVoiceButton,
-                isVoiceBusy && styles.reviewRecordVoiceButtonDisabled,
+                (isVoiceBusy || isVoicePlaybackLocked) && styles.reviewRecordVoiceButtonDisabled,
                 pressed && styles.previewTapPressed,
               ]}>
               <MaterialIcons
@@ -326,7 +363,49 @@ function ReviewRecordCard({
               <Text style={styles.reviewRecordVoiceButtonText}>{isVoicePlaying ? '停止' : '播放'}</Text>
             </Pressable>
           </View>
-        ) : null}
+        ) : (
+          <View style={styles.reviewRecordVoiceRow}>
+            <Text style={styles.reviewRecordVoiceText}>
+              {isVoiceRecording ? `正在录音 ${formatDurationMs(recordingElapsedMs)}` : '未添加语音讲解'}
+            </Text>
+            {isVoiceRecording ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="停止并保存语音讲解"
+                disabled={isVoiceBusy}
+                onPress={() => {
+                  onStopAndSaveVoiceRecording?.(record);
+                }}
+                style={({ pressed }) => [
+                  styles.reviewRecordVoiceButton,
+                  styles.reviewRecordVoiceButtonDanger,
+                  isVoiceBusy && styles.reviewRecordVoiceButtonDisabled,
+                  pressed && styles.previewTapPressed,
+                ]}>
+                <MaterialIcons name="stop-circle" size={16} color={colors.white} />
+                <Text style={styles.reviewRecordVoiceButtonTextLight}>
+                  {isVoiceBusy ? '保存中...' : '停止并保存'}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="补充语音讲解"
+                disabled={voiceAddDisabled}
+                onPress={() => {
+                  onStartVoiceRecording?.(record);
+                }}
+                style={({ pressed }) => [
+                  styles.reviewRecordVoiceButton,
+                  voiceAddDisabled && styles.reviewRecordVoiceButtonDisabled,
+                  pressed && styles.previewTapPressed,
+                ]}>
+                <MaterialIcons name="keyboard-voice" size={16} color={colors.textPrimary} />
+                <Text style={styles.reviewRecordVoiceButtonText}>{voiceAddButtonText}</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
       </View>
 
       {canShowImage ? (
@@ -438,6 +517,7 @@ function StateCard({
 
 export default function MistakeDetailScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id?: string | string[] }>();
   const routeId = useMemo(() => normalizeRouteId(id), [id]);
@@ -454,19 +534,25 @@ export default function MistakeDetailScreen() {
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
   const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
   const [isVoicePlaybackBusy, setIsVoicePlaybackBusy] = useState(false);
+  const [activeVoiceRecordingRecordId, setActiveVoiceRecordingRecordId] = useState<string | null>(null);
+  const [isVoiceRecordingBusy, setIsVoiceRecordingBusy] = useState(false);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  const voiceStopInProgressRef = useRef(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const allowNextLeaveRef = useRef(false);
   const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
 
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
-  const handleBack = useCallback(() => {
+  const navigateBack = useCallback(() => {
     if (typeof router.canGoBack === 'function' && router.canGoBack()) {
       router.back();
       return;
@@ -554,6 +640,75 @@ export default function MistakeDetailScreen() {
     },
     [clearVoicePlaybackResetTimer, showToast],
   );
+
+  const clearVoiceRecordingState = useCallback(() => {
+    setActiveVoiceRecordingRecordId(null);
+    setRecordingElapsedMs(0);
+    setIsVoiceRecordingBusy(false);
+    voiceRecordingStartedAtRef.current = null;
+    voiceStopInProgressRef.current = false;
+  }, []);
+
+  const discardVoiceRecording = useCallback(async () => {
+    if (!activeVoiceRecordingRecordId) {
+      clearVoiceRecordingState();
+      return true;
+    }
+
+    const discardResult = await VoiceNoteService.stopAndDiscardRecording();
+    if (!discardResult.ok) {
+      Logger.warn(PAGE_SCOPE, 'Failed to discard detail review voice recording.', {
+        reviewRecordId: activeVoiceRecordingRecordId,
+        errorMessage: discardResult.errorMessage ?? null,
+      });
+      clearVoiceRecordingState();
+      return false;
+    }
+
+    clearVoiceRecordingState();
+    return true;
+  }, [activeVoiceRecordingRecordId, clearVoiceRecordingState]);
+
+  const confirmLeaveWhileRecording = useCallback(
+    (onContinue: () => void) => {
+      Alert.alert(
+        '正在录音',
+        '正在录音，离开后将放弃本次录音，是否继续？',
+        [
+          {
+            text: '继续录音',
+            style: 'cancel',
+          },
+          {
+            text: '继续离开',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                const discarded = await discardVoiceRecording();
+                if (discarded) {
+                  showToast('已放弃本次录音', 'info', TOAST_DURATION_SHORT);
+                }
+                onContinue();
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [discardVoiceRecording, showToast],
+  );
+
+  const handleBack = useCallback(() => {
+    if (!activeVoiceRecordingRecordId) {
+      navigateBack();
+      return;
+    }
+
+    confirmLeaveWhileRecording(() => {
+      allowNextLeaveRef.current = true;
+      navigateBack();
+    });
+  }, [activeVoiceRecordingRecordId, confirmLeaveWhileRecording, navigateBack]);
 
   const handleClosePreview = useCallback(() => {
     setPreviewImage(null);
@@ -845,10 +1000,165 @@ export default function MistakeDetailScreen() {
     [handleDeleteReviewImage, handleEditReviewImage],
   );
 
+  const handleStartReviewVoiceRecording = useCallback(
+    async (record: DetailReviewRecordItem) => {
+      if (state.kind !== 'success') {
+        return;
+      }
+      if (record.voiceNote) {
+        return;
+      }
+      if (
+        isVoicePlaybackBusy
+        || isVoiceRecordingBusy
+        || !!activeVoiceRecordingRecordId
+      ) {
+        return;
+      }
+
+      setIsVoiceRecordingBusy(true);
+      await stopVoicePlayback(false);
+
+      const permissionResult = await VoiceNoteService.requestPermission();
+      if (!permissionResult.granted) {
+        Logger.warn(PAGE_SCOPE, 'start_recording', {
+          granted: false,
+          canAskAgain: permissionResult.canAskAgain,
+          status: permissionResult.status,
+          permissionErrorMessage: permissionResult.errorMessage ?? null,
+          reviewRecordId: record.id,
+        });
+        showToast('未获得麦克风权限，无法开始录音。', 'error', TOAST_DURATION_LONG);
+        setIsVoiceRecordingBusy(false);
+        return;
+      }
+
+      const startResult = await VoiceNoteService.startRecording();
+      if (!startResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'start_recording', {
+          granted: true,
+          ok: false,
+          reviewRecordId: record.id,
+          errorMessage: startResult.errorMessage ?? null,
+        });
+        showToast(toBriefErrorMessage(startResult.errorMessage), 'error', TOAST_DURATION_LONG);
+        setIsVoiceRecordingBusy(false);
+        return;
+      }
+
+      setActiveVoiceRecordingRecordId(record.id);
+      setRecordingElapsedMs(0);
+      voiceRecordingStartedAtRef.current = Date.now();
+      voiceStopInProgressRef.current = false;
+      setIsVoiceRecordingBusy(false);
+    },
+    [
+      activeVoiceRecordingRecordId,
+      isVoicePlaybackBusy,
+      isVoiceRecordingBusy,
+      showToast,
+      state.kind,
+      stopVoicePlayback,
+    ],
+  );
+
+  const handleStopAndSaveReviewVoiceRecording = useCallback(
+    async (
+      record: DetailReviewRecordItem,
+      trigger: 'manual' | 'auto_limit' = 'manual',
+    ) => {
+      if (state.kind !== 'success') {
+        return;
+      }
+      if (activeVoiceRecordingRecordId !== record.id) {
+        return;
+      }
+      if (isVoiceRecordingBusy || voiceStopInProgressRef.current) {
+        return;
+      }
+
+      voiceStopInProgressRef.current = true;
+      setIsVoiceRecordingBusy(true);
+
+      const saveResult = await VoiceNoteService.stopAndSaveRecording();
+      const boundReviewRecordId = record.id;
+      setActiveVoiceRecordingRecordId(null);
+      setRecordingElapsedMs(0);
+      voiceRecordingStartedAtRef.current = null;
+
+      if (!saveResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'stop_recording_failed', {
+          trigger,
+          reason: 'stop_and_save_failed',
+          reviewRecordId: boundReviewRecordId,
+          errorMessage: saveResult.errorMessage ?? null,
+        });
+        showToast(toBriefErrorMessage(saveResult.errorMessage), 'error', TOAST_DURATION_LONG);
+        setIsVoiceRecordingBusy(false);
+        voiceStopInProgressRef.current = false;
+        return;
+      }
+
+      const nextVoiceNote = saveResult.voiceNote;
+      if (nextVoiceNote.durationMs < VOICE_RECORDING_MIN_DURATION_MS) {
+        Logger.info(PAGE_SCOPE, 'stop_recording_failed', {
+          trigger,
+          reason: 'too_short',
+          reviewRecordId: boundReviewRecordId,
+          durationMs: nextVoiceNote.durationMs,
+          minimumDurationMs: VOICE_RECORDING_MIN_DURATION_MS,
+        });
+        void VoiceNoteService.deleteVoiceNote(nextVoiceNote.fileUri);
+        showToast('录音时间太短，请至少讲3秒', 'info', TOAST_DURATION_LONG);
+        setIsVoiceRecordingBusy(false);
+        voiceStopInProgressRef.current = false;
+        return;
+      }
+
+      const reviewRecordVoiceNote = toReviewRecordVoiceNote(nextVoiceNote);
+      if (!reviewRecordVoiceNote) {
+        void VoiceNoteService.deleteVoiceNote(nextVoiceNote.fileUri);
+        showToast('语音讲解保存失败，请重试。', 'error', TOAST_DURATION_LONG);
+        setIsVoiceRecordingBusy(false);
+        voiceStopInProgressRef.current = false;
+        return;
+      }
+
+      const persistResult = await ReviewRecordVoiceService.upsertReviewRecordVoiceNote({
+        mistakeId: state.detail.id,
+        reviewRecordId: boundReviewRecordId,
+        voiceNote: reviewRecordVoiceNote,
+      });
+      if (!persistResult.ok) {
+        void VoiceNoteService.deleteVoiceNote(nextVoiceNote.fileUri);
+        showToast(persistResult.errorMessage ?? '语音讲解保存失败，请重试。', 'error', TOAST_DURATION_LONG);
+        setIsVoiceRecordingBusy(false);
+        voiceStopInProgressRef.current = false;
+        return;
+      }
+
+      await refreshDetail();
+      if (trigger === 'auto_limit') {
+        showToast('已达到3分钟上限，语音讲解已保存', 'success', TOAST_DURATION_LONG);
+      } else {
+        showToast('语音讲解已保存', 'success');
+      }
+      setIsVoiceRecordingBusy(false);
+      voiceStopInProgressRef.current = false;
+    },
+    [
+      activeVoiceRecordingRecordId,
+      isVoiceRecordingBusy,
+      refreshDetail,
+      showToast,
+      state,
+    ],
+  );
+
   const handleToggleReviewVoicePlayback = useCallback(
     async (record: DetailReviewRecordItem) => {
       const voiceNote = record.voiceNote ?? null;
-      if (!voiceNote || isVoicePlaybackBusy) {
+      if (!voiceNote || isVoicePlaybackBusy || !!activeVoiceRecordingRecordId) {
         return;
       }
 
@@ -920,6 +1230,7 @@ export default function MistakeDetailScreen() {
       setIsVoicePlaybackBusy(false);
     },
     [
+      activeVoiceRecordingRecordId,
       activeVoiceRecordId,
       clearVoicePlaybackResetTimer,
       isVoicePlaybackBusy,
@@ -1015,6 +1326,63 @@ export default function MistakeDetailScreen() {
     void loadDetail();
   }, [loadDetail]);
 
+  useEffect(() => {
+    if (!activeVoiceRecordingRecordId) {
+      return;
+    }
+
+    const updateTimer = () => {
+      const startedAt = voiceRecordingStartedAtRef.current;
+      if (!startedAt) {
+        return;
+      }
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      const roundedElapsedMs = Math.floor(elapsedMs / 1000) * 1000;
+      setRecordingElapsedMs((current) => (current === roundedElapsedMs ? current : roundedElapsedMs));
+
+      if (elapsedMs < VOICE_RECORDING_MAX_DURATION_MS || voiceStopInProgressRef.current) {
+        return;
+      }
+
+      if (state.kind !== 'success') {
+        return;
+      }
+
+      const targetRecord = state.detail.reviewRecords.find(
+        (item) => item.id === activeVoiceRecordingRecordId,
+      );
+      if (!targetRecord) {
+        return;
+      }
+
+      void handleStopAndSaveReviewVoiceRecording(targetRecord, 'auto_limit');
+    };
+
+    updateTimer();
+    const intervalId = setInterval(updateTimer, 1000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [
+    activeVoiceRecordingRecordId,
+    handleStopAndSaveReviewVoiceRecording,
+    state,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        handleBack();
+        return true;
+      });
+
+      return () => {
+        subscription.remove();
+      };
+    }, [handleBack]),
+  );
+
   useFocusEffect(
     useCallback(() => {
       if (!hasFocusedRef.current) {
@@ -1027,15 +1395,38 @@ export default function MistakeDetailScreen() {
     }, [loadDetail]),
   );
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (allowNextLeaveRef.current) {
+        allowNextLeaveRef.current = false;
+        return;
+      }
+
+      if (!activeVoiceRecordingRecordId) {
+        return;
+      }
+
+      event.preventDefault();
+      confirmLeaveWhileRecording(() => {
+        allowNextLeaveRef.current = true;
+        navigation.dispatch(event.data.action);
+      });
+    });
+
+    return unsubscribe;
+  }, [activeVoiceRecordingRecordId, confirmLeaveWhileRecording, navigation]);
+
   useFocusEffect(
     useCallback(() => {
       return () => {
         clearVoicePlaybackResetTimer();
         setActiveVoiceRecordId(null);
         setIsVoicePlaybackBusy(false);
+        clearVoiceRecordingState();
         void VoiceNoteService.stopPlaying();
+        void VoiceNoteService.stopAndDiscardRecording();
       };
-    }, [clearVoicePlaybackResetTimer]),
+    }, [clearVoicePlaybackResetTimer, clearVoiceRecordingState]),
   );
 
   useEffect(
@@ -1052,7 +1443,10 @@ export default function MistakeDetailScreen() {
         clearTimeout(voicePlaybackResetTimerRef.current);
         voicePlaybackResetTimerRef.current = null;
       }
+      voiceRecordingStartedAtRef.current = null;
+      voiceStopInProgressRef.current = false;
       void VoiceNoteService.stopPlaying();
+      void VoiceNoteService.stopAndDiscardRecording();
     },
     [],
   );
@@ -1386,13 +1780,17 @@ export default function MistakeDetailScreen() {
                     || takePhotoType !== null
                     || deleteType !== null
                     || activeReviewRecordId !== null
+                    || activeVoiceRecordingRecordId !== null
+                    || isVoiceRecordingBusy
                   }
                   style={[
                     styles.refreshButton,
                     (isRefreshing
                       || takePhotoType !== null
                       || deleteType !== null
-                      || activeReviewRecordId !== null)
+                      || activeReviewRecordId !== null
+                      || activeVoiceRecordingRecordId !== null
+                      || isVoiceRecordingBusy)
                       && styles.refreshButtonDisabled,
                   ]}>
                   <Text style={styles.refreshButtonText}>{isRefreshing ? '刷新中...' : '刷新'}</Text>
@@ -1458,7 +1856,13 @@ export default function MistakeDetailScreen() {
                       record={record}
                       isBusy={isReviewRecordImageBusy(record.id)}
                       isVoicePlaying={activeVoiceRecordId === record.id}
-                      isVoiceBusy={isVoicePlaybackBusy}
+                      isVoiceBusy={isVoicePlaybackBusy || isVoiceRecordingBusy}
+                      isVoicePlaybackLocked={activeVoiceRecordingRecordId !== null}
+                      isVoiceRecording={activeVoiceRecordingRecordId === record.id}
+                      recordingElapsedMs={recordingElapsedMs}
+                      isVoiceLocked={
+                        !!activeVoiceRecordingRecordId && activeVoiceRecordingRecordId !== record.id
+                      }
                       onAddImage={(targetRecord) => {
                         openReviewImagePickerActionSheet(targetRecord, 'add');
                       }}
@@ -1466,6 +1870,12 @@ export default function MistakeDetailScreen() {
                       onOpenImageActions={handleOpenReviewImageActions}
                       onToggleVoicePlayback={(targetRecord) => {
                         void handleToggleReviewVoicePlayback(targetRecord);
+                      }}
+                      onStartVoiceRecording={(targetRecord) => {
+                        void handleStartReviewVoiceRecording(targetRecord);
+                      }}
+                      onStopAndSaveVoiceRecording={(targetRecord) => {
+                        void handleStopAndSaveReviewVoiceRecording(targetRecord);
                       }}
                     />
                   ))}
@@ -1821,12 +2231,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
+  reviewRecordVoiceButtonDanger: {
+    borderColor: colors.danger,
+    backgroundColor: colors.danger,
+  },
   reviewRecordVoiceButtonDisabled: {
     opacity: 0.6,
   },
   reviewRecordVoiceButtonText: {
     ...typography.caption,
     color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  reviewRecordVoiceButtonTextLight: {
+    ...typography.caption,
+    color: colors.white,
     fontWeight: '700',
     fontSize: 11,
     lineHeight: 14,
@@ -1929,5 +2350,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
+
 
 
