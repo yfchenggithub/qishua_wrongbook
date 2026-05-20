@@ -73,6 +73,7 @@ type OpenCvNativeEnhanceRequest = {
 
 type OpenCvNativeEnhanceModule = {
   enhanceForPdfPrint: (request: OpenCvNativeEnhanceRequest) => Promise<OpenCvNativeEnhanceResponse | void>;
+  enhanceForPdfPrintBitmap?: (request: OpenCvNativeEnhanceRequest) => Promise<OpenCvNativeEnhanceResponse | void>;
 };
 
 function normalizeRequiredUri(value: string): string {
@@ -190,12 +191,18 @@ function safeDeleteFile(uri: string): void {
   }
 }
 
-function resolveOpenCvNativeModule(): OpenCvNativeEnhanceModule | null {
+function resolveNativeEnhanceModule(): OpenCvNativeEnhanceModule | null {
   for (const moduleName of OPENCV_NATIVE_MODULE_CANDIDATES) {
     const candidate = (NativeModules as Record<string, unknown>)[moduleName] as
       | Partial<OpenCvNativeEnhanceModule>
       | undefined;
-    if (candidate && typeof candidate.enhanceForPdfPrint === 'function') {
+    if (
+      candidate
+      && (
+        typeof candidate.enhanceForPdfPrint === 'function'
+        || typeof candidate.enhanceForPdfPrintBitmap === 'function'
+      )
+    ) {
       return candidate as OpenCvNativeEnhanceModule;
     }
   }
@@ -217,8 +224,8 @@ async function runOpenCvEnhanceProvider(
     };
   }
 
-  const nativeModule = resolveOpenCvNativeModule();
-  if (!nativeModule) {
+  const nativeModule = resolveNativeEnhanceModule();
+  if (!nativeModule || typeof nativeModule.enhanceForPdfPrint !== 'function') {
     return {
       success: false,
       provider: 'opencv',
@@ -298,8 +305,89 @@ async function runOpenCvEnhanceProvider(
 
 async function runBitmapFallbackEnhanceProvider(
   sourceUri: string,
+  mode: Exclude<PrintEnhanceMode, 'original'>,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
+  if (Platform.OS === 'android') {
+    const nativeModule = resolveNativeEnhanceModule();
+    if (!nativeModule || typeof nativeModule.enhanceForPdfPrintBitmap !== 'function') {
+      return {
+        success: false,
+        provider: 'bitmap_fallback',
+        reason: 'unsupported',
+        durationMs: Date.now() - startedAt,
+      };
+    }
+
+    const tempDirectory = ensureTempDirectory();
+    const tempOutputFile = createUniqueTempFile(tempDirectory);
+    if (tempOutputFile.exists) {
+      tempOutputFile.delete();
+    }
+
+    try {
+      const response = await nativeModule.enhanceForPdfPrintBitmap({
+        sourceUri,
+        outputUri: tempOutputFile.uri,
+        mode,
+        maxLongEdgePx: CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx,
+        jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
+      });
+
+      const hasExplicitFailure =
+        typeof response === 'object'
+        && response !== null
+        && response.success === false;
+      if (hasExplicitFailure) {
+        const errorMessage =
+          typeof response?.error === 'string' && response.error.trim().length > 0
+            ? response.error.trim()
+            : 'Bitmap native provider returned unsuccessful result.';
+        throw new Error(errorMessage);
+      }
+
+      const responseOutputUri = normalizeOptionalUri(response?.outputUri);
+      const candidateOutputUris = responseOutputUri
+        ? [responseOutputUri, tempOutputFile.uri]
+        : [tempOutputFile.uri];
+      const resolvedOutputUri = candidateOutputUris.find((candidateUri) => {
+        try {
+          return new File(candidateUri).exists;
+        } catch {
+          return false;
+        }
+      });
+      if (!resolvedOutputUri) {
+        throw new Error('Bitmap provider output file is missing.');
+      }
+
+      let outputSize: ImageSize | null = null;
+      try {
+        outputSize = normalizeImageSize(await getImageSize(resolvedOutputUri));
+      } catch {
+        outputSize = null;
+      }
+
+      return {
+        success: true,
+        provider: 'bitmap_fallback',
+        outputUri: resolvedOutputUri,
+        outputSize,
+        outputFileSize: safeReadFileSize(resolvedOutputUri),
+        durationMs: Date.now() - startedAt,
+      };
+    } catch (error) {
+      safeDeleteFile(tempOutputFile.uri);
+      return {
+        success: false,
+        provider: 'bitmap_fallback',
+        reason: 'failed',
+        error,
+        durationMs: Date.now() - startedAt,
+      };
+    }
+  }
+
   let manipulatedUriToCleanup: string | null = null;
 
   try {
@@ -445,7 +533,7 @@ export async function enhanceImageForPdfPrint(
             : undefined,
     });
 
-    const bitmapFallbackResult = await runBitmapFallbackEnhanceProvider(sourceUri);
+    const bitmapFallbackResult = await runBitmapFallbackEnhanceProvider(sourceUri, mode);
     if (bitmapFallbackResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
