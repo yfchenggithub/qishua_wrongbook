@@ -19,6 +19,7 @@ import { createRecordId } from '@/src/utils/id';
 const SERVICE_SCOPE = 'VoiceNoteService';
 const VOICE_NOTE_DIR_NAME = 'voice-notes';
 const DEFAULT_VOICE_NOTE_EXTENSION = '.m4a';
+const VOICE_FILE_NOT_FOUND_MESSAGE = '\u8bed\u97f3\u6587\u4ef6\u4e0d\u5b58\u5728';
 const PLAYBACK_FAILED_MESSAGE = 'Voice note playback failed. Please try again.';
 const RECORDING_FAILED_MESSAGE = 'Voice note recording failed. Please try again.';
 const SAVE_FAILED_MESSAGE = 'Saving voice note failed. Please try again.';
@@ -234,6 +235,20 @@ async function clearActiveRecorderState(): Promise<void> {
   await applyRecordingAudioMode(false);
 }
 
+function buildRecorderSourceFile(recorder: AudioRecorder, recorderState: RecorderState): File | null {
+  const sourceUri = normalizeOptionalText(recorder.uri ?? recorderState.url);
+  if (!sourceUri) {
+    return null;
+  }
+
+  const sourceFile = new File(sourceUri);
+  if (!sourceFile.exists) {
+    return null;
+  }
+
+  return sourceFile;
+}
+
 async function stopPlayingInternal(): Promise<void> {
   const player = activePlayer;
   const playerUri = activePlayerUri;
@@ -339,7 +354,7 @@ export async function startRecording(): Promise<VoiceNoteActionResult> {
     activeRecorder = recorder;
     activeRecorderStartedAtMs = Date.now();
 
-    Logger.info(SERVICE_SCOPE, 'Voice note recording started.', {});
+    Logger.info(SERVICE_SCOPE, 'start_recording', {});
     return { ok: true };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to start voice note recording.', { error });
@@ -365,21 +380,11 @@ export async function stopAndSaveRecording(): Promise<StopAndSaveRecordingResult
   try {
     await recorder.stop();
     const recorderState: RecorderState = recorder.getStatus();
-    const sourceUri = normalizeOptionalText(recorder.uri ?? recorderState.url);
     const durationMs = resolveDurationMs(recorderState.durationMillis, startedAtMs);
-
-    if (!sourceUri) {
-      Logger.warn(SERVICE_SCOPE, 'Recording stopped but source uri is missing.', {});
-      return {
-        ok: false,
-        errorMessage: SAVE_FAILED_MESSAGE,
-      };
-    }
-
-    const sourceFile = new File(sourceUri);
-    if (!sourceFile.exists) {
-      Logger.warn(SERVICE_SCOPE, 'Recording file does not exist when saving.', {
-        sourceUriShort: toShortUri(sourceUri),
+    const sourceFile = buildRecorderSourceFile(recorder, recorderState);
+    if (!sourceFile) {
+      Logger.warn(SERVICE_SCOPE, 'stop_recording_failed', {
+        reason: 'source_file_missing',
       });
       return {
         ok: false,
@@ -389,7 +394,7 @@ export async function stopAndSaveRecording(): Promise<StopAndSaveRecordingResult
 
     const directory = await ensureVoiceNoteDirectory();
     const voiceNoteId = createRecordId('VN');
-    const extension = resolveFileExtension(sourceUri);
+    const extension = resolveFileExtension(sourceFile.uri);
     const preferredFileName = buildVoiceNoteFileName(voiceNoteId, extension);
     const targetFile = resolveTargetFile(directory, preferredFileName);
 
@@ -410,7 +415,7 @@ export async function stopAndSaveRecording(): Promise<StopAndSaveRecordingResult
       updatedAt,
     };
 
-    Logger.info(SERVICE_SCOPE, 'Voice note recording saved successfully.', {
+    Logger.info(SERVICE_SCOPE, 'stop_recording_success', {
       id: voiceNote.id,
       fileName: voiceNote.fileName,
       durationMs: voiceNote.durationMs,
@@ -423,10 +428,38 @@ export async function stopAndSaveRecording(): Promise<StopAndSaveRecordingResult
       voiceNote,
     };
   } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'Failed to stop and save voice note recording.', { error });
+    Logger.error(SERVICE_SCOPE, 'stop_recording_failed', { error });
     return {
       ok: false,
       errorMessage: toErrorMessage(error, SAVE_FAILED_MESSAGE),
+    };
+  } finally {
+    await clearActiveRecorderState();
+  }
+}
+
+export async function stopAndDiscardRecording(): Promise<VoiceNoteActionResult> {
+  const recorder = activeRecorder;
+  if (!recorder) {
+    return { ok: true };
+  }
+
+  try {
+    await recorder.stop();
+    const recorderState: RecorderState = recorder.getStatus();
+    const sourceFile = buildRecorderSourceFile(recorder, recorderState);
+    if (sourceFile?.exists) {
+      sourceFile.delete();
+    }
+    return { ok: true };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'stop_recording_failed', {
+      reason: 'discard_failed',
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error, RECORDING_FAILED_MESSAGE),
     };
   } finally {
     await clearActiveRecorderState();
@@ -445,9 +478,12 @@ export async function playVoiceNote(fileUri: string): Promise<VoiceNoteActionRes
   try {
     const file = new File(normalizedFileUri);
     if (!file.exists) {
+      Logger.warn(SERVICE_SCOPE, 'voice_note_file_missing', {
+        fileUriShort: toShortUri(normalizedFileUri),
+      });
       return {
         ok: false,
-        errorMessage: 'Voice note file was not found.',
+        errorMessage: VOICE_FILE_NOT_FOUND_MESSAGE,
       };
     }
 
@@ -458,7 +494,7 @@ export async function playVoiceNote(fileUri: string): Promise<VoiceNoteActionRes
     activePlayer = player;
     activePlayerUri = normalizedFileUri;
 
-    Logger.info(SERVICE_SCOPE, 'Voice note playback started.', {
+    Logger.info(SERVICE_SCOPE, 'play_voice_note', {
       fileUriShort: toShortUri(normalizedFileUri),
       fileName: file.name,
     });
@@ -508,8 +544,9 @@ export async function deleteVoiceNote(fileUri: string): Promise<DeleteVoiceNoteR
 
     const file = new File(normalizedFileUri);
     if (!file.exists) {
-      Logger.warn(SERVICE_SCOPE, 'deleteVoiceNote skipped because file does not exist.', {
+      Logger.warn(SERVICE_SCOPE, 'voice_note_file_missing', {
         fileUriShort: toShortUri(normalizedFileUri),
+        action: 'delete',
       });
       return {
         ok: true,
@@ -518,8 +555,9 @@ export async function deleteVoiceNote(fileUri: string): Promise<DeleteVoiceNoteR
     }
 
     file.delete();
-    Logger.info(SERVICE_SCOPE, 'Voice note deleted successfully.', {
+    Logger.info(SERVICE_SCOPE, 'delete_voice_note', {
       fileUriShort: toShortUri(normalizedFileUri),
+      deleted: true,
     });
 
     return {

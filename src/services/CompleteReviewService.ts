@@ -331,13 +331,16 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
 
             if (!bound) {
               voiceNoteBindingFailed = true;
-              Logger.warn(SERVICE_SCOPE, 'review_record voice note binding skipped because target record was not found.', {
+              Logger.warn(SERVICE_SCOPE, 'bind_voice_note_to_review_record', {
+                ok: false,
+                reason: 'review_record_not_found',
                 mistakeId: normalizedInput.mistakeId,
                 reviewRecordId: createdReviewRecord.id,
                 reviewIndex: normalizedInput.reviewIndex,
               });
             } else {
-              Logger.info(SERVICE_SCOPE, 'Bound voice note to review_record successfully.', {
+              Logger.info(SERVICE_SCOPE, 'bind_voice_note_to_review_record', {
+                ok: true,
                 mistakeId: normalizedInput.mistakeId,
                 reviewRecordId: createdReviewRecord.id,
                 reviewIndex: normalizedInput.reviewIndex,
@@ -346,7 +349,9 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
             }
           } catch (voiceNoteError) {
             voiceNoteBindingFailed = true;
-            Logger.error(SERVICE_SCOPE, 'Failed to bind voice note to review_record. Keep main review flow unchanged.', {
+            Logger.error(SERVICE_SCOPE, 'bind_voice_note_to_review_record', {
+              ok: false,
+              reason: 'bind_failed',
               mistakeId: normalizedInput.mistakeId,
               reviewRecordId: createdReviewRecord.id,
               reviewIndex: normalizedInput.reviewIndex,
@@ -355,7 +360,10 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
             });
           }
         } else {
-          Logger.info(SERVICE_SCOPE, 'Skipped review_record voice note binding because no voice note was provided.', {
+          Logger.info(SERVICE_SCOPE, 'bind_voice_note_to_review_record', {
+            ok: true,
+            skipped: true,
+            reason: 'no_voice_note',
             mistakeId: normalizedInput.mistakeId,
             reviewRecordId: createdReviewRecord.id,
             reviewIndex: normalizedInput.reviewIndex,

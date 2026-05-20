@@ -861,7 +861,7 @@ export default function MistakeDetailScreen() {
 
       const fileUri = normalizePreviewUri(voiceNote.fileUri);
       if (!fileUri) {
-        Logger.warn(PAGE_SCOPE, 'Skipped detail review voice playback because file uri is empty.', {
+        Logger.warn(PAGE_SCOPE, 'voice_note_file_missing', {
           reviewRecordId: record.id,
           reviewIndex: record.reviewIndex,
           voiceNoteId: voiceNote.id,
@@ -874,7 +874,7 @@ export default function MistakeDetailScreen() {
 
       const fileInfoResult = await VoiceNoteService.getVoiceNoteFileInfo(fileUri);
       if (!fileInfoResult.info.exists) {
-        Logger.warn(PAGE_SCOPE, 'Skipped detail review voice playback because file does not exist.', {
+        Logger.warn(PAGE_SCOPE, 'voice_note_file_missing', {
           reviewRecordId: record.id,
           reviewIndex: record.reviewIndex,
           voiceNoteId: voiceNote.id,
@@ -896,12 +896,15 @@ export default function MistakeDetailScreen() {
       const playResult = await VoiceNoteService.playVoiceNote(fileUri);
       if (!playResult.ok) {
         setActiveVoiceRecordId(null);
-        Logger.warn(PAGE_SCOPE, 'Detail review voice playback failed.', {
-          reviewRecordId: record.id,
-          reviewIndex: record.reviewIndex,
-          voiceNoteId: voiceNote.id,
-          errorMessage: playResult.errorMessage ?? null,
-        });
+        const isFileMissing = playResult.errorMessage?.includes('语音文件不存在');
+        if (isFileMissing) {
+          Logger.warn(PAGE_SCOPE, 'voice_note_file_missing', {
+            reviewRecordId: record.id,
+            reviewIndex: record.reviewIndex,
+            voiceNoteId: voiceNote.id,
+            fileUri,
+          });
+        }
         showToast(toBriefErrorMessage(playResult.errorMessage), 'error');
         setIsVoicePlaybackBusy(false);
         return;

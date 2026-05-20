@@ -1,4 +1,4 @@
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
@@ -41,6 +41,8 @@ const QUESTION_PREVIEW_MAX_HEIGHT = 228;
 const QUESTION_PREVIEW_EMPTY_HEIGHT = 148;
 const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
+const VOICE_RECORDING_MIN_DURATION_MS = 3000;
+const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
 
 type ToastType = 'success' | 'info' | 'error';
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -336,6 +338,7 @@ function QuestionImageCard({
 
 export default function ReviewSessionPage() {
   const router = useRouter();
+  const navigation = useNavigation();
   const insets = useSafeAreaInsets();
 
   const [sessionState, setSessionState] = useState<SessionState>('loading');
@@ -372,6 +375,8 @@ export default function ReviewSessionPage() {
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceReplacePendingUriRef = useRef<string | null>(null);
+  const voiceStopInProgressRef = useRef(false);
+  const allowNextLeaveRef = useRef(false);
 
   const totalCount = queue.length;
   const hasRemaining = sessionState === 'ready' && currentIndex < totalCount;
@@ -455,6 +460,58 @@ export default function ReviewSessionPage() {
     [clearVoicePlaybackResetTimer, showToast],
   );
 
+  const discardCurrentVoiceRecording = useCallback(async () => {
+    if (!isVoiceRecording) {
+      return true;
+    }
+
+    setIsVoiceBusy(true);
+    const discardResult = await VoiceNoteService.stopAndDiscardRecording();
+    voiceReplacePendingUriRef.current = null;
+    voiceRecordingStartedAtRef.current = null;
+    voiceStopInProgressRef.current = false;
+    setIsVoiceRecording(false);
+    setRecordingElapsedMs(0);
+    setIsVoiceBusy(false);
+
+    if (!discardResult.ok) {
+      Logger.warn(PAGE_SCOPE, 'stop_recording_failed', {
+        reason: 'discard_recording_on_leave_failed',
+        errorMessage: discardResult.errorMessage ?? null,
+      });
+      return false;
+    }
+
+    return true;
+  }, [isVoiceRecording]);
+
+  const confirmLeaveWhileRecording = useCallback(
+    (onContinue: () => void) => {
+      Alert.alert(
+        '\u6b63\u5728\u5f55\u97f3',
+        '\u6b63\u5728\u5f55\u97f3\uff0c\u79bb\u5f00\u540e\u5c06\u653e\u5f03\u672c\u6b21\u5f55\u97f3\uff0c\u662f\u5426\u7ee7\u7eed\uff1f',
+        [
+          {
+            text: '\u7ee7\u7eed\u5f55\u97f3',
+            style: 'cancel',
+          },
+          {
+            text: '\u7ee7\u7eed\u79bb\u5f00',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                await discardCurrentVoiceRecording();
+                allowNextLeaveRef.current = true;
+                onContinue();
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [discardCurrentVoiceRecording],
+  );
+
   const startVoiceRecording = useCallback(
     async (isRerecord: boolean) => {
       if (isVoiceBusy || isVoiceRecording || isSubmitting || isLoadingCurrent || !!currentErrorMessage) {
@@ -466,8 +523,13 @@ export default function ReviewSessionPage() {
       const permissionResult = await VoiceNoteService.requestPermission();
       if (!permissionResult.granted) {
         const friendlyMessage =
-          permissionResult.errorMessage ??
           '\u672a\u83b7\u5f97\u9ea6\u514b\u98ce\u6743\u9650\uff0c\u65e0\u6cd5\u5f00\u59cb\u5f55\u97f3\u3002';
+        Logger.warn(PAGE_SCOPE, 'start_recording', {
+          granted: false,
+          canAskAgain: permissionResult.canAskAgain,
+          status: permissionResult.status,
+          permissionErrorMessage: permissionResult.errorMessage ?? null,
+        });
         showToast(toShortErrorMessage(friendlyMessage), 'error', TOAST_DURATION_LONG);
         setIsVoiceBusy(false);
         return;
@@ -479,6 +541,11 @@ export default function ReviewSessionPage() {
       const startResult = await VoiceNoteService.startRecording();
       if (!startResult.ok) {
         voiceReplacePendingUriRef.current = null;
+        Logger.warn(PAGE_SCOPE, 'start_recording', {
+          granted: true,
+          ok: false,
+          errorMessage: startResult.errorMessage ?? null,
+        });
         showToast(toShortErrorMessage(startResult.errorMessage), 'error', TOAST_DURATION_LONG);
         setIsVoiceBusy(false);
         return;
@@ -488,6 +555,7 @@ export default function ReviewSessionPage() {
       setIsVoiceRecording(true);
       setRecordingElapsedMs(0);
       voiceRecordingStartedAtRef.current = Date.now();
+      voiceStopInProgressRef.current = false;
       setIsVoiceBusy(false);
     },
     [
@@ -502,36 +570,73 @@ export default function ReviewSessionPage() {
     ],
   );
 
-  const stopAndSaveVoiceRecording = useCallback(async () => {
-    if (!isVoiceRecording || isVoiceBusy) {
-      return;
-    }
+  const stopAndSaveVoiceRecording = useCallback(
+    async (trigger: 'manual' | 'auto_limit' = 'manual') => {
+      if (!isVoiceRecording || isVoiceBusy || voiceStopInProgressRef.current) {
+        return;
+      }
 
-    setIsVoiceBusy(true);
-    const saveResult = await VoiceNoteService.stopAndSaveRecording();
-    const replaceUri = voiceReplacePendingUriRef.current;
+      voiceStopInProgressRef.current = true;
+      setIsVoiceBusy(true);
+      const saveResult = await VoiceNoteService.stopAndSaveRecording();
+      const replaceUri = voiceReplacePendingUriRef.current;
 
-    voiceReplacePendingUriRef.current = null;
-    voiceRecordingStartedAtRef.current = null;
-    setIsVoiceRecording(false);
-    setRecordingElapsedMs(0);
+      voiceReplacePendingUriRef.current = null;
+      voiceRecordingStartedAtRef.current = null;
+      setIsVoiceRecording(false);
+      setRecordingElapsedMs(0);
 
-    if (!saveResult.ok) {
-      showToast(toShortErrorMessage(saveResult.errorMessage), 'error', TOAST_DURATION_LONG);
+      if (!saveResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'stop_recording_failed', {
+          trigger,
+          reason: 'stop_and_save_failed',
+          errorMessage: saveResult.errorMessage ?? null,
+        });
+        showToast(toShortErrorMessage(saveResult.errorMessage), 'error', TOAST_DURATION_LONG);
+        setIsVoiceBusy(false);
+        voiceStopInProgressRef.current = false;
+        return;
+      }
+
+      const nextVoiceNote = saveResult.voiceNote;
+      if (nextVoiceNote.durationMs < VOICE_RECORDING_MIN_DURATION_MS) {
+        Logger.info(PAGE_SCOPE, 'stop_recording_failed', {
+          trigger,
+          reason: 'too_short',
+          durationMs: nextVoiceNote.durationMs,
+          minimumDurationMs: VOICE_RECORDING_MIN_DURATION_MS,
+        });
+        void VoiceNoteService.deleteVoiceNote(nextVoiceNote.fileUri);
+        showToast(
+          '\u5f55\u97f3\u65f6\u95f4\u592a\u77ed\uff0c\u8bf7\u81f3\u5c11\u8bb23\u79d2',
+          'info',
+          TOAST_DURATION_LONG,
+        );
+        setIsVoiceBusy(false);
+        voiceStopInProgressRef.current = false;
+        return;
+      }
+
+      setVoiceNote(nextVoiceNote);
+
+      if (replaceUri && replaceUri !== nextVoiceNote.fileUri) {
+        void VoiceNoteService.deleteVoiceNote(replaceUri);
+      }
+
+      if (trigger === 'auto_limit') {
+        showToast(
+          '\u5df2\u8fbe\u52303\u5206\u949f\u4e0a\u9650\uff0c\u5f55\u97f3\u5df2\u4fdd\u5b58',
+          'success',
+          TOAST_DURATION_LONG,
+        );
+      } else {
+        showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u4fdd\u5b58', 'success');
+      }
       setIsVoiceBusy(false);
-      return;
-    }
-
-    const nextVoiceNote = saveResult.voiceNote;
-    setVoiceNote(nextVoiceNote);
-
-    if (replaceUri && replaceUri !== nextVoiceNote.fileUri) {
-      void VoiceNoteService.deleteVoiceNote(replaceUri);
-    }
-
-    showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u4fdd\u5b58', 'success');
-    setIsVoiceBusy(false);
-  }, [isVoiceBusy, isVoiceRecording, showToast]);
+      voiceStopInProgressRef.current = false;
+    },
+    [isVoiceBusy, isVoiceRecording, showToast],
+  );
 
   const playVoiceNote = useCallback(async () => {
     if (!voiceNote || isVoiceBusy || isVoiceRecording) {
@@ -646,6 +751,13 @@ export default function ReviewSessionPage() {
   }, []);
 
   const handleRequestExit = useCallback(() => {
+    if (isVoiceRecording) {
+      confirmLeaveWhileRecording(() => {
+        navigateHome();
+      });
+      return;
+    }
+
     if (!hasRemaining || isCompleted) {
       navigateHome();
       return;
@@ -662,7 +774,7 @@ export default function ReviewSessionPage() {
         onPress: navigateHome,
       },
     ]);
-  }, [hasRemaining, isCompleted, navigateHome]);
+  }, [confirmLeaveWhileRecording, hasRemaining, isCompleted, isVoiceRecording, navigateHome]);
 
   useFocusEffect(
     useCallback(() => {
@@ -686,6 +798,27 @@ export default function ReviewSessionPage() {
     ),
   );
 
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
+      if (allowNextLeaveRef.current) {
+        allowNextLeaveRef.current = false;
+        return;
+      }
+
+      if (!isVoiceRecording) {
+        return;
+      }
+
+      event.preventDefault();
+      confirmLeaveWhileRecording(() => {
+        allowNextLeaveRef.current = true;
+        navigation.dispatch(event.data.action);
+      });
+    });
+
+    return unsubscribe;
+  }, [confirmLeaveWhileRecording, isVoiceRecording, navigation]);
+
   const loadQueue = useCallback(async () => {
     const requestId = queueRequestIdRef.current + 1;
     queueRequestIdRef.current = requestId;
@@ -703,7 +836,9 @@ export default function ReviewSessionPage() {
     setIsVoicePlaying(false);
     voiceRecordingStartedAtRef.current = null;
     voiceReplacePendingUriRef.current = null;
+    voiceStopInProgressRef.current = false;
     clearVoicePlaybackResetTimer();
+    void VoiceNoteService.stopAndDiscardRecording();
 
     try {
       const todayQueue = await ReviewSessionService.getTodayReviewSessionQueue();
@@ -741,6 +876,7 @@ export default function ReviewSessionPage() {
       }
       clearVoicePlaybackResetTimer();
       void VoiceNoteService.stopPlaying();
+      void VoiceNoteService.stopAndDiscardRecording();
     },
     [clearVoicePlaybackResetTimer],
   );
@@ -755,7 +891,13 @@ export default function ReviewSessionPage() {
       if (!startedAt) {
         return;
       }
-      setRecordingElapsedMs(Math.max(0, Date.now() - startedAt));
+      const elapsedMs = Math.max(0, Date.now() - startedAt);
+      const roundedElapsedMs = Math.floor(elapsedMs / 1000) * 1000;
+      setRecordingElapsedMs((current) => (current === roundedElapsedMs ? current : roundedElapsedMs));
+
+      if (elapsedMs >= VOICE_RECORDING_MAX_DURATION_MS && !voiceStopInProgressRef.current) {
+        void stopAndSaveVoiceRecording('auto_limit');
+      }
     };
 
     updateTimer();
@@ -764,7 +906,7 @@ export default function ReviewSessionPage() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [isVoiceRecording]);
+  }, [isVoiceRecording, stopAndSaveVoiceRecording]);
 
   useEffect(() => {
     if (!currentQueueItemId) {
@@ -774,7 +916,9 @@ export default function ReviewSessionPage() {
       setIsVoicePlaying(false);
       voiceRecordingStartedAtRef.current = null;
       voiceReplacePendingUriRef.current = null;
+      voiceStopInProgressRef.current = false;
       clearVoicePlaybackResetTimer();
+      void VoiceNoteService.stopAndDiscardRecording();
       return;
     }
 
@@ -784,8 +928,10 @@ export default function ReviewSessionPage() {
     setIsVoicePlaying(false);
     voiceRecordingStartedAtRef.current = null;
     voiceReplacePendingUriRef.current = null;
+    voiceStopInProgressRef.current = false;
     clearVoicePlaybackResetTimer();
     void stopVoicePlayback(false);
+    void VoiceNoteService.stopAndDiscardRecording();
   }, [clearVoicePlaybackResetTimer, currentQueueItemId, stopVoicePlayback]);
 
   useEffect(() => {
