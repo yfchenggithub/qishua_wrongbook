@@ -44,11 +44,10 @@ export function toActivePrintEnhanceMode(mode?: PrintEnhanceMode | null): Active
 }
 
 export function getPrintEnhanceCssFilter(mode: ActivePrintEnhanceMode): string | null {
-  if (mode === 'clear_print') {
-    return CLEAR_PRINT_ENHANCE_CONFIG.cssFilter;
-  }
-  if (mode === 'bw_scan') {
-    return BW_SCAN_ENHANCE_CONFIG.cssFilter;
+  // Stage 5: PDF output should rely on native preprocessing results.
+  // Keep CSS filter disabled to avoid pseudo-enhancement artifacts.
+  if (mode === 'clear_print' || mode === 'bw_scan') {
+    return null;
   }
   return null;
 }
