@@ -268,7 +268,7 @@ async function buildQuestionImageSrc(
 
   const enhanceResult = await enhanceImageForPdfPrint(normalizedUri, printEnhanceMode);
   const enhancedUri = normalizeOptionalText(enhanceResult.outputUri) ?? normalizedUri;
-  const temporaryEnhancedUri = (!enhanceResult.usedFallback && enhancedUri !== normalizedUri)
+  const temporaryEnhancedUri = (enhancedUri !== normalizedUri)
     ? enhancedUri
     : null;
   const candidateUris = enhancedUri === normalizedUri ? [normalizedUri] : [enhancedUri, normalizedUri];
@@ -287,6 +287,7 @@ async function buildQuestionImageSrc(
     sourceUriPreview: toSafeUriPreview(enhancedUri),
     originalUriPreview: toSafeUriPreview(normalizedUri),
     printEnhanceMode,
+    enhanceEngine: enhanceResult.engine,
     enhanceUsedFallback: enhanceResult.usedFallback,
     enhanceDurationMs: enhanceResult.durationMs,
   });
