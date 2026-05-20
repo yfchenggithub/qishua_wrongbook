@@ -8,6 +8,7 @@ export * as CreateMistakeService from "./CreateMistakeService";
 export * as MistakeListService from "./MistakeListService";
 export * as MistakeDetailService from "./MistakeDetailService";
 export * as DeveloperModeService from "./DeveloperModeService";
+export * as ExportImageModeService from "./ExportImageModeService";
 export * as SettingsStatsService from "./SettingsStatsService";
 export * as ReviewFlowService from "./ReviewFlowService";
 export * as ReviewScheduleService from "./ReviewScheduleService";

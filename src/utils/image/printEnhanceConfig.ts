@@ -1,10 +1,14 @@
 export type PrintEnhanceMode = 'original' | 'clear_print' | 'bw_scan';
 
-export type ActivePrintEnhanceMode = 'original' | 'clear_print';
+export type ActivePrintEnhanceMode = PrintEnhanceMode;
 
 export type ClearPrintEnhanceConfig = {
   maxLongEdgePx: number;
   jpegQuality: number;
+  cssFilter: string;
+};
+
+export type BwScanEnhanceConfig = {
   cssFilter: string;
 };
 
@@ -25,10 +29,15 @@ export const CLEAR_PRINT_ENHANCE_CONFIG: ClearPrintEnhanceConfig = {
   cssFilter: 'grayscale(1) contrast(1.14) brightness(1.04)',
 };
 
+export const BW_SCAN_ENHANCE_CONFIG: BwScanEnhanceConfig = {
+  // Keep a stronger fallback scan-like filter when preprocessing is unavailable.
+  cssFilter: 'grayscale(1) contrast(1.26) brightness(1.08)',
+};
+
 export const DEFAULT_PRINT_ENHANCE_MODE: ActivePrintEnhanceMode = 'clear_print';
 
 export function toActivePrintEnhanceMode(mode?: PrintEnhanceMode | null): ActivePrintEnhanceMode {
-  if (mode === 'original' || mode === 'clear_print') {
+  if (mode === 'original' || mode === 'clear_print' || mode === 'bw_scan') {
     return mode;
   }
   return DEFAULT_PRINT_ENHANCE_MODE;
@@ -37,6 +46,9 @@ export function toActivePrintEnhanceMode(mode?: PrintEnhanceMode | null): Active
 export function getPrintEnhanceCssFilter(mode: ActivePrintEnhanceMode): string | null {
   if (mode === 'clear_print') {
     return CLEAR_PRINT_ENHANCE_CONFIG.cssFilter;
+  }
+  if (mode === 'bw_scan') {
+    return BW_SCAN_ENHANCE_CONFIG.cssFilter;
   }
   return null;
 }
