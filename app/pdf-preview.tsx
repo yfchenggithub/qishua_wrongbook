@@ -1,4 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import * as Print from 'expo-print';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import Pdf from 'react-native-pdf';
@@ -32,6 +33,17 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function toChineseAlertMessage(
+  message: string | null | undefined,
+  fallbackMessage: string,
+): string {
+  const normalized = typeof message === 'string' ? message.trim() : '';
+  if (!normalized) {
+    return fallbackMessage;
+  }
+  return /[\u4e00-\u9fff]/.test(normalized) ? normalized : fallbackMessage;
+}
+
 export default function PdfPreviewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -48,6 +60,7 @@ export default function PdfPreviewScreen() {
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isSharing, setIsSharing] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
   const [isOpeningExternally, setIsOpeningExternally] = useState(false);
 
   useEffect(() => {
@@ -109,7 +122,7 @@ export default function PdfPreviewScreen() {
   }, [isOpeningExternally, pdfUri]);
 
   const handleSharePdf = useCallback(async () => {
-    if (!pdfUri || isSharing) {
+    if (!pdfUri || isSharing || isPrinting) {
       return;
     }
 
@@ -135,7 +148,7 @@ export default function PdfPreviewScreen() {
         reason: result.reason,
         message: result.message,
       });
-      Alert.alert('分享失败', result.message || '分享失败，请稍后重试');
+      Alert.alert('分享失败', toChineseAlertMessage(result.message, '分享失败，请稍后重试'));
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'pdf_preview_share_failed', {
         pdfUri,
@@ -145,7 +158,34 @@ export default function PdfPreviewScreen() {
     } finally {
       setIsSharing(false);
     }
-  }, [isSharing, pdfUri]);
+  }, [isPrinting, isSharing, pdfUri]);
+
+  const handlePrintPdf = useCallback(async () => {
+    if (!pdfUri || isPrinting || isSharing) {
+      return;
+    }
+
+    Logger.info(PAGE_SCOPE, 'pdf_preview_print_click', {
+      pdfUri,
+    });
+    setIsPrinting(true);
+    try {
+      await Print.printAsync({
+        uri: pdfUri,
+      });
+      Logger.info(PAGE_SCOPE, 'pdf_preview_print_success', {
+        pdfUri,
+      });
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'pdf_preview_print_failed', {
+        pdfUri,
+        error,
+      });
+      Alert.alert('打印失败', '无法打开打印面板，请稍后重试');
+    } finally {
+      setIsPrinting(false);
+    }
+  }, [isPrinting, isSharing, pdfUri]);
 
   return (
     <SafeAreaView edges={['bottom']} style={styles.pageRoot}>
@@ -182,22 +222,22 @@ export default function PdfPreviewScreen() {
           />
         ) : (
           <View style={styles.errorPanel}>
-            <Text style={styles.errorTitle}>无法预览 PDF</Text>
-            <Text style={styles.errorText}>未找到可预览的 PDF 文件。</Text>
+            <Text style={styles.errorTitle}>{'无法预览 PDF'}</Text>
+            <Text style={styles.errorText}>{'未找到可预览的 PDF 文件。'}</Text>
           </View>
         )}
 
         {isLoading && !loadError ? (
           <View style={styles.loadingOverlay}>
             <ActivityIndicator size="small" color={colors.textPrimary} />
-            <Text style={styles.loadingText}>正在加载 PDF...</Text>
+            <Text style={styles.loadingText}>{'正在加载 PDF...'}</Text>
           </View>
         ) : null}
 
         {loadError ? (
           <View style={styles.errorOverlay}>
             <View style={styles.errorPanel}>
-              <Text style={styles.errorTitle}>PDF 预览失败</Text>
+              <Text style={styles.errorTitle}>{'PDF 预览失败'}</Text>
               <Text style={styles.errorText}>{loadError}</Text>
             </View>
           </View>
@@ -208,20 +248,34 @@ export default function PdfPreviewScreen() {
         {!loadError ? (
           isLoading ? (
             <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
-              <Text style={styles.secondaryButtonText}>返回</Text>
+              <Text style={styles.secondaryButtonText}>{'返回'}</Text>
             </Pressable>
           ) : (
             <>
-              <Pressable
-                disabled={isSharing || !pdfUri}
-                onPress={() => void handleSharePdf()}
-                style={[styles.primaryButton, (isSharing || !pdfUri) && styles.buttonDisabled]}>
-                <Text style={styles.primaryButtonText}>
-                  {isSharing ? '分享中...' : '分享 PDF'}
-                </Text>
-              </Pressable>
+              <View style={styles.rowButtons}>
+                <Pressable
+                  disabled={isSharing || isPrinting || !pdfUri}
+                  onPress={() => void handleSharePdf()}
+                  style={[
+                    styles.primaryButton,
+                    styles.primaryWideButton,
+                    (isSharing || isPrinting || !pdfUri) && styles.buttonDisabled,
+                  ]}>
+                  <Text style={styles.primaryButtonText}>
+                    {isSharing ? '分享中...' : '分享 PDF'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  disabled={isPrinting || isSharing || !pdfUri}
+                  onPress={() => void handlePrintPdf()}
+                  style={[styles.secondaryWideButton, (isPrinting || isSharing || !pdfUri) && styles.buttonDisabled]}>
+                  <Text style={styles.secondaryButtonText}>
+                    {isPrinting ? '打印中...' : '打印'}
+                  </Text>
+                </Pressable>
+              </View>
               <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
-                <Text style={styles.secondaryButtonText}>返回</Text>
+                <Text style={styles.secondaryButtonText}>{'返回'}</Text>
               </Pressable>
             </>
           )
@@ -229,7 +283,7 @@ export default function PdfPreviewScreen() {
           <>
             <View style={styles.rowButtons}>
               <Pressable onPress={handleRetry} style={styles.secondaryWideButton}>
-                <Text style={styles.secondaryButtonText}>重试</Text>
+                <Text style={styles.secondaryButtonText}>{'重试'}</Text>
               </Pressable>
               <Pressable
                 disabled={!pdfUri || isOpeningExternally}
@@ -242,21 +296,33 @@ export default function PdfPreviewScreen() {
             </View>
             <View style={styles.rowButtons}>
               <Pressable
-                disabled={isSharing || !pdfUri}
+                disabled={isSharing || isPrinting || !pdfUri}
                 onPress={() => void handleSharePdf()}
-                style={[styles.secondaryWideButton, (isSharing || !pdfUri) && styles.buttonDisabled]}>
+                style={[styles.secondaryWideButton, (isSharing || isPrinting || !pdfUri) && styles.buttonDisabled]}>
                 <Text style={styles.secondaryButtonText}>
                   {isSharing ? '分享中...' : '分享 PDF'}
                 </Text>
               </Pressable>
+              <Pressable
+                disabled={isPrinting || isSharing || !pdfUri}
+                onPress={() => void handlePrintPdf()}
+                style={[styles.secondaryWideButton, (isPrinting || isSharing || !pdfUri) && styles.buttonDisabled]}>
+                <Text style={styles.secondaryButtonText}>
+                  {isPrinting ? '打印中...' : '打印'}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={styles.rowButtons}>
               <Pressable onPress={() => router.back()} style={styles.secondaryWideButton}>
-                <Text style={styles.secondaryButtonText}>返回</Text>
+                <Text style={styles.secondaryButtonText}>{'返回'}</Text>
               </Pressable>
             </View>
           </>
         )}
         {pageCount ? (
-          <Text style={styles.pageIndicator}>第 {currentPage} / {pageCount} 页</Text>
+          <Text style={styles.pageIndicator}>
+            {'第'} {currentPage} / {pageCount} {'页'}
+          </Text>
         ) : null}
       </View>
     </SafeAreaView>
@@ -335,6 +401,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
+  },
+  primaryWideButton: {
+    flex: 1,
   },
   primaryButtonText: {
     ...typography.body,
