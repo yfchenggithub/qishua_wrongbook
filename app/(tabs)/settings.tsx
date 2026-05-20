@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
+import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
 import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
 import * as BackupService from '@/src/services/backup/BackupService';
@@ -29,6 +30,7 @@ import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsSt
 import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
+import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
 
 const PAGE_SCOPE = 'SettingsScreen';
 const VERSION_VALUE = '0.1.0';
@@ -56,6 +58,13 @@ type DevEntry = {
   href: DevRoute;
 };
 
+type ExportImageModeOption = {
+  mode: PrintEnhanceMode;
+  title: string;
+  description: string;
+  recommended?: boolean;
+};
+
 const DEFAULT_DATA_OVERVIEW_STATS: SettingsStats = {
   totalMistakes: 0,
   dueToday: 0,
@@ -75,6 +84,27 @@ const DEFAULT_REMINDER_SETTINGS: ReviewReminderSettings = {
   lastReminderDate: null,
   updatedAt: new Date(0).toISOString(),
 };
+
+const DEFAULT_EXPORT_IMAGE_MODE: PrintEnhanceMode = 'clear_print';
+
+const EXPORT_IMAGE_MODE_OPTIONS: ExportImageModeOption[] = [
+  {
+    mode: 'original',
+    title: '原图',
+    description: '不处理图片，保留拍摄效果。',
+  },
+  {
+    mode: 'clear_print',
+    title: '清晰打印，推荐',
+    description: '增强白底和文字清晰度，尽量保留公式、细线和浅色笔迹。',
+    recommended: true,
+  },
+  {
+    mode: 'bw_scan',
+    title: '黑白扫描，省墨',
+    description: '生成接近扫描件的白底黑字效果，适合纯文字题目，可能损失浅色细节。',
+  },
+];
 
 const DEV_ENTRIES: DevEntry[] = [
   {
@@ -308,6 +338,9 @@ export default function SettingsScreen() {
   const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
   const [worksheetExportStage, setWorksheetExportStage] =
     useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
+  const [exportImageMode, setExportImageMode] = useState<PrintEnhanceMode>(DEFAULT_EXPORT_IMAGE_MODE);
+  const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
+  const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
@@ -444,6 +477,21 @@ export default function SettingsScreen() {
     setLastBackupAt(history.lastBackupAt);
   }, []);
 
+  const loadExportImageMode = useCallback(async () => {
+    Logger.info(PAGE_SCOPE, 'Start loading export image mode.');
+    setIsExportImageModeLoading(true);
+    try {
+      const mode = await ExportImageModeService.loadExportImageMode();
+      setExportImageMode(mode);
+      Logger.info(PAGE_SCOPE, 'Loaded export image mode successfully.', { mode });
+    } catch (error) {
+      Logger.warn(PAGE_SCOPE, 'Failed to load export image mode, fallback to default.', { error });
+      setExportImageMode(DEFAULT_EXPORT_IMAGE_MODE);
+    } finally {
+      setIsExportImageModeLoading(false);
+    }
+  }, []);
+
   const loadDataOverview = useCallback(async (mode: 'initial' | 'refresh') => {
     const startedAt = Date.now();
     Logger.info(PAGE_SCOPE, 'Start loading settings statistics.', { mode });
@@ -489,8 +537,9 @@ export default function SettingsScreen() {
       void loadDataOverview(mode);
       void loadReminderState();
       void loadLastBackupState();
+      void loadExportImageMode();
       return undefined;
-    }, [loadDataOverview, loadLastBackupState, loadReminderState]),
+    }, [loadDataOverview, loadExportImageMode, loadLastBackupState, loadReminderState]),
   );
 
   const disableDeveloperMode = useCallback(
@@ -924,6 +973,48 @@ export default function SettingsScreen() {
     );
   }, [handleConfirmRestore, isInspectingBackup, isRestoring, showToast]);
 
+  const handleSelectExportImageMode = useCallback(
+    async (nextMode: PrintEnhanceMode) => {
+      if (isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving) {
+        return;
+      }
+
+      if (nextMode === exportImageMode) {
+        return;
+      }
+
+      setIsExportImageModeSaving(true);
+      Logger.info(PAGE_SCOPE, 'Start saving export image mode.', {
+        nextMode,
+        previousMode: exportImageMode,
+      });
+      try {
+        const savedMode = await ExportImageModeService.saveExportImageMode(nextMode);
+        setExportImageMode(savedMode);
+        Logger.info(PAGE_SCOPE, 'Saved export image mode successfully.', {
+          savedMode,
+        });
+        showToast('导出图片模式已更新', 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to save export image mode.', {
+          nextMode,
+          previousMode: exportImageMode,
+          error,
+        });
+        showToast('导出图片模式保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
+      } finally {
+        setIsExportImageModeSaving(false);
+      }
+    },
+    [
+      exportImageMode,
+      isExportImageModeLoading,
+      isExportImageModeSaving,
+      isExportingWorksheet,
+      showToast,
+    ],
+  );
+
   const handleExportTodayWorksheet = useCallback(async () => {
     if (isExportingWorksheet) {
       return;
@@ -944,11 +1035,13 @@ export default function SettingsScreen() {
       setWorksheetExportStage('preparing');
       Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_start', {
         dueToday,
+        printEnhanceMode: exportImageMode,
       });
 
       try {
         const result = await TodayWorksheetExportService.exportTodayWorksheet({
           expectedPendingCount: dueToday,
+          printEnhanceMode: exportImageMode,
           onProgress: (progress) => {
             setWorksheetExportStage(progress.stage);
           },
@@ -1021,10 +1114,12 @@ export default function SettingsScreen() {
     setWorksheetExportStage('preparing');
     Logger.info(PAGE_SCOPE, 'Start exporting today worksheet from settings.', {
       dueToday: dataOverview.dueToday,
+      printEnhanceMode: exportImageMode,
     });
     try {
       const result = await TodayWorksheetExportService.exportTodayWorksheet({
         expectedPendingCount: dataOverview.dueToday,
+        printEnhanceMode: exportImageMode,
         onProgress: (progress) => {
           setWorksheetExportStage(progress.stage);
         },
@@ -1075,7 +1170,7 @@ export default function SettingsScreen() {
       setIsExportingWorksheet(false);
       setWorksheetExportStage(null);
     }
-  }, [dataOverview.dueToday, isExportingWorksheet, router, showToast]);
+  }, [dataOverview.dueToday, exportImageMode, isExportingWorksheet, router, showToast]);
 
   const handleToggleReminder = useCallback(
     async (nextValue: boolean) => {
@@ -1252,6 +1347,17 @@ export default function SettingsScreen() {
     : canExportTodayWorksheet
       ? `将导出今日待复做的 ${worksheetPendingCount} 题，便于打印。`
       : '今日没有待复做错题，暂不可导出。';
+  const selectedExportImageModeOption = useMemo(
+    () =>
+      EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)
+      ?? EXPORT_IMAGE_MODE_OPTIONS[1],
+    [exportImageMode],
+  );
+  const exportImageModeStatusText = isExportImageModeLoading
+    ? '正在读取导出图片模式...'
+    : isExportImageModeSaving
+      ? '正在保存导出图片模式...'
+      : `当前模式：${selectedExportImageModeOption.title}`;
 
   const handleShowStorageDetails = useCallback(() => {
     Alert.alert(
@@ -1376,6 +1482,8 @@ export default function SettingsScreen() {
   const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages;
   const isRestoreBusy = isInspectingBackup || isRestoring;
   const isBackupBusy = isBackingUp || isRestoreBusy;
+  const isExportImageModeBusy =
+    isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving;
   const isReminderBusy = isReminderLoading || isReminderSwitchBusy || isReminderTimeBusy;
   const reminderTimeText = formatReminderTime(reminderSettings.hour, reminderSettings.minute);
   const canEditReminderTime = !isReminderLoading && !isReminderTimeBusy && !isReminderSwitchBusy;
@@ -1574,6 +1682,58 @@ export default function SettingsScreen() {
               <Text style={styles.cardDescription}>
                 导出今日到期错题，方便打印给学生做练习。
               </Text>
+              <View style={styles.exportModeSection}>
+                <Text style={styles.metaText}>导出图片模式</Text>
+                <View style={styles.exportModeList}>
+                  {EXPORT_IMAGE_MODE_OPTIONS.map((option) => {
+                    const isSelected = option.mode === exportImageMode;
+                    return (
+                      <Pressable
+                        key={option.mode}
+                        accessibilityRole="button"
+                        disabled={isExportImageModeBusy}
+                        onPress={() => {
+                          void handleSelectExportImageMode(option.mode);
+                        }}
+                        style={[
+                          styles.exportModeOption,
+                          isSelected ? styles.exportModeOptionSelected : null,
+                          isExportImageModeBusy ? styles.disabledButton : null,
+                        ]}>
+                        <View style={styles.exportModeOptionHeader}>
+                          <View style={styles.exportModeTitleRow}>
+                            <Text
+                              style={[
+                                styles.exportModeTitle,
+                                isSelected ? styles.exportModeTitleSelected : null,
+                              ]}>
+                              {option.title}
+                            </Text>
+                            {option.recommended ? (
+                              <View style={styles.recommendBadge}>
+                                <Text style={styles.recommendText}>推荐</Text>
+                              </View>
+                            ) : null}
+                          </View>
+                          <MaterialIcons
+                            color={isSelected ? '#A86A12' : '#A8AFB9'}
+                            name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'}
+                            size={18}
+                          />
+                        </View>
+                        <Text
+                          style={[
+                            styles.exportModeDescription,
+                            isSelected ? styles.exportModeDescriptionSelected : null,
+                          ]}>
+                          {option.description}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.metaText}>{exportImageModeStatusText}</Text>
+              </View>
               <Pressable
                 disabled={isExportingWorksheet || !canExportTodayWorksheet}
                 onPress={() => {
@@ -2026,6 +2186,56 @@ const styles = StyleSheet.create({
   },
   actionButtonTextBlue: {
     color: '#2D74D6',
+  },
+  exportModeSection: {
+    marginTop: spacing.xs,
+    gap: spacing.xs,
+  },
+  exportModeList: {
+    gap: spacing.xs,
+  },
+  exportModeOption: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#E9DAC3',
+    backgroundColor: '#FFFDF9',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    gap: 6,
+  },
+  exportModeOptionSelected: {
+    borderColor: '#D1A15D',
+    backgroundColor: '#FFF6E8',
+  },
+  exportModeOptionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  exportModeTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    gap: spacing.xs,
+  },
+  exportModeTitle: {
+    ...typography.bodySmall,
+    color: '#564028',
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  exportModeTitleSelected: {
+    color: '#A86A12',
+  },
+  exportModeDescription: {
+    ...typography.caption,
+    color: '#6D5A45',
+    lineHeight: 18,
+  },
+  exportModeDescriptionSelected: {
+    color: '#875321',
   },
   backupHintRow: {
     marginTop: spacing.xs,
