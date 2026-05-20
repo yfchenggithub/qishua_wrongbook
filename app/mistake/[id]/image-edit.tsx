@@ -34,8 +34,12 @@ const CORNER_MARK_SIZE = 10;
 const CORNER_MARK_THICKNESS = 2;
 const SAVE_DELAY_MS = 180;
 const IS_CROP_DEBUG_ENABLED = __DEV__;
+const ROTATE_NOOP_DEGREES_EPSILON = 0.05;
+const ROTATION_SNAP_THRESHOLD_DEGREES = 2.5;
+const ROTATION_SNAP_TARGETS = [0, 90, -90, -180] as const;
 
 type Corner = 'top_left' | 'top_right' | 'bottom_left' | 'bottom_right';
+type EditMode = 'rotate' | 'crop';
 
 type ImageRect = {
   x: number;
@@ -198,6 +202,131 @@ function buildDisplayedImageRect(container: ImageSize, imageSize: ImageSize): Im
     width,
     height,
   };
+}
+
+function normalizeRotationDegrees(degrees: number): number {
+  if (!Number.isFinite(degrees)) {
+    return 0;
+  }
+  const normalized = ((degrees + 180) % 360 + 360) % 360 - 180;
+  if (Object.is(normalized, -0)) {
+    return 0;
+  }
+  return normalized;
+}
+
+function toRotationDisplayText(degrees: number): string {
+  const normalized = normalizeRotationDegrees(degrees);
+  const value = normalized === -180 ? 180 : normalized;
+  return `${value.toFixed(1)}°`;
+}
+
+function getRotationDistanceDegrees(from: number, to: number): number {
+  return Math.abs(normalizeRotationDegrees(from - to));
+}
+
+function resolveRotationSnap(degrees: number): { value: number; isSnapped: boolean } {
+  const normalized = normalizeRotationDegrees(degrees);
+  let nearestTarget: number = ROTATION_SNAP_TARGETS[0];
+  let nearestDistance = getRotationDistanceDegrees(normalized, nearestTarget);
+
+  for (let index = 1; index < ROTATION_SNAP_TARGETS.length; index += 1) {
+    const target = ROTATION_SNAP_TARGETS[index];
+    const distance = getRotationDistanceDegrees(normalized, target);
+    if (distance < nearestDistance) {
+      nearestTarget = target;
+      nearestDistance = distance;
+    }
+  }
+
+  if (nearestDistance <= ROTATION_SNAP_THRESHOLD_DEGREES) {
+    return {
+      value: nearestTarget,
+      isSnapped: true,
+    };
+  }
+  return {
+    value: normalized,
+    isSnapped: false,
+  };
+}
+
+function snapRotationDegrees(degrees: number): number {
+  return resolveRotationSnap(degrees).value;
+}
+
+function buildRotatePreviewScale(baseWidth: number, baseHeight: number, degrees: number): number {
+  if (
+    !Number.isFinite(baseWidth)
+    || !Number.isFinite(baseHeight)
+    || baseWidth <= 0
+    || baseHeight <= 0
+  ) {
+    return 1;
+  }
+
+  const angle = (normalizeRotationDegrees(degrees) * Math.PI) / 180;
+  const absCos = Math.abs(Math.cos(angle));
+  const absSin = Math.abs(Math.sin(angle));
+  const rotatedWidth = baseWidth * absCos + baseHeight * absSin;
+  const rotatedHeight = baseWidth * absSin + baseHeight * absCos;
+
+  if (rotatedWidth <= 0 || rotatedHeight <= 0) {
+    return 1;
+  }
+
+  const fitScale = Math.min(1, baseWidth / rotatedWidth, baseHeight / rotatedHeight);
+  if (!Number.isFinite(fitScale) || fitScale <= 0) {
+    return 1;
+  }
+  return fitScale;
+}
+
+function toRotationStatusText(degrees: number): string {
+  const snap = resolveRotationSnap(degrees);
+  if (!snap.isSnapped) {
+    return `当前角度：${toRotationDisplayText(degrees)}`;
+  }
+  return `当前角度：${toRotationDisplayText(snap.value)}（已吸附）`;
+}
+
+function getTwoFingerAngle(event: unknown): number | null {
+  const nativeEvent = (event as { nativeEvent?: { touches?: Record<string, unknown>[] } })?.nativeEvent;
+  const touches = nativeEvent?.touches;
+  if (!Array.isArray(touches) || touches.length < 2) {
+    return null;
+  }
+
+  const pointA = touches[0];
+  const pointB = touches[1];
+  const ax = typeof pointA?.pageX === 'number' ? pointA.pageX : pointA?.locationX;
+  const ay = typeof pointA?.pageY === 'number' ? pointA.pageY : pointA?.locationY;
+  const bx = typeof pointB?.pageX === 'number' ? pointB.pageX : pointB?.locationX;
+  const by = typeof pointB?.pageY === 'number' ? pointB.pageY : pointB?.locationY;
+  if (
+    typeof ax !== 'number'
+    || typeof ay !== 'number'
+    || typeof bx !== 'number'
+    || typeof by !== 'number'
+    || !Number.isFinite(ax)
+    || !Number.isFinite(ay)
+    || !Number.isFinite(bx)
+    || !Number.isFinite(by)
+  ) {
+    return null;
+  }
+
+  return Math.atan2(by - ay, bx - ax);
+}
+
+function toAngleDeltaDegrees(currentAngleRad: number, startAngleRad: number): number {
+  let delta = currentAngleRad - startAngleRad;
+  if (delta > Math.PI) {
+    delta -= Math.PI * 2;
+  } else if (delta < -Math.PI) {
+    delta += Math.PI * 2;
+  }
+  return (delta * 180) / Math.PI;
 }
 
 function buildDefaultCropRect(displayedRect: ImageRect, slot: ImageSlot): ImageRect {
@@ -378,6 +507,8 @@ export default function MistakeImageEditScreen() {
   const [sourceImageSize, setSourceImageSize] = useState<ImageSize | null>(null);
   const [containerSize, setContainerSize] = useState<ImageSize | null>(null);
   const [cropBox, setCropBox] = useState<ImageRect | null>(null);
+  const [editMode, setEditMode] = useState<EditMode>('crop');
+  const [rotationDegrees, setRotationDegrees] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [debugProbePreview, setDebugProbePreview] = useState<DebugProbePreview | null>(null);
 
@@ -385,11 +516,15 @@ export default function MistakeImageEditScreen() {
   const cropBoxRef = useRef<ImageRect | null>(null);
   const displayedRectRef = useRef<ImageRect | null>(null);
   const isProcessingRef = useRef(false);
+  const editModeRef = useRef<EditMode>('crop');
+  const rotationDegreesRef = useRef(0);
   const debugSessionIdRef = useRef(createCropDebugSessionId());
   const temporarySourceUriRef = useRef<string | null>(null);
   const debugProbeUriRef = useRef<string | null>(null);
   const moveStartRectRef = useRef<ImageRect | null>(null);
   const resizeStartRectRef = useRef<ImageRect | null>(null);
+  const rotateStartAngleRef = useRef<number | null>(null);
+  const rotateStartDegreesRef = useRef(0);
 
   useEffect(() => {
     cropBoxRef.current = cropBox;
@@ -398,6 +533,14 @@ export default function MistakeImageEditScreen() {
   useEffect(() => {
     isProcessingRef.current = isProcessing;
   }, [isProcessing]);
+
+  useEffect(() => {
+    editModeRef.current = editMode;
+  }, [editMode]);
+
+  useEffect(() => {
+    rotationDegreesRef.current = rotationDegrees;
+  }, [rotationDegrees]);
 
   useEffect(
     () => () => {
@@ -453,6 +596,22 @@ export default function MistakeImageEditScreen() {
     }
     return buildDisplayedImageRect(containerSize, sourceImageSize);
   }, [containerSize, sourceImageSize]);
+
+  const effectiveRotationDegrees = snapRotationDegrees(rotationDegrees);
+  const hasPendingRotation = Math.abs(effectiveRotationDegrees) >= ROTATE_NOOP_DEGREES_EPSILON;
+  const previewHintText = editMode === 'rotate'
+    ? '双指旋转，接近 0/90/180 度会自动吸附'
+    : '拖动框体移动，拖动四角调整大小';
+  const rotatePreviewScale = useMemo(() => {
+    if (editMode !== 'rotate' || !displayedImageRect) {
+      return 1;
+    }
+    return buildRotatePreviewScale(
+      displayedImageRect.width,
+      displayedImageRect.height,
+      effectiveRotationDegrees,
+    );
+  }, [displayedImageRect, editMode, effectiveRotationDegrees]);
 
   useEffect(() => {
     displayedRectRef.current = displayedImageRect;
@@ -657,6 +816,8 @@ export default function MistakeImageEditScreen() {
 
   useEffect(() => {
     if (state.kind !== 'success') {
+      setEditMode('crop');
+      setRotationDegrees(0);
       cleanupDebugProbeUri(debugProbeUriRef.current);
       debugProbeUriRef.current = null;
       setDebugProbePreview(null);
@@ -665,6 +826,8 @@ export default function MistakeImageEditScreen() {
       setIsImageSizeLoading(false);
       return;
     }
+    setEditMode('crop');
+    setRotationDegrees(0);
     cleanupDebugProbeUri(debugProbeUriRef.current);
     debugProbeUriRef.current = null;
     setDebugProbePreview(null);
@@ -800,6 +963,53 @@ export default function MistakeImageEditScreen() {
       },
       onPanResponderTerminate: () => {
         resizeStartRectRef.current = null;
+      },
+    }),
+  ).current;
+
+  const rotateResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: (event, gestureState) =>
+        !isProcessingRef.current
+        && editModeRef.current === 'rotate'
+        && gestureState.numberActiveTouches >= 2
+        && getTwoFingerAngle(event) !== null,
+      onMoveShouldSetPanResponder: (event, gestureState) =>
+        !isProcessingRef.current
+        && editModeRef.current === 'rotate'
+        && gestureState.numberActiveTouches >= 2
+        && getTwoFingerAngle(event) !== null,
+      onPanResponderGrant: (event) => {
+        const startAngle = getTwoFingerAngle(event);
+        rotateStartAngleRef.current = startAngle;
+        rotateStartDegreesRef.current = rotationDegreesRef.current;
+      },
+      onPanResponderMove: (event) => {
+        if (editModeRef.current !== 'rotate') {
+          return;
+        }
+
+        const currentAngle = getTwoFingerAngle(event);
+        if (currentAngle === null) {
+          rotateStartAngleRef.current = null;
+          return;
+        }
+
+        if (rotateStartAngleRef.current === null) {
+          rotateStartAngleRef.current = currentAngle;
+          rotateStartDegreesRef.current = rotationDegreesRef.current;
+          return;
+        }
+
+        const deltaDegrees = toAngleDeltaDegrees(currentAngle, rotateStartAngleRef.current);
+        const nextDegrees = snapRotationDegrees(rotateStartDegreesRef.current + deltaDegrees);
+        setRotationDegrees(nextDegrees);
+      },
+      onPanResponderRelease: () => {
+        rotateStartAngleRef.current = null;
+      },
+      onPanResponderTerminate: () => {
+        rotateStartAngleRef.current = null;
       },
     }),
   ).current;
@@ -1048,7 +1258,118 @@ export default function MistakeImageEditScreen() {
     ],
   );
 
+  const handleResetRotation = useCallback(() => {
+    if (isProcessingRef.current) {
+      return;
+    }
+    setRotationDegrees(0);
+  }, []);
+
+  const handleApplyRotation = useCallback(async () => {
+    if (state.kind !== 'success' || isProcessingRef.current) {
+      return;
+    }
+    if (!sourceImageSize) {
+      Alert.alert('提示', '读取图片尺寸失败，请返回重试。');
+      return;
+    }
+
+    const appliedDegrees = effectiveRotationDegrees;
+    if (Math.abs(appliedDegrees) < ROTATE_NOOP_DEGREES_EPSILON) {
+      setRotationDegrees(0);
+      setEditMode('crop');
+      return;
+    }
+
+    const startedAt = Date.now();
+    isProcessingRef.current = true;
+    setIsProcessing(true);
+
+    try {
+      Logger.info(PAGE_SCOPE, 'Start apply rotate on image edit page.', {
+        debugSessionId: debugSessionIdRef.current,
+        mistakeId: state.mistakeId,
+        imageSlot: state.imageSlot,
+        sourceUriShort: toShortUri(state.sourceUri),
+        sourceWidth: sourceImageSize.width,
+        sourceHeight: sourceImageSize.height,
+        rotateDegrees: appliedDegrees,
+      });
+
+      const rotated = await ImageProcessService.rotateImageForEditing({
+        sourceUri: state.sourceUri,
+        rotateDegrees: appliedDegrees,
+        debugSessionId: debugSessionIdRef.current,
+      });
+
+      const previousTemporaryUri = temporarySourceUriRef.current;
+      if (previousTemporaryUri && previousTemporaryUri !== rotated.uri) {
+        try {
+          const previousFile = new File(previousTemporaryUri);
+          if (previousFile.exists) {
+            previousFile.delete();
+          }
+        } catch (error) {
+          Logger.warn(PAGE_SCOPE, 'Failed to cleanup previous temporary image while applying rotate.', {
+            debugSessionId: debugSessionIdRef.current,
+            previousUriShort: toShortUri(previousTemporaryUri),
+            error,
+          });
+        }
+      }
+
+      temporarySourceUriRef.current = rotated.isTemporary ? rotated.uri : null;
+
+      setState((current) => {
+        if (current.kind !== 'success') {
+          return current;
+        }
+        return {
+          ...current,
+          sourceUri: rotated.uri,
+          sourceWidth: rotated.width,
+          sourceHeight: rotated.height,
+          sourceIsTemporary: rotated.isTemporary,
+        };
+      });
+      setRotationDegrees(0);
+      setEditMode('crop');
+
+      Logger.info(PAGE_SCOPE, 'Apply rotate succeeded on image edit page.', {
+        debugSessionId: debugSessionIdRef.current,
+        mistakeId: state.mistakeId,
+        imageSlot: state.imageSlot,
+        outputUriShort: toShortUri(rotated.uri),
+        outputWidth: rotated.width,
+        outputHeight: rotated.height,
+        outputFileSize: rotated.fileSize,
+        durationMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Apply rotate failed on image edit page.', {
+        debugSessionId: debugSessionIdRef.current,
+        mistakeId: state.mistakeId,
+        imageSlot: state.imageSlot,
+        sourceUriShort: toShortUri(state.sourceUri),
+        rotateDegrees: appliedDegrees,
+        error,
+        durationMs: Date.now() - startedAt,
+      });
+      const message = error instanceof Error ? error.message : '应用旋转失败，请重试。';
+      Alert.alert('应用旋转失败', message || '应用旋转失败，请重试。');
+    } finally {
+      isProcessingRef.current = false;
+      if (isMountedRef.current) {
+        setIsProcessing(false);
+      }
+    }
+  }, [effectiveRotationDegrees, sourceImageSize, state]);
+
   const handleSaveCrop = useCallback(async () => {
+    if (hasPendingRotation) {
+      Alert.alert('提示', '有未应用的旋转，请先点击“应用旋转”或“重置角度”。');
+      return;
+    }
     if (state.kind !== 'success' || !cropBox || !displayedImageRect || !sourceImageSize) {
       Alert.alert('提示', '裁剪区域无效，请重新调整');
       return;
@@ -1082,17 +1403,25 @@ export default function MistakeImageEditScreen() {
     }
 
     await processAndSaveImage(cropRect);
-  }, [collectCropDebugSnapshot, cropBox, displayedImageRect, processAndSaveImage, sourceImageSize, state]);
+  }, [collectCropDebugSnapshot, cropBox, displayedImageRect, hasPendingRotation, processAndSaveImage, sourceImageSize, state]);
 
   const handleUseFullImage = useCallback(async () => {
+    if (hasPendingRotation) {
+      Alert.alert('提示', '有未应用的旋转，请先点击“应用旋转”或“重置角度”。');
+      return;
+    }
     if (state.kind !== 'success') {
       return;
     }
     await processAndSaveImage(undefined);
-  }, [processAndSaveImage, state]);
+  }, [hasPendingRotation, processAndSaveImage, state]);
 
   const handleDebugProbe = useCallback(async () => {
     if (!IS_CROP_DEBUG_ENABLED) {
+      return;
+    }
+    if (editMode !== 'crop') {
+      Alert.alert('调试预演', '请先切换到裁剪模式。');
       return;
     }
     if (state.kind !== 'success' || !cropBox || !displayedImageRect || !sourceImageSize) {
@@ -1167,6 +1496,7 @@ export default function MistakeImageEditScreen() {
     collectCropDebugSnapshot,
     cropBox,
     displayedImageRect,
+    editMode,
     sourceImageSize,
     state,
   ]);
@@ -1177,6 +1507,20 @@ export default function MistakeImageEditScreen() {
     }
     router.back();
   }, [router]);
+
+  const handleSwitchToRotateMode = useCallback(() => {
+    if (isProcessingRef.current) {
+      return;
+    }
+    setEditMode('rotate');
+  }, []);
+
+  const handleSwitchToCropMode = useCallback(() => {
+    if (isProcessingRef.current) {
+      return;
+    }
+    setEditMode('crop');
+  }, []);
 
   const handleContainerLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -1233,8 +1577,38 @@ export default function MistakeImageEditScreen() {
           <CardContainer style={styles.previewCard} padding={spacing.md}>
             <View style={styles.previewHeader}>
               <Text style={styles.previewTitle}>{state.title}</Text>
-              <Text style={styles.previewHint}>拖动框体移动，拖动四角调整大小</Text>
-              {IS_CROP_DEBUG_ENABLED ? (
+              <View style={styles.modeSwitchRow}>
+                <Pressable
+                  disabled={isProcessing}
+                  onPress={handleSwitchToRotateMode}
+                  style={({ pressed }) => [
+                    styles.modeSwitchButton,
+                    editMode === 'rotate' && styles.modeSwitchButtonActive,
+                    pressed && styles.pressed,
+                    isProcessing && styles.disabled,
+                  ]}>
+                  <Text style={[styles.modeSwitchText, editMode === 'rotate' && styles.modeSwitchTextActive]}>旋转</Text>
+                </Pressable>
+                <Pressable
+                  disabled={isProcessing}
+                  onPress={handleSwitchToCropMode}
+                  style={({ pressed }) => [
+                    styles.modeSwitchButton,
+                    editMode === 'crop' && styles.modeSwitchButtonActive,
+                    pressed && styles.pressed,
+                    isProcessing && styles.disabled,
+                  ]}>
+                  <Text style={[styles.modeSwitchText, editMode === 'crop' && styles.modeSwitchTextActive]}>裁剪</Text>
+                </Pressable>
+              </View>
+              <Text style={styles.previewHint}>{previewHintText}</Text>
+              {editMode === 'rotate' ? (
+                <Text style={styles.rotateStatusText}>{toRotationStatusText(rotationDegrees)}</Text>
+              ) : null}
+              {editMode === 'crop' && hasPendingRotation ? (
+                <Text style={styles.pendingRotationText}>有未应用旋转，请先应用或重置。</Text>
+              ) : null}
+              {IS_CROP_DEBUG_ENABLED && editMode === 'crop' ? (
                 <View style={styles.debugRow}>
                   <Text numberOfLines={1} style={styles.debugSessionText}>
                     调试会话: {debugSessionIdRef.current}
@@ -1255,8 +1629,20 @@ export default function MistakeImageEditScreen() {
               ) : null}
             </View>
 
-            <View style={styles.previewStage} onLayout={handleContainerLayout}>
-              <Image source={{ uri: state.sourceUri }} style={styles.previewImage} resizeMode="contain" />
+            <View
+              style={styles.previewStage}
+              onLayout={handleContainerLayout}
+              {...(editMode === 'rotate' ? rotateResponder.panHandlers : {})}>
+              <Image
+                source={{ uri: state.sourceUri }}
+                style={[
+                  styles.previewImage,
+                  editMode === 'rotate'
+                    ? { transform: [{ rotate: `${effectiveRotationDegrees}deg` }, { scale: rotatePreviewScale }] }
+                    : undefined,
+                ]}
+                resizeMode="contain"
+              />
 
               {isImageSizeLoading ? (
                 <View style={styles.previewLoadingMask}>
@@ -1265,7 +1651,7 @@ export default function MistakeImageEditScreen() {
                 </View>
               ) : null}
 
-              {displayedImageRect && cropBox ? (
+              {editMode === 'crop' && displayedImageRect && cropBox ? (
                 <>
                   <View
                     pointerEvents="none"
@@ -1361,7 +1747,7 @@ export default function MistakeImageEditScreen() {
               ) : null}
             </View>
 
-            {IS_CROP_DEBUG_ENABLED && debugProbePreview ? (
+            {IS_CROP_DEBUG_ENABLED && editMode === 'crop' && debugProbePreview ? (
               <View style={styles.debugPreviewBlock}>
                 <Text style={styles.debugPreviewTitle}>调试预演输出（不入库）</Text>
                 <Image source={{ uri: debugProbePreview.uri }} style={styles.debugPreviewImage} resizeMode="contain" />
@@ -1386,19 +1772,35 @@ export default function MistakeImageEditScreen() {
           <Pressable
             disabled={isProcessing}
             onPress={() => {
+              if (editMode === 'rotate') {
+                void handleApplyRotation();
+                return;
+              }
               void handleUseFullImage();
             }}
             style={({ pressed }) => [styles.bottomButtonNeutral, pressed && styles.pressed, isProcessing && styles.disabled]}>
-            <Text style={styles.bottomButtonNeutralText}>{isProcessing ? '处理中...' : '使用整张'}</Text>
+            <Text style={styles.bottomButtonNeutralText}>
+              {isProcessing ? '处理中...' : editMode === 'rotate' ? '应用旋转' : '使用整张'}
+            </Text>
           </Pressable>
 
           <Pressable
-            disabled={isProcessing}
+            disabled={isProcessing || (editMode === 'rotate' && !hasPendingRotation)}
             onPress={() => {
+              if (editMode === 'rotate') {
+                handleResetRotation();
+                return;
+              }
               void handleSaveCrop();
             }}
-            style={({ pressed }) => [styles.bottomButtonPrimary, pressed && styles.pressed, isProcessing && styles.disabled]}>
-            <Text style={styles.bottomButtonPrimaryText}>{isProcessing ? '处理中...' : '保存裁剪'}</Text>
+            style={({ pressed }) => [
+              styles.bottomButtonPrimary,
+              pressed && styles.pressed,
+              (isProcessing || (editMode === 'rotate' && !hasPendingRotation)) && styles.disabled,
+            ]}>
+            <Text style={styles.bottomButtonPrimaryText}>
+              {isProcessing ? '处理中...' : editMode === 'rotate' ? '重置角度' : '保存裁剪'}
+            </Text>
           </Pressable>
         </View>
       </ScreenContainer>
@@ -1502,6 +1904,37 @@ const styles = StyleSheet.create({
   previewHeader: {
     gap: spacing.xs,
   },
+  modeSwitchRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  modeSwitchButton: {
+    minWidth: 56,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modeSwitchButtonActive: {
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+  },
+  modeSwitchText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  modeSwitchTextActive: {
+    color: colors.white,
+  },
   debugRow: {
     marginTop: spacing.xs,
     flexDirection: 'row',
@@ -1538,6 +1971,16 @@ const styles = StyleSheet.create({
   previewHint: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  rotateStatusText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  pendingRotationText: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
   },
   previewStage: {
     flex: 1,

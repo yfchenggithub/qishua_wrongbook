@@ -8,6 +8,7 @@ import { Logger } from '@/src/services/Logger';
 const SERVICE_SCOPE = 'ImageProcessService';
 const OUTPUT_DIR_NAME = 'qishua_images';
 const MAX_OUTPUT_NAME_ATTEMPTS = 100;
+const ROTATE_NOOP_DEGREES_EPSILON = 0.05;
 
 const SLOT_CONFIG = {
   question: {
@@ -94,6 +95,20 @@ export interface CropDebugProbeResult {
     height: number;
   };
   normalizedCropRect: CropRect;
+}
+
+export interface RotateImageForEditingParams {
+  sourceUri: string;
+  rotateDegrees: number;
+  debugSessionId?: string;
+}
+
+export interface RotateImageForEditingResult {
+  uri: string;
+  width: number;
+  height: number;
+  fileSize: number;
+  isTemporary: boolean;
 }
 
 function normalizeRequiredText(value: string | null | undefined, fieldName: string): string {
@@ -409,6 +424,94 @@ export async function prepareCropSourceImage(
       height: fallbackSize.height,
       isTemporary: false,
     };
+  }
+}
+
+export async function rotateImageForEditing(
+  params: RotateImageForEditingParams,
+): Promise<RotateImageForEditingResult> {
+  const startedAt = Date.now();
+  let manipulatedUri: string | null = null;
+
+  try {
+    const sourceUri = normalizeRequiredText(params.sourceUri, 'sourceUri');
+    ensureSourceExists(sourceUri);
+
+    const rotateDegreesRaw = Number(params.rotateDegrees);
+    if (!Number.isFinite(rotateDegreesRaw)) {
+      throw new Error('Rotate degrees is invalid.');
+    }
+    const rotateDegrees =
+      Math.abs(rotateDegreesRaw) < ROTATE_NOOP_DEGREES_EPSILON ? 0 : rotateDegreesRaw;
+
+    if (rotateDegrees === 0) {
+      const sourceSize = await getImageDimensions(sourceUri);
+      const sourceFileSize = readFileSizeOrThrow(sourceUri);
+      Logger.info(SERVICE_SCOPE, 'Skip rotate image because angle is near zero.', {
+        debugSessionId: params.debugSessionId ?? null,
+        sourceUriShort: toShortUri(sourceUri),
+        rotateDegreesRaw,
+        durationMs: Date.now() - startedAt,
+      });
+      return {
+        uri: sourceUri,
+        width: sourceSize.width,
+        height: sourceSize.height,
+        fileSize: sourceFileSize,
+        isTemporary: false,
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Start rotate image for editing.', {
+      debugSessionId: params.debugSessionId ?? null,
+      sourceUriShort: toShortUri(sourceUri),
+      rotateDegrees,
+    });
+
+    const manipulated = await manipulateAsync(sourceUri, [{ rotate: rotateDegrees }], {
+      compress: 1,
+      format: SaveFormat.JPEG,
+      base64: false,
+    });
+    manipulatedUri = normalizeRequiredText(manipulated.uri, 'manipulatedUri');
+
+    const outputFileSize = readFileSizeOrThrow(manipulatedUri);
+    const outputWidth = Number(manipulated.width);
+    const outputHeight = Number(manipulated.height);
+    if (!Number.isFinite(outputWidth) || !Number.isFinite(outputHeight) || outputWidth <= 0 || outputHeight <= 0) {
+      throw new Error('Rotated image dimensions are invalid.');
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Rotate image for editing succeeded.', {
+      debugSessionId: params.debugSessionId ?? null,
+      sourceUriShort: toShortUri(sourceUri),
+      outputUriShort: toShortUri(manipulatedUri),
+      rotateDegrees,
+      outputWidth,
+      outputHeight,
+      outputFileSize,
+      durationMs: Date.now() - startedAt,
+    });
+
+    return {
+      uri: manipulatedUri,
+      width: Math.round(outputWidth),
+      height: Math.round(outputHeight),
+      fileSize: outputFileSize,
+      isTemporary: manipulatedUri !== sourceUri,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Rotate image for editing failed.', {
+      debugSessionId: params.debugSessionId ?? null,
+      sourceUriShort: toShortUri(params.sourceUri),
+      rotateDegrees: params.rotateDegrees,
+      error,
+      durationMs: Date.now() - startedAt,
+    });
+    if (manipulatedUri && manipulatedUri !== params.sourceUri) {
+      tryDeleteFile(manipulatedUri);
+    }
+    throw error;
   }
 }
 
