@@ -1,6 +1,8 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import { Platform } from 'react-native';
+import ReactNativeBlobUtil from 'react-native-blob-util';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
 import { optimizeImageForStorage } from '@/src/services/ImageOptimizeService';
@@ -19,6 +21,11 @@ const EXPORT_IMAGE_QUALITY = 0.55;
 const EXPORT_BUSY_MESSAGE = '导出/分享进行中，请稍后再试。';
 const SHARE_BUSY_ERROR_FRAGMENT = 'another share request is being processed';
 let isExportInProgress = false;
+const INVALID_PDF_URI_MESSAGE = 'Invalid PDF file path. Please generate the worksheet again.';
+const MISSING_PDF_FILE_MESSAGE = 'PDF file does not exist. Please generate it again.';
+const OPEN_WITH_OTHER_APP_FAILED_MESSAGE = 'Unable to open PDF. Try sharing it and opening from another app.';
+const SHARE_DIALOG_TITLE = 'Share Today Practice PDF';
+const OPEN_WITH_OTHER_APP_DIALOG_TITLE = 'Open PDF with another app';
 const FALLBACK_EXPORT_ERROR_MESSAGE = '导出失败，请稍后重试';
 const SHARE_UNAVAILABLE_MESSAGE = '当前设备暂不支持分享，请在文件管理中查看已导出的练习卷';
 const EMPTY_MESSAGE = '今天没有待复做题，无需导出练习卷';
@@ -47,6 +54,26 @@ export type ExportTodayReviewPdfResult =
       message: string;
       exportedCount?: number;
       fileUri?: string;
+    };
+
+export type ShareTodayReviewPdfResult =
+  | {
+      success: true;
+    }
+  | {
+      success: false;
+      reason: 'invalid_uri' | 'file_missing' | 'share_unavailable' | 'busy' | 'cancelled' | 'unknown';
+      message: string;
+    };
+
+export type OpenTodayReviewPdfWithOtherAppResult =
+  | {
+      success: true;
+    }
+  | {
+      success: false;
+      reason: 'invalid_uri' | 'file_missing' | 'open_failed' | 'unknown';
+      message: string;
     };
 
 type TodayReviewPdfRenderItem = {
@@ -91,6 +118,29 @@ function isShareBusyError(error: unknown): boolean {
     return false;
   }
   return error.message.toLowerCase().includes(SHARE_BUSY_ERROR_FRAGMENT);
+}
+
+function isUserCancelledShare(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  const name = error.name.toLowerCase();
+  return (
+    message.includes('cancel')
+    || message.includes('canceled')
+    || message.includes('cancelled')
+    || message.includes('dismiss')
+    || message.includes('did not share')
+    || name.includes('abort')
+  );
+}
+
+function toAndroidFilePath(uri: string): string {
+  if (uri.startsWith('file://')) {
+    return uri.slice('file://'.length);
+  }
+  return uri;
 }
 
 function resolveBaseDate(date?: string): Date {
@@ -646,46 +696,7 @@ export async function exportTodayReviewPdf(
 
     const exportFileName = buildExportFileName(dateString);
     const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
-
-    reportExportProgress(onProgress, 'open_share', exportItems.length);
-    const isShareAvailable = await Sharing.isAvailableAsync();
-    if (!isShareAvailable) {
-      Logger.warn(SERVICE_SCOPE, 'Sharing is unavailable after PDF export.', {
-        fileUriPreview: toSafeUriPreview(exportedFileUri),
-      });
-      return {
-        success: false,
-        reason: 'share_unavailable',
-        message: SHARE_UNAVAILABLE_MESSAGE,
-        exportedCount: exportItems.length,
-        fileUri: exportedFileUri,
-      };
-    }
-
-    try {
-      await Sharing.shareAsync(exportedFileUri, {
-        mimeType: PDF_MIME_TYPE,
-        dialogTitle: '分享今日练习卷',
-      });
-    } catch (error) {
-      if (isShareBusyError(error)) {
-        Logger.warn(SERVICE_SCOPE, 'Share request rejected because another share is processing.', {
-          date: dateString,
-          fileUriPreview: toSafeUriPreview(exportedFileUri),
-          error,
-        });
-        return {
-          success: false,
-          reason: 'busy',
-          message: EXPORT_BUSY_MESSAGE,
-          exportedCount: exportItems.length,
-          fileUri: exportedFileUri,
-        };
-      }
-      throw error;
-    }
-
-    Logger.info(SERVICE_SCOPE, 'Today review PDF exported and shared successfully.', {
+    Logger.info(SERVICE_SCOPE, 'Today review PDF exported successfully.', {
       date: dateString,
       exportedCount: exportItems.length,
       fileUriPreview: toSafeUriPreview(exportedFileUri),
@@ -708,5 +719,135 @@ export async function exportTodayReviewPdf(
     };
   } finally {
     isExportInProgress = false;
+  }
+}
+
+export async function shareTodayReviewPdf(fileUri: string): Promise<ShareTodayReviewPdfResult> {
+  const normalizedUri = normalizeOptionalText(fileUri);
+  if (!normalizedUri) {
+    return {
+      success: false,
+      reason: 'invalid_uri',
+      message: INVALID_PDF_URI_MESSAGE,
+    };
+  }
+
+  const file = new File(normalizedUri);
+  if (!file.exists) {
+    return {
+      success: false,
+      reason: 'file_missing',
+      message: MISSING_PDF_FILE_MESSAGE,
+    };
+  }
+
+  const isShareAvailable = await Sharing.isAvailableAsync();
+  if (!isShareAvailable) {
+    return {
+      success: false,
+      reason: 'share_unavailable',
+      message: SHARE_UNAVAILABLE_MESSAGE,
+    };
+  }
+
+  try {
+    await Sharing.shareAsync(normalizedUri, {
+      mimeType: PDF_MIME_TYPE,
+      dialogTitle: SHARE_DIALOG_TITLE,
+    });
+    return {
+      success: true,
+    };
+  } catch (error) {
+    if (isShareBusyError(error)) {
+      return {
+        success: false,
+        reason: 'busy',
+        message: EXPORT_BUSY_MESSAGE,
+      };
+    }
+
+    if (isUserCancelledShare(error)) {
+      return {
+        success: false,
+        reason: 'cancelled',
+        message: '',
+      };
+    }
+
+    Logger.error(SERVICE_SCOPE, 'Failed to share today review PDF.', {
+      fileUriPreview: toSafeUriPreview(normalizedUri),
+      error,
+    });
+    return {
+      success: false,
+      reason: 'unknown',
+      message: FALLBACK_EXPORT_ERROR_MESSAGE,
+    };
+  }
+}
+
+export async function openTodayReviewPdfWithOtherApp(
+  fileUri: string,
+): Promise<OpenTodayReviewPdfWithOtherAppResult> {
+  const normalizedUri = normalizeOptionalText(fileUri);
+  if (!normalizedUri) {
+    return {
+      success: false,
+      reason: 'invalid_uri',
+      message: INVALID_PDF_URI_MESSAGE,
+    };
+  }
+
+  const file = new File(normalizedUri);
+  if (!file.exists) {
+    return {
+      success: false,
+      reason: 'file_missing',
+      message: MISSING_PDF_FILE_MESSAGE,
+    };
+  }
+
+  try {
+    if (Platform.OS === 'android') {
+      const filePath = toAndroidFilePath(normalizedUri);
+      await ReactNativeBlobUtil.android.actionViewIntent(
+        filePath,
+        PDF_MIME_TYPE,
+        OPEN_WITH_OTHER_APP_DIALOG_TITLE,
+      );
+      return {
+        success: true,
+      };
+    }
+
+    const isShareAvailable = await Sharing.isAvailableAsync();
+    if (!isShareAvailable) {
+      return {
+        success: false,
+        reason: 'open_failed',
+        message: OPEN_WITH_OTHER_APP_FAILED_MESSAGE,
+      };
+    }
+
+    await Sharing.shareAsync(normalizedUri, {
+      mimeType: PDF_MIME_TYPE,
+      dialogTitle: OPEN_WITH_OTHER_APP_DIALOG_TITLE,
+    });
+    return {
+      success: true,
+    };
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Failed to open today review PDF with another app.', {
+      fileUriPreview: toSafeUriPreview(normalizedUri),
+      platform: Platform.OS,
+      error,
+    });
+
+    return {
+      success: false,
+      reason: 'unknown',
+      message: OPEN_WITH_OTHER_APP_FAILED_MESSAGE,
+    };
   }
 }

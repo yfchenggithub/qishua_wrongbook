@@ -449,6 +449,87 @@ export default function TodayScreen() {
   }, [isStartingSession, loadHomeData, router, showToast]);
 
   const handleExportTodayWorksheet = useCallback(async () => {
+    if (Number.isFinite(summary.todayDueCount)) {
+      const dueToday = Math.max(0, Math.floor(summary.todayDueCount));
+      if (isExportingPdf) {
+        return;
+      }
+
+      if (dueToday <= 0) {
+        Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
+          dueToday,
+        });
+        showToast('今天暂无需要复做的错题', 'info');
+        return;
+      }
+
+      const startedAt = Date.now();
+      Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_start', {
+        dueToday,
+      });
+
+      setIsExportingPdf(true);
+      setExportStage('preparing');
+      try {
+        const result = await TodayWorksheetExportService.exportTodayWorksheet({
+          expectedPendingCount: dueToday,
+          onProgress: (progress) => {
+            setExportStage(progress.stage);
+          },
+        });
+
+        if (result.outcome === 'success') {
+          const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
+          if (!pdfUri) {
+            Logger.warn(PAGE_SCOPE, 'Worksheet export succeeded but PDF URI is empty.', {
+              exportedCount: result.exportedCount,
+            });
+            showToast('导出成功但未找到 PDF 文件，请重试', 'error', TOAST_DURATION_LONG);
+            return;
+          }
+
+          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_success', {
+            pdfUri,
+            questionCount: result.exportedCount,
+            elapsedMs: Date.now() - startedAt,
+          });
+          Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
+            pdfUri,
+          });
+          router.push({
+            pathname: '/pdf-preview',
+            params: {
+              pdfUri,
+            },
+          } as never);
+          return;
+        }
+
+        if (result.outcome === 'empty') {
+          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
+            dueToday,
+          });
+          showToast('今天暂无需要复做的错题', 'info');
+          void loadHomeData('refresh');
+          return;
+        }
+
+        if (result.outcome === 'busy') {
+          showToast(result.message, 'info', TOAST_DURATION_LONG);
+          return;
+        }
+
+        showToast(result.message, 'error', TOAST_DURATION_LONG);
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to export today worksheet.', { error });
+        showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+      } finally {
+        setIsExportingPdf(false);
+        setExportStage(null);
+      }
+      return;
+    }
+
     if (isExportingPdf) {
       return;
     }
@@ -496,14 +577,11 @@ export default function TodayScreen() {
       setIsExportingPdf(false);
       setExportStage(null);
     }
-  }, [isExportingPdf, loadHomeData, showToast, summary.todayDueCount]);
+  }, [isExportingPdf, loadHomeData, router, showToast, summary.todayDueCount]);
 
   const canExportTodayWorksheet = summary.todayDueCount > 0;
   const exportButtonText = isExportingPdf
-    ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
-        exportStage ?? 'preparing',
-        summary.todayDueCount,
-      )
+    ? (exportStage === 'preparing' ? '正在生成练习卷 PDF...' : '正在生成练习卷 PDF...')
     : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(summary.todayDueCount);
   const exportHintText = isExportingPdf
     ? exportButtonText

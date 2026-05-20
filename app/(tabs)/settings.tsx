@@ -929,6 +929,89 @@ export default function SettingsScreen() {
       return;
     }
 
+    if (Number.isFinite(dataOverview.dueToday)) {
+      const dueToday = Math.max(0, Math.floor(dataOverview.dueToday));
+      if (dueToday <= 0) {
+        Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
+          dueToday,
+        });
+        showToast('今天暂无需要复做的错题', 'info');
+        return;
+      }
+
+      const startedAt = Date.now();
+      setIsExportingWorksheet(true);
+      setWorksheetExportStage('preparing');
+      Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_start', {
+        dueToday,
+      });
+
+      try {
+        const result = await TodayWorksheetExportService.exportTodayWorksheet({
+          expectedPendingCount: dueToday,
+          onProgress: (progress) => {
+            setWorksheetExportStage(progress.stage);
+          },
+        });
+
+        if (result.outcome === 'success') {
+          const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
+          if (!pdfUri) {
+            Logger.warn(PAGE_SCOPE, 'Worksheet export succeeded but PDF URI is empty.', {
+              exportedCount: result.exportedCount,
+            });
+            showToast('导出成功但未找到 PDF 文件，请重试', 'error', TOAST_DURATION_LONG);
+            return;
+          }
+
+          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_success', {
+            pdfUri,
+            questionCount: result.exportedCount,
+            elapsedMs: Date.now() - startedAt,
+          });
+          Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
+            pdfUri,
+          });
+          router.push({
+            pathname: '/pdf-preview',
+            params: {
+              pdfUri,
+            },
+          } as never);
+          return;
+        }
+
+        if (result.outcome === 'empty') {
+          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
+            dueToday,
+          });
+          showToast('今天暂无需要复做的错题', 'info');
+          return;
+        }
+
+        if (result.outcome === 'busy') {
+          Logger.info(PAGE_SCOPE, 'Export skipped because another export flow is still in progress.', {
+            dueToday,
+          });
+          showToast(result.message, 'info', TOAST_DURATION_LONG);
+          return;
+        }
+
+        Logger.warn(PAGE_SCOPE, 'Today worksheet export failed from settings.', {
+          outcome: result.outcome,
+          dueToday,
+        });
+        showToast(result.message, 'error', TOAST_DURATION_LONG);
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to export worksheet from settings.', { error });
+        showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+      } finally {
+        setIsExportingWorksheet(false);
+        setWorksheetExportStage(null);
+      }
+      return;
+    }
+
     if (dataOverview.dueToday <= 0) {
       showToast('今天没有待复做错题可导出', 'info');
       return;
@@ -992,7 +1075,7 @@ export default function SettingsScreen() {
       setIsExportingWorksheet(false);
       setWorksheetExportStage(null);
     }
-  }, [dataOverview.dueToday, isExportingWorksheet, showToast]);
+  }, [dataOverview.dueToday, isExportingWorksheet, router, showToast]);
 
   const handleToggleReminder = useCallback(
     async (nextValue: boolean) => {
