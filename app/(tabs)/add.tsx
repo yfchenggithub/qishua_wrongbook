@@ -1397,6 +1397,8 @@ export default function AddScreen() {
         visible={previewPhoto !== null}
         uri={previewPhoto?.image.uri ?? null}
         title="题目照片预览"
+        interactionMode="zoomable"
+        logSource="add_screen"
         onClose={handleClosePreview}
       />
       </ScreenContainer>

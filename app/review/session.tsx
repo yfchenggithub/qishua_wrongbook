@@ -1330,6 +1330,8 @@ export default function ReviewSessionPage() {
         visible={previewImage !== null}
         uri={previewImage?.uri ?? null}
         title={previewImage?.title ?? ''}
+        interactionMode="zoomable"
+        logSource="review_session"
         onClose={handleClosePreview}
       />
 

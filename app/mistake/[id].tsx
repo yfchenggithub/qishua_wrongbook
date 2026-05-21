@@ -2305,6 +2305,8 @@ export default function MistakeDetailScreen() {
           visible={previewImage !== null}
           uri={previewImage?.uri ?? null}
           title={previewImage?.title ?? ''}
+          interactionMode="zoomable"
+          logSource="mistake_detail"
           onClose={handleClosePreview}
         />
         </ScreenContainer>
