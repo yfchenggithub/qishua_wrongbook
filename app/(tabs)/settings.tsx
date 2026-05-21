@@ -664,13 +664,22 @@ export default function SettingsScreen() {
   }, [isDevModeUnlocked, showToast]);
 
   const handleVersionLongPress = useCallback(() => {
-    if (!isDevModeUnlocked) {
+    skipNextVersionPressRef.current = true;
+
+    if (isDevModeUnlocked) {
+      disableDeveloperMode({ showDisabledToast: true, source: 'long_press' });
       return;
     }
 
-    skipNextVersionPressRef.current = true;
-    disableDeveloperMode({ showDisabledToast: true, source: 'long_press' });
-  }, [disableDeveloperMode, isDevModeUnlocked]);
+    tapCountRef.current = 0;
+    lastTapAtRef.current = null;
+    setIsDevModeUnlocked(true);
+    Logger.info(PAGE_SCOPE, 'Developer mode unlocked from version long press.');
+    void saveDeveloperModeEnabled(true).catch((error) => {
+      Logger.error(PAGE_SCOPE, 'Failed to persist developer mode enabled state from long press.', { error });
+    });
+    showToast('开发者模式已开启', 'success');
+  }, [disableDeveloperMode, isDevModeUnlocked, showToast]);
 
   const handleDisableDeveloperMode = useCallback(() => {
     Alert.alert(
