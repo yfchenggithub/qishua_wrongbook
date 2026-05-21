@@ -135,6 +135,28 @@ const BW_SCAN_STRENGTH_OPTIONS: BwScanStrengthOption[] = [
   },
 ];
 
+const CLEAR_PRINT_STRENGTH_OPTIONS: BwScanStrengthOption[] = BW_SCAN_STRENGTH_OPTIONS.map((option) => {
+  if (option.value === 'weak') {
+    return {
+      ...option,
+      title: '弱',
+      description: '轻增强：更保留灰度细节，文字加深较温和',
+    };
+  }
+  if (option.value === 'strong') {
+    return {
+      ...option,
+      title: '强',
+      description: '强增强：优先让文字更黑更锐利，浅色笔迹可能变淡',
+    };
+  }
+  return {
+    ...option,
+    title: '中',
+    description: '平衡增强：白底与文字清晰度兼顾，适合大多数题目',
+  };
+});
+
 const DEV_ENTRIES: DevEntry[] = [
   {
     title: '数据库调试',
@@ -512,14 +534,17 @@ export default function SettingsScreen() {
     Logger.info(PAGE_SCOPE, 'Start loading export image mode.');
     setIsExportImageModeLoading(true);
     try {
-      const mode = await ExportImageModeService.loadExportImageMode();
-      setExportImageMode(mode);
+      const settings = await ExportImageModeService.loadExportImageSettings();
+      setExportImageMode(settings.mode);
+      setExportBwScanStrength(settings.bwScanStrength);
       Logger.info(PAGE_SCOPE, 'Loaded export image mode successfully.', {
-        mode,
+        mode: settings.mode,
+        bwScanStrength: settings.bwScanStrength,
       });
     } catch (error) {
       Logger.warn(PAGE_SCOPE, 'Failed to load export image mode, fallback to default.', { error });
       setExportImageMode(DEFAULT_EXPORT_IMAGE_MODE);
+      setExportBwScanStrength(DEFAULT_EXPORT_BW_SCAN_STRENGTH);
     } finally {
       setIsExportImageModeLoading(false);
     }
@@ -1020,18 +1045,25 @@ export default function SettingsScreen() {
       Logger.info(PAGE_SCOPE, 'Start saving export image mode.', {
         nextMode,
         previousMode: exportImageMode,
+        bwScanStrength: exportBwScanStrength,
       });
       try {
-        const savedMode = await ExportImageModeService.saveExportImageMode(nextMode);
-        setExportImageMode(savedMode);
+        const savedSettings = await ExportImageModeService.saveExportImageSettings(
+          nextMode,
+          exportBwScanStrength,
+        );
+        setExportImageMode(savedSettings.mode);
+        setExportBwScanStrength(savedSettings.bwScanStrength);
         Logger.info(PAGE_SCOPE, 'Saved export image mode successfully.', {
-          savedMode,
+          savedMode: savedSettings.mode,
+          bwScanStrength: savedSettings.bwScanStrength,
         });
         showToast('导出图片模式已更新', 'success');
       } catch (error) {
         Logger.error(PAGE_SCOPE, 'Failed to save export image mode.', {
           nextMode,
           previousMode: exportImageMode,
+          bwScanStrength: exportBwScanStrength,
           error,
         });
         showToast('导出图片模式保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
@@ -1040,6 +1072,7 @@ export default function SettingsScreen() {
       }
     },
     [
+      exportBwScanStrength,
       exportImageMode,
       isExportImageModeLoading,
       isExportImageModeSaving,
@@ -1050,7 +1083,7 @@ export default function SettingsScreen() {
 
   const handleSelectBwScanStrength = useCallback(
     async (nextStrength: PrintEnhanceBwScanStrength) => {
-      if (isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving || exportImageMode !== 'bw_scan') {
+      if (isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving || exportImageMode !== 'clear_print') {
         return;
       }
 
@@ -1059,7 +1092,7 @@ export default function SettingsScreen() {
       }
 
       setIsExportImageModeSaving(true);
-      Logger.info(PAGE_SCOPE, 'Start saving bw_scan strength.', {
+      Logger.info(PAGE_SCOPE, 'Start saving clear_print strength.', {
         mode: exportImageMode,
         previousBwScanStrength: exportBwScanStrength,
         nextBwScanStrength: nextStrength,
@@ -1071,19 +1104,19 @@ export default function SettingsScreen() {
         );
         setExportImageMode(savedSettings.mode);
         setExportBwScanStrength(savedSettings.bwScanStrength);
-        Logger.info(PAGE_SCOPE, 'Saved bw_scan strength successfully.', {
+        Logger.info(PAGE_SCOPE, 'Saved clear_print strength successfully.', {
           mode: savedSettings.mode,
           bwScanStrength: savedSettings.bwScanStrength,
         });
-        showToast('黑白扫描强度已更新', 'success');
+        showToast('清晰打印强度已更新', 'success');
       } catch (error) {
-        Logger.error(PAGE_SCOPE, 'Failed to save bw_scan strength.', {
+        Logger.error(PAGE_SCOPE, 'Failed to save clear_print strength.', {
           mode: exportImageMode,
           previousBwScanStrength: exportBwScanStrength,
           nextBwScanStrength: nextStrength,
           error,
         });
-        showToast('黑白扫描强度保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
+        showToast('清晰打印强度保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
       } finally {
         setIsExportImageModeSaving(false);
       }
@@ -1442,8 +1475,8 @@ export default function SettingsScreen() {
   );
   const selectedBwScanStrengthOption = useMemo(
     () =>
-      BW_SCAN_STRENGTH_OPTIONS.find((item) => item.value === exportBwScanStrength)
-      ?? BW_SCAN_STRENGTH_OPTIONS[1],
+      CLEAR_PRINT_STRENGTH_OPTIONS.find((item) => item.value === exportBwScanStrength)
+      ?? CLEAR_PRINT_STRENGTH_OPTIONS[1],
     [exportBwScanStrength],
   );
   const exportImageModeStatusText = isExportImageModeLoading
@@ -1451,6 +1484,10 @@ export default function SettingsScreen() {
     : isExportImageModeSaving
       ? '正在保存导出图片模式...'
       : `当前模式：${selectedExportImageModeOption.title}`;
+
+  const exportImageModeStatusWithStrengthText = exportImageMode === 'clear_print'
+    ? `${exportImageModeStatusText} | 强度: ${selectedBwScanStrengthOption.title}`
+    : exportImageModeStatusText;
 
   const handleShowStorageDetails = useCallback(() => {
     Alert.alert(
@@ -1825,11 +1862,11 @@ export default function SettingsScreen() {
                     );
                   })}
                 </View>
-                {/*
+                {exportImageMode === 'clear_print' ? (
                   <View style={styles.bwScanStrengthSection}>
-                    <Text style={styles.metaText}>黑白扫描强度</Text>
+                    <Text style={styles.metaText}>清晰打印强度</Text>
                     <View style={[styles.bwScanStrengthTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                      {BW_SCAN_STRENGTH_OPTIONS.map((option) => {
+                      {CLEAR_PRINT_STRENGTH_OPTIONS.map((option) => {
                         const isSelected = option.value === exportBwScanStrength;
                         return (
                           <Pressable
@@ -1858,8 +1895,8 @@ export default function SettingsScreen() {
                       {selectedBwScanStrengthOption.description}
                     </Text>
                   </View>
-                */}
-                <Text style={styles.metaText}>{exportImageModeStatusText}</Text>
+                ) : null}
+                <Text style={styles.metaText}>{exportImageModeStatusWithStrengthText}</Text>
               </View>
               <Pressable
                 disabled={isExportingWorksheet || !canExportTodayWorksheet}

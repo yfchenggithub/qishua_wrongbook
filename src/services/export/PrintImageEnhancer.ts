@@ -155,6 +155,23 @@ function buildResizeByLongEdge(
   };
 }
 
+function resolveEnhanceMaxLongEdgePx(
+  mode: Exclude<PrintEnhanceMode, 'original'>,
+  bwScanStrength: PrintEnhanceBwScanStrength,
+): number {
+  const fallback = CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx;
+  if (mode !== 'clear_print') {
+    return fallback;
+  }
+  if (bwScanStrength === 'strong') {
+    return 3000;
+  }
+  if (bwScanStrength === 'weak') {
+    return 2400;
+  }
+  return 2700;
+}
+
 function safeReadFileSize(uri: string): number | null {
   try {
     const info = new File(uri).info();
@@ -266,6 +283,7 @@ async function runOpenCvEnhanceProvider(
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
   const preferredOutputFormat = getPreferredOutputFormat(mode);
+  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, bwScanStrength);
 
   if (Platform.OS !== 'android') {
     return {
@@ -301,7 +319,7 @@ async function runOpenCvEnhanceProvider(
       outputUri: tempOutputFile.uri,
       mode,
       bwScanStrength,
-      maxLongEdgePx: CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx,
+      maxLongEdgePx,
       jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
     });
 
@@ -370,6 +388,7 @@ async function runBitmapFallbackEnhanceProvider(
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
   const preferredOutputFormat = getPreferredOutputFormat(mode);
+  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, bwScanStrength);
   if (Platform.OS === 'android') {
     const nativeModule = resolveNativeEnhanceModule();
     if (!nativeModule || typeof nativeModule.enhanceForPdfPrintBitmap !== 'function') {
@@ -396,7 +415,7 @@ async function runBitmapFallbackEnhanceProvider(
         outputUri: tempOutputFile.uri,
         mode,
         bwScanStrength,
-        maxLongEdgePx: CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx,
+        maxLongEdgePx,
         jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
       });
 
@@ -472,7 +491,7 @@ async function runBitmapFallbackEnhanceProvider(
       ? buildResizeByLongEdge(
         originalSize.width,
         originalSize.height,
-        CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx,
+        maxLongEdgePx,
       )
       : null;
 

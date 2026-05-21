@@ -54,6 +54,21 @@ class QishuaPrintImageEnhanceModule(
     val minComponentAreaPx: Int,
   )
 
+  private data class ClearPrintParams(
+    val illuminationSigma: Double,
+    val claheClipLimit: Double,
+    val unsharpAmount: Double,
+    val unsharpSigma: Double,
+    val toneAlpha: Double,
+    val toneBeta: Double,
+    val textAlpha: Double,
+    val textBeta: Double,
+    val textMaskBlockSize: Int,
+    val textMaskC: Double,
+    val textMaskDilateKernel: Int,
+    val backgroundGray: Double,
+  )
+
   private data class EnhanceRequest(
     val sourceUri: String,
     val outputUri: String,
@@ -349,7 +364,7 @@ class QishuaPrintImageEnhanceModule(
     Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
 
     val processedGray = when (mode) {
-      EnhanceMode.CLEAR_PRINT -> buildClearPrintMat(gray)
+      EnhanceMode.CLEAR_PRINT -> buildClearPrintMat(gray, bwScanStrength)
       EnhanceMode.BW_SCAN -> buildBwScanMat(gray, bwScanStrength)
     }
 
@@ -366,35 +381,111 @@ class QishuaPrintImageEnhanceModule(
     return outputBitmap
   }
 
-  private fun buildClearPrintMat(gray: Mat): Mat {
+  private fun resolveClearPrintParams(strength: BwScanStrength): ClearPrintParams {
+    return when (strength) {
+      BwScanStrength.WEAK -> ClearPrintParams(
+        illuminationSigma = 30.0,
+        claheClipLimit = 1.8,
+        unsharpAmount = 0.34,
+        unsharpSigma = 1.2,
+        toneAlpha = 1.03,
+        toneBeta = 12.0,
+        textAlpha = 1.12,
+        textBeta = -22.0,
+        textMaskBlockSize = 31,
+        textMaskC = 5.0,
+        textMaskDilateKernel = 1,
+        backgroundGray = 248.0,
+      )
+      BwScanStrength.STRONG -> ClearPrintParams(
+        illuminationSigma = 38.0,
+        claheClipLimit = 2.8,
+        unsharpAmount = 0.58,
+        unsharpSigma = 1.45,
+        toneAlpha = 1.1,
+        toneBeta = 18.0,
+        textAlpha = 1.28,
+        textBeta = -44.0,
+        textMaskBlockSize = 45,
+        textMaskC = 7.0,
+        textMaskDilateKernel = 2,
+        backgroundGray = 246.0,
+      )
+      BwScanStrength.MEDIUM -> ClearPrintParams(
+        illuminationSigma = 34.0,
+        claheClipLimit = 2.2,
+        unsharpAmount = 0.46,
+        unsharpSigma = 1.3,
+        toneAlpha = 1.06,
+        toneBeta = 16.0,
+        textAlpha = 1.19,
+        textBeta = -32.0,
+        textMaskBlockSize = 37,
+        textMaskC = 6.0,
+        textMaskDilateKernel = 2,
+        backgroundGray = 247.0,
+      )
+    }
+  }
+
+  private fun buildClearPrintMat(gray: Mat, strength: BwScanStrength): Mat {
+    val params = resolveClearPrintParams(strength)
     val denoised = Mat()
     Photo.fastNlMeansDenoising(gray, denoised)
 
     val illuminationNormalized = normalizeIlluminationForScan(
       denoised,
-      34.0,
+      params.illuminationSigma,
     )
 
     val contrastEnhanced = Mat()
-    val clahe: CLAHE = Imgproc.createCLAHE(2.4, Size(8.0, 8.0))
+    val clahe: CLAHE = Imgproc.createCLAHE(params.claheClipLimit, Size(8.0, 8.0))
     clahe.apply(illuminationNormalized, contrastEnhanced)
 
-    val edges = Mat()
-    Imgproc.Laplacian(contrastEnhanced, edges, CvType.CV_8U, 3, 1.0, 0.0)
+    val blurred = Mat()
+    Imgproc.GaussianBlur(contrastEnhanced, blurred, Size(0.0, 0.0), params.unsharpSigma)
 
     val sharpened = Mat()
-    Core.addWeighted(contrastEnhanced, 1.22, edges, -0.18, 10.0, sharpened)
+    Core.addWeighted(
+      contrastEnhanced,
+      1.0 + params.unsharpAmount,
+      blurred,
+      -params.unsharpAmount,
+      0.0,
+      sharpened,
+    )
 
-    val lifted = Mat()
-    Core.convertScaleAbs(sharpened, lifted, 1.06, 18.0)
+    val toned = Mat()
+    Core.convertScaleAbs(sharpened, toned, params.toneAlpha, params.toneBeta)
+
+    val textMaskBinary = Mat()
+    Imgproc.adaptiveThreshold(
+      contrastEnhanced,
+      textMaskBinary,
+      255.0,
+      Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+      Imgproc.THRESH_BINARY,
+      params.textMaskBlockSize,
+      params.textMaskC,
+    )
+    val reinforced = composeSoftBwScanFromBinary(
+      textSourceGray = toned,
+      binary = textMaskBinary,
+      textAlpha = params.textAlpha,
+      textBeta = params.textBeta,
+      maskDilateKernel = params.textMaskDilateKernel,
+      backgroundGray = params.backgroundGray,
+    )
 
     denoised.release()
     illuminationNormalized.release()
     contrastEnhanced.release()
-    edges.release()
+    blurred.release()
     sharpened.release()
+    toned.release()
+    textMaskBinary.release()
 
-    return lifted
+    return reinforced
   }
 
   private fun resolveBwScanParams(strength: BwScanStrength): BwScanParams {
@@ -869,12 +960,12 @@ class QishuaPrintImageEnhanceModule(
     bwScanStrength: BwScanStrength,
   ): Bitmap {
     return when (mode) {
-      EnhanceMode.CLEAR_PRINT -> enhanceBitmapClearPrint(sourceBitmap)
+      EnhanceMode.CLEAR_PRINT -> enhanceBitmapClearPrint(sourceBitmap, bwScanStrength)
       EnhanceMode.BW_SCAN -> enhanceBitmapBwScan(sourceBitmap, bwScanStrength)
     }
   }
 
-  private fun enhanceBitmapClearPrint(sourceBitmap: Bitmap): Bitmap {
+  private fun enhanceBitmapClearPrint(sourceBitmap: Bitmap, strength: BwScanStrength): Bitmap {
     val output = Bitmap.createBitmap(sourceBitmap.width, sourceBitmap.height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -883,8 +974,16 @@ class QishuaPrintImageEnhanceModule(
       setSaturation(0f)
     }
 
-    val contrast = 1.18f
-    val brightness = 12f
+    val contrast = when (strength) {
+      BwScanStrength.WEAK -> 1.14f
+      BwScanStrength.STRONG -> 1.3f
+      BwScanStrength.MEDIUM -> 1.22f
+    }
+    val brightness = when (strength) {
+      BwScanStrength.WEAK -> 8f
+      BwScanStrength.STRONG -> 14f
+      BwScanStrength.MEDIUM -> 12f
+    }
     val translate = ((-0.5f * contrast) + 0.5f) * 255f + brightness
     val contrastMatrix = ColorMatrix(
       floatArrayOf(
