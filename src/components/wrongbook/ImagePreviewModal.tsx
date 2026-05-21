@@ -20,10 +20,16 @@ export interface ImagePreviewModalProps {
   logSource?: string;
 }
 
+type Size = {
+  width: number;
+  height: number;
+};
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2;
 const LEGACY_DOUBLE_TAP_DELAY = 300;
+const EDGE_RESISTANCE = 0.22;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -36,25 +42,57 @@ function clampScale(value: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
 }
 
-function getTranslationLimit(containerSize: number, scale: number): number {
+function getTranslationLimit(contentSize: number, containerSize: number, scale: number): number {
   'worklet';
 
-  if (!Number.isFinite(containerSize) || containerSize <= 0 || scale <= MIN_SCALE) {
+  if (!Number.isFinite(contentSize) || !Number.isFinite(containerSize)) {
+    return 0;
+  }
+  if (contentSize <= 0 || containerSize <= 0 || scale <= MIN_SCALE) {
     return 0;
   }
 
-  return ((containerSize * scale) - containerSize) / 2;
+  const scaledContentSize = contentSize * scale;
+  if (scaledContentSize <= containerSize) {
+    return 0;
+  }
+
+  return (scaledContentSize - containerSize) / 2;
 }
 
-function clampTranslation(value: number, containerSize: number, scale: number): number {
+function clampTranslation(value: number, contentSize: number, containerSize: number, scale: number): number {
   'worklet';
 
-  const limit = getTranslationLimit(containerSize, scale);
+  const limit = getTranslationLimit(contentSize, containerSize, scale);
   if (limit <= 0) {
     return 0;
   }
 
   return Math.min(limit, Math.max(-limit, value));
+}
+
+function applyTranslationResistance(
+  value: number,
+  contentSize: number,
+  containerSize: number,
+  scale: number,
+): number {
+  'worklet';
+
+  const limit = getTranslationLimit(contentSize, containerSize, scale);
+  if (limit <= 0) {
+    return 0;
+  }
+
+  if (value < -limit) {
+    return -limit + ((value + limit) * EDGE_RESISTANCE);
+  }
+
+  if (value > limit) {
+    return limit + ((value - limit) * EDGE_RESISTANCE);
+  }
+
+  return value;
 }
 
 function normalizeUri(uri: string | null): string | null {
@@ -66,6 +104,22 @@ function normalizeUri(uri: string | null): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function computeContainedSize(container: Size, intrinsic: Size | null): Size {
+  if (container.width <= 0 || container.height <= 0) {
+    return { width: 0, height: 0 };
+  }
+
+  if (!intrinsic || intrinsic.width <= 0 || intrinsic.height <= 0) {
+    return container;
+  }
+
+  const scale = Math.min(container.width / intrinsic.width, container.height / intrinsic.height);
+  return {
+    width: intrinsic.width * scale,
+    height: intrinsic.height * scale,
+  };
+}
+
 export function ImagePreviewModal({
   visible,
   uri,
@@ -75,6 +129,8 @@ export function ImagePreviewModal({
   logSource = 'unknown',
 }: ImagePreviewModalProps) {
   const [imageFailed, setImageFailed] = useState(false);
+  const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
+  const [containerSizeState, setContainerSizeState] = useState<Size>({ width: 0, height: 0 });
   const lastTapRef = useRef(0);
   const gestureSessionRef = useRef(0);
 
@@ -84,14 +140,22 @@ export function ImagePreviewModal({
   const translateY = useSharedValue(0);
   const panStartX = useSharedValue(0);
   const panStartY = useSharedValue(0);
+  const pinchStartX = useSharedValue(0);
+  const pinchStartY = useSharedValue(0);
   const containerWidth = useSharedValue(0);
   const containerHeight = useSharedValue(0);
+  const contentWidth = useSharedValue(0);
+  const contentHeight = useSharedValue(0);
 
   const normalizedUri = useMemo(() => normalizeUri(uri), [uri]);
   const canShowImage = visible && !!normalizedUri && !imageFailed;
   const headerTitle = title.trim().length > 0 ? title : '图片预览';
   const isZoomable = interactionMode === 'zoomable';
   const previewLogScope = `ImagePreviewModal:${logSource}`;
+  const containedSize = useMemo(
+    () => computeContainedSize(containerSizeState, intrinsicSize),
+    [containerSizeState, intrinsicSize],
+  );
 
   function buildLogMetadata(extra?: Record<string, unknown>) {
     return {
@@ -100,6 +164,12 @@ export function ImagePreviewModal({
       interactionMode,
       hasUri: !!normalizedUri,
       imageFailed,
+      intrinsicWidth: intrinsicSize?.width ?? 0,
+      intrinsicHeight: intrinsicSize?.height ?? 0,
+      containerWidth: containerSizeState.width,
+      containerHeight: containerSizeState.height,
+      contentWidth: containedSize.width,
+      contentHeight: containedSize.height,
       ...extra,
     };
   }
@@ -115,6 +185,8 @@ export function ImagePreviewModal({
 
   useEffect(() => {
     setImageFailed(false);
+    setIntrinsicSize(null);
+    setContainerSizeState({ width: 0, height: 0 });
     lastTapRef.current = 0;
     scale.value = MIN_SCALE;
     pinchStartScale.value = MIN_SCALE;
@@ -122,7 +194,24 @@ export function ImagePreviewModal({
     translateY.value = 0;
     panStartX.value = 0;
     panStartY.value = 0;
-  }, [normalizedUri, panStartX, panStartY, pinchStartScale, scale, translateX, translateY, visible]);
+    pinchStartX.value = 0;
+    pinchStartY.value = 0;
+    contentWidth.value = 0;
+    contentHeight.value = 0;
+  }, [
+    contentHeight,
+    contentWidth,
+    normalizedUri,
+    panStartX,
+    panStartY,
+    pinchStartScale,
+    pinchStartX,
+    pinchStartY,
+    scale,
+    translateX,
+    translateY,
+    visible,
+  ]);
 
   useEffect(() => {
     Logger.info(
@@ -132,18 +221,85 @@ export function ImagePreviewModal({
         uriLength: normalizedUri?.length ?? 0,
       }),
     );
-  }, [headerTitle, imageFailed, interactionMode, normalizedUri, previewLogScope, visible]);
+  }, [
+    containedSize.height,
+    containedSize.width,
+    containerSizeState.height,
+    containerSizeState.width,
+    headerTitle,
+    imageFailed,
+    intrinsicSize,
+    interactionMode,
+    normalizedUri,
+    previewLogScope,
+    visible,
+  ]);
+
+  useEffect(() => {
+    if (!normalizedUri) {
+      return;
+    }
+
+    let cancelled = false;
+    Image.getSize(
+      normalizedUri,
+      (width, height) => {
+        if (cancelled) {
+          return;
+        }
+
+        const nextSize = { width, height };
+        setIntrinsicSize(nextSize);
+        Logger.info(previewLogScope, 'preview_image_intrinsic_measured', buildLogMetadata(nextSize));
+      },
+      () => {
+        if (cancelled) {
+          return;
+        }
+
+        Logger.warn(previewLogScope, 'preview_image_intrinsic_measure_failed', buildLogMetadata());
+        setIntrinsicSize(null);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedUri, previewLogScope]);
+
+  useEffect(() => {
+    contentWidth.value = containedSize.width;
+    contentHeight.value = containedSize.height;
+
+    if (containedSize.width > 0 && containedSize.height > 0) {
+      Logger.info(
+        previewLogScope,
+        'preview_content_size_resolved',
+        buildLogMetadata({
+          resolvedContentWidth: containedSize.width,
+          resolvedContentHeight: containedSize.height,
+        }),
+      );
+    }
+  }, [
+    containedSize.height,
+    containedSize.width,
+    contentHeight,
+    contentWidth,
+    previewLogScope,
+  ]);
 
   const animatedImageStyle = useAnimatedStyle(() => ({
     transform: [
-      { scale: scale.value },
       { translateX: translateX.value },
       { translateY: translateY.value },
+      { scale: scale.value },
     ],
   }));
 
   const singleTapGesture = Gesture.Tap()
     .enabled(isZoomable)
+    .shouldCancelWhenOutside(false)
     .maxDuration(250)
     .onEnd((_event, success) => {
       if (!success) {
@@ -159,6 +315,7 @@ export function ImagePreviewModal({
 
   const doubleTapGesture = Gesture.Tap()
     .enabled(isZoomable)
+    .shouldCancelWhenOutside(false)
     .numberOfTaps(2)
     .maxDuration(250)
     .onEnd((event, success) => {
@@ -166,51 +323,51 @@ export function ImagePreviewModal({
         return;
       }
 
-      const nextScale = scale.value > MIN_SCALE + 0.05 ? MIN_SCALE : DOUBLE_TAP_SCALE;
+      const currentScale = scale.value;
+      const nextScale = currentScale > MIN_SCALE + 0.05 ? MIN_SCALE : DOUBLE_TAP_SCALE;
       runOnJS(logInfo)('preview_double_tap', {
         tapX: event.x,
         tapY: event.y,
-        currentScale: scale.value,
+        currentScale,
         nextScale,
-        containerWidth: containerWidth.value,
-        containerHeight: containerHeight.value,
       });
 
-      scale.value = withSpring(nextScale, SPRING_CONFIG);
-      pinchStartScale.value = nextScale;
-
       if (nextScale <= MIN_SCALE) {
+        scale.value = withSpring(MIN_SCALE, SPRING_CONFIG);
         translateX.value = withSpring(0, SPRING_CONFIG);
         translateY.value = withSpring(0, SPRING_CONFIG);
         panStartX.value = 0;
         panStartY.value = 0;
-        runOnJS(logInfo)('preview_double_tap_reset', {
-          nextScale,
-        });
+        runOnJS(logInfo)('preview_double_tap_reset');
         return;
       }
 
-      const offsetX = event.x - (containerWidth.value / 2);
-      const offsetY = event.y - (containerHeight.value / 2);
+      const focalX = event.x - (containerWidth.value / 2);
+      const focalY = event.y - (containerHeight.value / 2);
+      const scaleRatio = nextScale / currentScale;
       const nextTranslateX = clampTranslation(
-        -offsetX * (nextScale - 1),
+        translateX.value + ((1 - scaleRatio) * (focalX - translateX.value)),
+        contentWidth.value,
         containerWidth.value,
         nextScale,
       );
       const nextTranslateY = clampTranslation(
-        -offsetY * (nextScale - 1),
+        translateY.value + ((1 - scaleRatio) * (focalY - translateY.value)),
+        contentHeight.value,
         containerHeight.value,
         nextScale,
       );
 
+      scale.value = withSpring(nextScale, SPRING_CONFIG);
       translateX.value = withSpring(nextTranslateX, SPRING_CONFIG);
       translateY.value = withSpring(nextTranslateY, SPRING_CONFIG);
       panStartX.value = nextTranslateX;
       panStartY.value = nextTranslateY;
+      pinchStartScale.value = nextScale;
 
       runOnJS(logInfo)('preview_double_tap_zoom_target', {
-        offsetX,
-        offsetY,
+        focalX,
+        focalY,
         nextTranslateX,
         nextTranslateY,
       });
@@ -218,32 +375,73 @@ export function ImagePreviewModal({
 
   const pinchGesture = Gesture.Pinch()
     .enabled(isZoomable)
-    .onStart(() => {
+    .shouldCancelWhenOutside(false)
+    .onStart((event) => {
       gestureSessionRef.current += 1;
       pinchStartScale.value = scale.value;
+      pinchStartX.value = translateX.value;
+      pinchStartY.value = translateY.value;
       runOnJS(logInfo)('preview_pinch_start', {
         sessionId: gestureSessionRef.current,
         scale: scale.value,
+        focalX: event.focalX,
+        focalY: event.focalY,
       });
+    })
+    .onUpdate((event) => {
+      const nextScale = clampScale(pinchStartScale.value * event.scale);
+      const focalX = event.focalX - (containerWidth.value / 2);
+      const focalY = event.focalY - (containerHeight.value / 2);
+      const scaleRatio = nextScale / pinchStartScale.value;
+
+      const rawTranslateX =
+        pinchStartX.value + ((1 - scaleRatio) * (focalX - pinchStartX.value));
+      const rawTranslateY =
+        pinchStartY.value + ((1 - scaleRatio) * (focalY - pinchStartY.value));
+
+      scale.value = nextScale;
+      translateX.value = applyTranslationResistance(
+        rawTranslateX,
+        contentWidth.value,
+        containerWidth.value,
+        nextScale,
+      );
+      translateY.value = applyTranslationResistance(
+        rawTranslateY,
+        contentHeight.value,
+        containerHeight.value,
+        nextScale,
+      );
     })
     .onEnd(() => {
       const nextScale = clampScale(scale.value);
-      const nextTranslateX = clampTranslation(translateX.value, containerWidth.value, nextScale);
-      const nextTranslateY = clampTranslation(translateY.value, containerHeight.value, nextScale);
-
-      scale.value = withSpring(nextScale, SPRING_CONFIG);
-      pinchStartScale.value = nextScale;
+      const nextTranslateX = clampTranslation(
+        translateX.value,
+        contentWidth.value,
+        containerWidth.value,
+        nextScale,
+      );
+      const nextTranslateY = clampTranslation(
+        translateY.value,
+        contentHeight.value,
+        containerHeight.value,
+        nextScale,
+      );
 
       if (nextScale <= MIN_SCALE) {
+        scale.value = withSpring(MIN_SCALE, SPRING_CONFIG);
         translateX.value = withSpring(0, SPRING_CONFIG);
         translateY.value = withSpring(0, SPRING_CONFIG);
         panStartX.value = 0;
         panStartY.value = 0;
+        pinchStartScale.value = MIN_SCALE;
       } else {
+        scale.value = withSpring(nextScale, SPRING_CONFIG);
         translateX.value = withSpring(nextTranslateX, SPRING_CONFIG);
         translateY.value = withSpring(nextTranslateY, SPRING_CONFIG);
         panStartX.value = nextTranslateX;
         panStartY.value = nextTranslateY;
+        pinchStartScale.value = nextScale;
       }
 
       runOnJS(logInfo)('preview_pinch_end', {
@@ -252,17 +450,12 @@ export function ImagePreviewModal({
         nextTranslateX: nextScale <= MIN_SCALE ? 0 : nextTranslateX,
         nextTranslateY: nextScale <= MIN_SCALE ? 0 : nextTranslateY,
       });
-    })
-    .onUpdate((event) => {
-      const nextScale = clampScale(pinchStartScale.value * event.scale);
-      scale.value = nextScale;
-      translateX.value = clampTranslation(translateX.value, containerWidth.value, nextScale);
-      translateY.value = clampTranslation(translateY.value, containerHeight.value, nextScale);
     });
 
   const panGesture = Gesture.Pan()
     .enabled(isZoomable)
-    .minDistance(4)
+    .shouldCancelWhenOutside(false)
+    .minDistance(1)
     .maxPointers(1)
     .onStart(() => {
       gestureSessionRef.current += 1;
@@ -282,20 +475,35 @@ export function ImagePreviewModal({
         return;
       }
 
-      translateX.value = clampTranslation(
-        panStartX.value + event.translationX,
+      const rawTranslateX = panStartX.value + event.translationX;
+      const rawTranslateY = panStartY.value + event.translationY;
+
+      translateX.value = applyTranslationResistance(
+        rawTranslateX,
+        contentWidth.value,
         containerWidth.value,
         scale.value,
       );
-      translateY.value = clampTranslation(
-        panStartY.value + event.translationY,
+      translateY.value = applyTranslationResistance(
+        rawTranslateY,
+        contentHeight.value,
         containerHeight.value,
         scale.value,
       );
     })
     .onEnd(() => {
-      const nextTranslateX = clampTranslation(translateX.value, containerWidth.value, scale.value);
-      const nextTranslateY = clampTranslation(translateY.value, containerHeight.value, scale.value);
+      const nextTranslateX = clampTranslation(
+        translateX.value,
+        contentWidth.value,
+        containerWidth.value,
+        scale.value,
+      );
+      const nextTranslateY = clampTranslation(
+        translateY.value,
+        contentHeight.value,
+        containerHeight.value,
+        scale.value,
+      );
 
       if (scale.value <= MIN_SCALE + 0.01) {
         translateX.value = withSpring(0, SPRING_CONFIG);
@@ -413,6 +621,20 @@ export function ImagePreviewModal({
                   const nextHeight = event.nativeEvent.layout.height;
                   containerWidth.value = nextWidth;
                   containerHeight.value = nextHeight;
+                  setContainerSizeState((current) => {
+                    if (
+                      Math.abs(current.width - nextWidth) < 0.5
+                      && Math.abs(current.height - nextHeight) < 0.5
+                    ) {
+                      return current;
+                    }
+
+                    return {
+                      width: nextWidth,
+                      height: nextHeight,
+                    };
+                  });
+
                   Logger.info(
                     previewLogScope,
                     'preview_layout_measured',
