@@ -3,6 +3,7 @@ import {
   ScrollView,
   StyleSheet,
   View,
+  type ScrollViewProps,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -18,6 +19,14 @@ export interface ScreenContainerProps {
   style?: StyleProp<ViewStyle>;
   contentStyle?: StyleProp<ViewStyle>;
   showsVerticalScrollIndicator?: boolean;
+  onScroll?: ScrollViewProps['onScroll'];
+  onContentSizeChange?: ScrollViewProps['onContentSizeChange'];
+  onScrollBeginDrag?: ScrollViewProps['onScrollBeginDrag'];
+  onScrollEndDrag?: ScrollViewProps['onScrollEndDrag'];
+  onTouchStart?: ScrollViewProps['onTouchStart'];
+  onTouchMove?: ScrollViewProps['onTouchMove'];
+  onTouchEnd?: ScrollViewProps['onTouchEnd'];
+  scrollEventThrottle?: number;
 }
 
 export function ScreenContainer({
@@ -28,6 +37,14 @@ export function ScreenContainer({
   style,
   contentStyle,
   showsVerticalScrollIndicator = false,
+  onScroll,
+  onContentSizeChange,
+  onScrollBeginDrag,
+  onScrollEndDrag,
+  onTouchStart,
+  onTouchMove,
+  onTouchEnd,
+  scrollEventThrottle = 16,
 }: ScreenContainerProps) {
   return (
     <SafeAreaView edges={safeAreaEdges} style={[styles.safeArea, style]}>
@@ -35,7 +52,15 @@ export function ScreenContainer({
         <ScrollView
           style={styles.flex}
           contentContainerStyle={[styles.contentBase, withPadding && styles.padded, contentStyle]}
-          showsVerticalScrollIndicator={showsVerticalScrollIndicator}>
+          showsVerticalScrollIndicator={showsVerticalScrollIndicator}
+          onScroll={onScroll}
+          onContentSizeChange={onContentSizeChange}
+          onScrollBeginDrag={onScrollBeginDrag}
+          onScrollEndDrag={onScrollEndDrag}
+          onTouchStart={onTouchStart}
+          onTouchMove={onTouchMove}
+          onTouchEnd={onTouchEnd}
+          scrollEventThrottle={scrollEventThrottle}>
           {children}
         </ScrollView>
       ) : (

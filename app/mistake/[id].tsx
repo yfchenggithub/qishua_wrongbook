@@ -5,8 +5,11 @@ import {
   Alert,
   Animated,
   BackHandler,
+  type GestureResponderEvent,
   Image,
   Linking,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -59,8 +62,18 @@ const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
 const VOICE_FILE_MISSING_MESSAGE = '语音文件不存在，可能已被删除或未恢复';
+const TOP_PULL_TRIGGER_DISTANCE = 2;
+const TOP_PULL_RELEASE_DISTANCE = 20;
+const BOTTOM_TRIGGER_DISTANCE = 20;
+const BOTTOM_RELEASE_DISTANCE = 52;
+const EDGE_PULL_TRIGGER_DISTANCE = 42;
+const EDGE_END_DRAG_VELOCITY_MIN = 0.55;
+const PAGE_SWITCH_ANIMATION_DISTANCE = 34;
+const PAGE_SWITCH_ANIMATION_DURATION_MS = 180;
 
 type ToastType = 'success' | 'info' | 'error';
+type ScrollBoundary = 'top' | 'bottom';
+type DetailSwitchFrom = 'top' | 'bottom' | null;
 
 type DetailPageState =
   | { kind: 'loading' }
@@ -77,6 +90,11 @@ type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
 type ReviewImageSource = 'camera' | 'album';
 
 const MANAGED_IMAGE_ORDER: ManagedDetailType[] = ['question', 'my_solution', 'answer'];
+const EMPTY_BROWSE_CONTEXT: MistakeDetailService.DetailBrowseContext = {
+  mode: 'none',
+  ids: [],
+  currentIndex: -1,
+};
 
 function normalizeRouteId(value: string | string[] | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -85,6 +103,14 @@ function normalizeRouteId(value: string | string[] | undefined): string | null {
   }
   const trimmed = raw.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeSwitchFrom(value: string | string[] | undefined): DetailSwitchFrom {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === 'top' || raw === 'bottom') {
+    return raw;
+  }
+  return null;
 }
 
 function toBriefErrorMessage(message?: string): string {
@@ -519,8 +545,12 @@ export default function MistakeDetailScreen() {
   const router = useRouter();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { id } = useLocalSearchParams<{ id?: string | string[] }>();
+  const { id, switchFrom } = useLocalSearchParams<{
+    id?: string | string[];
+    switchFrom?: string | string[];
+  }>();
   const routeId = useMemo(() => normalizeRouteId(id), [id]);
+  const routeSwitchFrom = useMemo(() => normalizeSwitchFrom(switchFrom), [switchFrom]);
 
   const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -537,13 +567,27 @@ export default function MistakeDetailScreen() {
   const [activeVoiceRecordingRecordId, setActiveVoiceRecordingRecordId] = useState<string | null>(null);
   const [isVoiceRecordingBusy, setIsVoiceRecordingBusy] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
+  const [browseContext, setBrowseContext] =
+    useState<MistakeDetailService.DetailBrowseContext>(EMPTY_BROWSE_CONTEXT);
 
   const requestIdRef = useRef(0);
+  const browseRequestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voiceStopInProgressRef = useRef(false);
+  const isScrollDraggingRef = useRef(false);
+  const lastScrollYRef = useRef(0);
+  const maxScrollYRef = useRef(0);
+  const scrollBoundaryLockRef = useRef<ScrollBoundary | null>(null);
+  const pendingAutoRouteIdRef = useRef<string | null>(null);
+  const lastTouchYRef = useRef<number | null>(null);
+  const touchMoveCountRef = useRef(0);
+  const topEdgePullDistanceRef = useRef(0);
+  const bottomEdgePullDistanceRef = useRef(0);
+  const pageEnterTranslateY = useRef(new Animated.Value(0)).current;
+  const pageEnterOpacity = useRef(new Animated.Value(1)).current;
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -551,6 +595,45 @@ export default function MistakeDetailScreen() {
   const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
 
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
+
+  useEffect(() => {
+    isScrollDraggingRef.current = false;
+    scrollBoundaryLockRef.current = null;
+    lastScrollYRef.current = 0;
+    maxScrollYRef.current = 0;
+    pendingAutoRouteIdRef.current = null;
+    lastTouchYRef.current = null;
+    touchMoveCountRef.current = 0;
+    topEdgePullDistanceRef.current = 0;
+    bottomEdgePullDistanceRef.current = 0;
+  }, [routeId]);
+
+  useEffect(() => {
+    if (!routeSwitchFrom) {
+      pageEnterTranslateY.setValue(0);
+      pageEnterOpacity.setValue(1);
+      return;
+    }
+
+    const fromOffset =
+      routeSwitchFrom === 'bottom'
+        ? PAGE_SWITCH_ANIMATION_DISTANCE
+        : -PAGE_SWITCH_ANIMATION_DISTANCE;
+    pageEnterTranslateY.setValue(fromOffset);
+    pageEnterOpacity.setValue(0.96);
+    Animated.parallel([
+      Animated.timing(pageEnterTranslateY, {
+        toValue: 0,
+        duration: PAGE_SWITCH_ANIMATION_DURATION_MS,
+        useNativeDriver: true,
+      }),
+      Animated.timing(pageEnterOpacity, {
+        toValue: 1,
+        duration: PAGE_SWITCH_ANIMATION_DURATION_MS,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [pageEnterOpacity, pageEnterTranslateY, routeId, routeSwitchFrom]);
 
   const navigateBack = useCallback(() => {
     if (typeof router.canGoBack === 'function' && router.canGoBack()) {
@@ -745,6 +828,37 @@ export default function MistakeDetailScreen() {
       errorMessage: result.errorMessage ?? null,
     });
   }, [routeId]);
+
+  const loadBrowseContext = useCallback(async (detail: MistakeDetailViewModel) => {
+    const requestId = browseRequestIdRef.current + 1;
+    browseRequestIdRef.current = requestId;
+
+    const context = await MistakeDetailService.getDetailBrowseContext({
+      mistakeId: detail.id,
+      module: detail.module,
+    });
+    if (requestId !== browseRequestIdRef.current) {
+      return;
+    }
+
+    Logger.info(PAGE_SCOPE, 'detail_browse_context_loaded', {
+      mistakeId: detail.id,
+      module: detail.module,
+      mode: context.mode,
+      totalIds: context.ids.length,
+      currentIndex: context.currentIndex,
+    });
+    setBrowseContext(context);
+  }, []);
+
+  useEffect(() => {
+    if (state.kind !== 'success') {
+      setBrowseContext(EMPTY_BROWSE_CONTEXT);
+      return;
+    }
+
+    void loadBrowseContext(state.detail);
+  }, [loadBrowseContext, state]);
 
   const promptOpenSettings = useCallback((source: ReviewImageSource) => {
     const message =
@@ -1490,6 +1604,285 @@ export default function MistakeDetailScreen() {
     });
   }, [state]);
 
+  const browseCurrentIndex = useMemo(() => {
+    if (state.kind !== 'success') {
+      return -1;
+    }
+    return browseContext.ids.indexOf(state.detail.id);
+  }, [browseContext.ids, state]);
+
+  const browseSummaryText = useMemo(() => {
+    if (state.kind !== 'success') {
+      return null;
+    }
+
+    const total = browseContext.ids.length;
+    const currentDisplayIndex = browseCurrentIndex >= 0 ? browseCurrentIndex + 1 : 1;
+    if (browseContext.mode === 'today_due') {
+      return `当前按“今日待复做”顺序浏览（${currentDisplayIndex}/${Math.max(total, 1)}）`;
+    }
+    if (browseContext.mode === 'same_module') {
+      return `当前不在今日待复做，按“同模块”顺序浏览（${currentDisplayIndex}/${Math.max(total, 1)}）`;
+    }
+    return '当前暂无可切换题目';
+  }, [browseContext.ids.length, browseContext.mode, browseCurrentIndex, state]);
+
+  const navigateRelativeMistake = useCallback(
+    (direction: 'next' | 'prev', trigger: 'scroll_top' | 'scroll_bottom') => {
+      if (state.kind !== 'success') {
+        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'state_not_success',
+          trigger,
+          direction,
+          stateKind: state.kind,
+        });
+        return;
+      }
+
+      const ids = browseContext.ids;
+      if (ids.length <= 1) {
+        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'insufficient_candidates',
+          trigger,
+          direction,
+          mode: browseContext.mode,
+          totalIds: ids.length,
+          currentMistakeId: state.detail.id,
+        });
+        return;
+      }
+
+      const currentIndex = ids.indexOf(state.detail.id);
+      if (currentIndex < 0) {
+        Logger.warn(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'current_not_in_candidates',
+          trigger,
+          direction,
+          mode: browseContext.mode,
+          totalIds: ids.length,
+          currentMistakeId: state.detail.id,
+        });
+        return;
+      }
+
+      const targetIndex =
+        direction === 'next'
+          ? (currentIndex + 1) % ids.length
+          : (currentIndex - 1 + ids.length) % ids.length;
+      const targetId = ids[targetIndex];
+      if (!targetId || targetId === state.detail.id) {
+        Logger.warn(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'invalid_target',
+          trigger,
+          direction,
+          mode: browseContext.mode,
+          totalIds: ids.length,
+          currentIndex,
+          targetIndex,
+          currentMistakeId: state.detail.id,
+          targetId: targetId ?? null,
+        });
+        return;
+      }
+
+      Logger.info(PAGE_SCOPE, 'detail_auto_switch_start', {
+        trigger,
+        direction,
+        mode: browseContext.mode,
+        totalIds: ids.length,
+        currentIndex,
+        targetIndex,
+        fromMistakeId: state.detail.id,
+        toMistakeId: targetId,
+      });
+      pendingAutoRouteIdRef.current = targetId;
+      router.replace(
+        {
+          pathname: '/mistake/[id]',
+          params: {
+            id: targetId,
+            switchFrom: direction === 'next' ? 'bottom' : 'top',
+          },
+        } as never,
+      );
+    },
+    [browseContext.ids, browseContext.mode, router, state],
+  );
+
+  const handleDetailScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const y = contentOffset.y;
+    const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
+    isScrollDraggingRef.current = true;
+    lastScrollYRef.current = y;
+    maxScrollYRef.current = maxScrollY;
+    touchMoveCountRef.current = 0;
+    topEdgePullDistanceRef.current = 0;
+    bottomEdgePullDistanceRef.current = 0;
+    Logger.debug(PAGE_SCOPE, 'detail_scroll_begin_drag', {
+      y,
+      maxScrollY,
+      routeId: routeId ?? null,
+    });
+  }, [routeId]);
+
+  const handleDetailScrollEndDrag = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const y = contentOffset.y;
+      const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
+      const velocityY = Number(event.nativeEvent.velocity?.y ?? 0);
+      const atTop = y <= TOP_PULL_TRIGGER_DISTANCE;
+      const atBottom = maxScrollY > 0 && y >= maxScrollY - BOTTOM_TRIGGER_DISTANCE;
+      isScrollDraggingRef.current = false;
+      lastTouchYRef.current = null;
+      Logger.debug(PAGE_SCOPE, 'detail_scroll_end_drag', {
+        y,
+        maxScrollY,
+        velocityY,
+        atTop,
+        atBottom,
+        routeId: routeId ?? null,
+        touchMoveCount: touchMoveCountRef.current,
+        topEdgePullDistance: topEdgePullDistanceRef.current,
+        bottomEdgePullDistance: bottomEdgePullDistanceRef.current,
+      });
+
+      if (pendingAutoRouteIdRef.current || state.kind !== 'success') {
+        return;
+      }
+
+      if (
+        atBottom
+        && velocityY <= -EDGE_END_DRAG_VELOCITY_MIN
+        && scrollBoundaryLockRef.current !== 'bottom'
+      ) {
+        scrollBoundaryLockRef.current = 'bottom';
+        Logger.info(PAGE_SCOPE, 'detail_scroll_boundary_hit', {
+          boundary: 'bottom',
+          trigger: 'end_drag_velocity',
+          y,
+          maxScrollY,
+          velocityY,
+        });
+        navigateRelativeMistake('next', 'scroll_bottom');
+        return;
+      }
+
+      if (
+        atTop
+        && velocityY >= EDGE_END_DRAG_VELOCITY_MIN
+        && scrollBoundaryLockRef.current !== 'top'
+      ) {
+        scrollBoundaryLockRef.current = 'top';
+        Logger.info(PAGE_SCOPE, 'detail_scroll_boundary_hit', {
+          boundary: 'top',
+          trigger: 'end_drag_velocity',
+          y,
+          maxScrollY,
+          velocityY,
+        });
+        navigateRelativeMistake('prev', 'scroll_top');
+      }
+    },
+    [navigateRelativeMistake, routeId, state.kind],
+  );
+
+  const handleDetailTouchStart = useCallback((event: GestureResponderEvent) => {
+    lastTouchYRef.current = event.nativeEvent.pageY;
+  }, []);
+
+  const handleDetailTouchEnd = useCallback(() => {
+    lastTouchYRef.current = null;
+  }, []);
+
+  const handleDetailTouchMove = useCallback(
+    (event: GestureResponderEvent) => {
+      const currentTouchY = event.nativeEvent.pageY;
+      const previousTouchY = lastTouchYRef.current;
+      lastTouchYRef.current = currentTouchY;
+      touchMoveCountRef.current += 1;
+
+      if (previousTouchY === null) {
+        return;
+      }
+      if (!isScrollDraggingRef.current) {
+        return;
+      }
+      if (pendingAutoRouteIdRef.current || state.kind !== 'success') {
+        return;
+      }
+
+      const touchDeltaY = currentTouchY - previousTouchY;
+      const y = lastScrollYRef.current;
+      const maxScrollY = maxScrollYRef.current;
+      const atTop = y <= TOP_PULL_TRIGGER_DISTANCE;
+      const atBottom = maxScrollY > 0 && y >= maxScrollY - BOTTOM_TRIGGER_DISTANCE;
+
+      if (atTop && touchDeltaY > 0) {
+        topEdgePullDistanceRef.current += touchDeltaY;
+      } else {
+        topEdgePullDistanceRef.current = 0;
+      }
+
+      if (atBottom && touchDeltaY < 0) {
+        bottomEdgePullDistanceRef.current += -touchDeltaY;
+      } else {
+        bottomEdgePullDistanceRef.current = 0;
+      }
+
+      if (topEdgePullDistanceRef.current >= EDGE_PULL_TRIGGER_DISTANCE && scrollBoundaryLockRef.current !== 'top') {
+        scrollBoundaryLockRef.current = 'top';
+        Logger.info(PAGE_SCOPE, 'detail_scroll_boundary_hit', {
+          boundary: 'top',
+          trigger: 'touch_move_pull',
+          y,
+          maxScrollY,
+          touchDeltaY,
+          topEdgePullDistance: topEdgePullDistanceRef.current,
+        });
+        topEdgePullDistanceRef.current = 0;
+        bottomEdgePullDistanceRef.current = 0;
+        navigateRelativeMistake('prev', 'scroll_top');
+        return;
+      }
+
+      if (bottomEdgePullDistanceRef.current >= EDGE_PULL_TRIGGER_DISTANCE && scrollBoundaryLockRef.current !== 'bottom') {
+        scrollBoundaryLockRef.current = 'bottom';
+        Logger.info(PAGE_SCOPE, 'detail_scroll_boundary_hit', {
+          boundary: 'bottom',
+          trigger: 'touch_move_pull',
+          y,
+          maxScrollY,
+          touchDeltaY,
+          bottomEdgePullDistance: bottomEdgePullDistanceRef.current,
+        });
+        topEdgePullDistanceRef.current = 0;
+        bottomEdgePullDistanceRef.current = 0;
+        navigateRelativeMistake('next', 'scroll_bottom');
+      }
+    },
+    [navigateRelativeMistake, state.kind],
+  );
+
+  const handleDetailScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const y = contentOffset.y;
+    const contentHeight = contentSize.height;
+    const viewportHeight = layoutMeasurement.height;
+    const maxScrollY = Math.max(0, contentHeight - viewportHeight);
+    maxScrollYRef.current = maxScrollY;
+    lastScrollYRef.current = y;
+
+    if (scrollBoundaryLockRef.current === 'bottom' && y < maxScrollY - BOTTOM_RELEASE_DISTANCE) {
+      scrollBoundaryLockRef.current = null;
+    }
+    if (scrollBoundaryLockRef.current === 'top' && y > TOP_PULL_RELEASE_DISTANCE) {
+      scrollBoundaryLockRef.current = null;
+    }
+  }, []);
+
+
   const handlePressDelete = useCallback(
     (type: ManagedDetailType) => {
       Logger.info(PAGE_SCOPE, 'Delete image clicked.', {
@@ -1648,7 +2041,23 @@ export default function MistakeDetailScreen() {
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer scroll contentStyle={styles.screenContent}>
+      <Animated.View
+        style={[
+          styles.pageEnterLayer,
+          {
+            opacity: pageEnterOpacity,
+            transform: [{ translateY: pageEnterTranslateY }],
+          },
+        ]}>
+        <ScreenContainer
+          scroll
+          contentStyle={styles.screenContent}
+          onScroll={handleDetailScroll}
+          onScrollBeginDrag={handleDetailScrollBeginDrag}
+          onScrollEndDrag={handleDetailScrollEndDrag}
+          onTouchStart={handleDetailTouchStart}
+          onTouchMove={handleDetailTouchMove}
+          onTouchEnd={handleDetailTouchEnd}>
         <Pressable style={styles.backButton} onPress={handleBack}>
           <Text style={styles.backText}>← 返回今日任务</Text>
         </Pressable>
@@ -1881,6 +2290,12 @@ export default function MistakeDetailScreen() {
                   ))}
                 </View>
               )}
+              {browseSummaryText ? <Text style={styles.browseSummaryText}>{browseSummaryText}</Text> : null}
+              {browseContext.ids.length > 1 ? (
+                <Text style={styles.browseHintText}>
+                  在边界继续拉动可切题：底部切下一题，顶部切上一题
+                </Text>
+              ) : null}
             </CardContainer>
 
           </>
@@ -1892,7 +2307,8 @@ export default function MistakeDetailScreen() {
           title={previewImage?.title ?? ''}
           onClose={handleClosePreview}
         />
-      </ScreenContainer>
+        </ScreenContainer>
+      </Animated.View>
 
       {toastVisible ? (
         <Animated.View
@@ -1918,6 +2334,9 @@ export default function MistakeDetailScreen() {
 
 const styles = StyleSheet.create({
   pageRoot: {
+    flex: 1,
+  },
+  pageEnterLayer: {
     flex: 1,
   },
   screenContent: {
@@ -2167,6 +2586,15 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textSecondary,
     fontWeight: '600',
+  },
+  browseSummaryText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  browseHintText: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   reviewRecordsNextReviewTextSuccess: {
     color: colors.success,
