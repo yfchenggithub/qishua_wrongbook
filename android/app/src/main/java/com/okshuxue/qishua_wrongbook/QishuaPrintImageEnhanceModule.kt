@@ -63,6 +63,12 @@ class QishuaPrintImageEnhanceModule(
     val liftAlpha: Double,
     val liftBeta: Double,
     val whiteBoostThreshold: Double,
+    val textMaskBlockSize: Int,
+    val textMaskC: Double,
+    val textMaskDilateSize: Int,
+    val textMaskMinComponentAreaPx: Int,
+    val textToneAlpha: Double,
+    val textToneBeta: Double,
   )
 
   private data class EnhanceRequest(
@@ -388,6 +394,12 @@ class QishuaPrintImageEnhanceModule(
         liftAlpha = 1.04,
         liftBeta = 17.0,
         whiteBoostThreshold = 230.0,
+        textMaskBlockSize = 35,
+        textMaskC = 13.0,
+        textMaskDilateSize = 1,
+        textMaskMinComponentAreaPx = 14,
+        textToneAlpha = 1.2,
+        textToneBeta = -34.0,
       )
       ClearPrintStrength.STRONG -> ClearPrintParams(
         illuminationSigma = 36.0,
@@ -398,6 +410,12 @@ class QishuaPrintImageEnhanceModule(
         liftAlpha = 1.09,
         liftBeta = 22.0,
         whiteBoostThreshold = 216.0,
+        textMaskBlockSize = 45,
+        textMaskC = 17.0,
+        textMaskDilateSize = 2,
+        textMaskMinComponentAreaPx = 22,
+        textToneAlpha = 1.34,
+        textToneBeta = -52.0,
       )
       ClearPrintStrength.MEDIUM -> ClearPrintParams(
         illuminationSigma = 34.0,
@@ -408,6 +426,12 @@ class QishuaPrintImageEnhanceModule(
         liftAlpha = 1.06,
         liftBeta = 18.0,
         whiteBoostThreshold = 224.0,
+        textMaskBlockSize = 41,
+        textMaskC = 15.0,
+        textMaskDilateSize = 2,
+        textMaskMinComponentAreaPx = 18,
+        textToneAlpha = 1.28,
+        textToneBeta = -44.0,
       )
     }
   }
@@ -446,6 +470,16 @@ class QishuaPrintImageEnhanceModule(
     val whitened = Mat()
     Core.max(lifted, whiteBoostMask, whitened)
 
+    val textMask = buildClearPrintTextMask(
+      contrastEnhanced = contrastEnhanced,
+      lifted = lifted,
+      params = params,
+    )
+    val textTone = Mat()
+    Core.convertScaleAbs(lifted, textTone, params.textToneAlpha, params.textToneBeta)
+    val output = whitened.clone()
+    textTone.copyTo(output, textMask)
+
     denoised.release()
     illuminationNormalized.release()
     contrastEnhanced.release()
@@ -453,8 +487,68 @@ class QishuaPrintImageEnhanceModule(
     sharpened.release()
     lifted.release()
     whiteBoostMask.release()
+    whitened.release()
+    textMask.release()
+    textTone.release()
 
-    return whitened
+    return output
+  }
+
+  private fun buildClearPrintTextMask(
+    contrastEnhanced: Mat,
+    lifted: Mat,
+    params: ClearPrintParams,
+  ): Mat {
+    val adaptiveDarkMask = Mat()
+    Imgproc.adaptiveThreshold(
+      contrastEnhanced,
+      adaptiveDarkMask,
+      255.0,
+      Imgproc.ADAPTIVE_THRESH_GAUSSIAN_C,
+      Imgproc.THRESH_BINARY_INV,
+      params.textMaskBlockSize,
+      params.textMaskC,
+    )
+
+    val globalDarkMask = Mat()
+    Imgproc.threshold(
+      lifted,
+      globalDarkMask,
+      0.0,
+      255.0,
+      Imgproc.THRESH_BINARY_INV or Imgproc.THRESH_OTSU,
+    )
+
+    val mergedDarkMask = Mat()
+    Core.bitwise_and(adaptiveDarkMask, globalDarkMask, mergedDarkMask)
+
+    val mergedBinary = Mat()
+    Core.bitwise_not(mergedDarkMask, mergedBinary)
+    val cleanedBinary = removeTinyDarkComponents(mergedBinary, params.textMaskMinComponentAreaPx)
+    val cleanedDarkMask = Mat()
+    Core.bitwise_not(cleanedBinary, cleanedDarkMask)
+
+    val finalMask = if (params.textMaskDilateSize > 1) {
+      val kernel = Imgproc.getStructuringElement(
+        Imgproc.MORPH_RECT,
+        Size(params.textMaskDilateSize.toDouble(), params.textMaskDilateSize.toDouble()),
+      )
+      val dilated = Mat()
+      Imgproc.dilate(cleanedDarkMask, dilated, kernel)
+      kernel.release()
+      cleanedDarkMask.release()
+      dilated
+    } else {
+      cleanedDarkMask
+    }
+
+    adaptiveDarkMask.release()
+    globalDarkMask.release()
+    mergedDarkMask.release()
+    mergedBinary.release()
+    cleanedBinary.release()
+
+    return finalMask
   }
 
   private fun resolveBwScanParams(strength: ClearPrintStrength): BwScanParams {
