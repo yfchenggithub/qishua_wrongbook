@@ -38,7 +38,9 @@ const styles = StyleSheet.create({
   button: {
     minHeight: 50,
     borderRadius: radius.xl,
-    backgroundColor: colors.black,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: spacing.xl,
@@ -54,6 +56,6 @@ const styles = StyleSheet.create({
     ...typography.sectionTitle,
     fontSize: 16,
     lineHeight: 22,
-    color: colors.white,
+    color: colors.success,
   },
 });

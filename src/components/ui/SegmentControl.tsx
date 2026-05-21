@@ -88,14 +88,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   itemSelected: {
-    backgroundColor: colors.black,
+    backgroundColor: colors.successBg,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
   },
   itemText: {
     ...typography.body,
     color: colors.textPrimary,
   },
   itemTextSelected: {
-    color: colors.white,
+    color: colors.success,
     fontWeight: '700',
   },
 });

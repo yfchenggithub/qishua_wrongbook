@@ -530,14 +530,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.black,
-    backgroundColor: colors.black,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
   goAddButtonText: {
     ...typography.caption,
-    color: colors.white,
+    color: colors.success,
     fontWeight: '700',
   },
   cardPressable: {

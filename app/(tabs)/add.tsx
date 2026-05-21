@@ -1591,8 +1591,8 @@ const styles = StyleSheet.create({
     minHeight: 34,
   },
   captureActionPrimary: {
-    backgroundColor: colors.black,
-    borderColor: colors.black,
+    backgroundColor: colors.successBg,
+    borderColor: colors.successBorder,
   },
   captureActionSecondary: {
     backgroundColor: colors.surface,
@@ -1600,7 +1600,7 @@ const styles = StyleSheet.create({
   },
   captureActionPrimaryText: {
     ...typography.caption,
-    color: colors.white,
+    color: colors.success,
     fontWeight: '700',
   },
   captureActionSecondaryText: {

@@ -641,7 +641,7 @@ export default function TodayScreen() {
                   isStartingSession ? styles.primaryActionButtonDisabled : null,
                 ]}>
                 <View style={styles.actionButtonContent}>
-                  <MaterialIcons name="task-alt" size={20} color={colors.white} />
+                  <MaterialIcons name="task-alt" size={20} color={colors.success} />
                   <Text style={styles.primaryActionButtonText}>{startTodayReviewButtonText}</Text>
                 </View>
               </Pressable>
@@ -653,7 +653,7 @@ export default function TodayScreen() {
                   isExportingPdf || !canExportTodayWorksheet ? styles.secondaryActionButtonDisabled : null,
                 ]}>
                 <View style={styles.actionButtonContent}>
-                  <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
+                  <MaterialIcons name="fact-check" size={20} color={colors.success} />
                   <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                 </View>
               </Pressable>
@@ -680,7 +680,7 @@ export default function TodayScreen() {
                         : null,
                     ]}>
                     <View style={styles.actionButtonContent}>
-                      <MaterialIcons name="fact-check" size={20} color={colors.textPrimary} />
+                      <MaterialIcons name="fact-check" size={20} color={colors.success} />
                       <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                     </View>
                   </Pressable>
@@ -753,14 +753,14 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
   },
   taskSummaryCard: {
-    backgroundColor: '#0B0B0D',
-    borderColor: '#1B1B1F',
+    backgroundColor: colors.successBg,
+    borderColor: colors.successBorder,
     borderRadius: radius.xl,
-    ...shadows.floating,
+    ...shadows.card,
   },
   taskCaption: {
     ...typography.bodySmall,
-    color: '#C9CBD2',
+    color: colors.success,
     fontWeight: '600',
   },
   taskDueRow: {
@@ -771,12 +771,12 @@ const styles = StyleSheet.create({
   },
   taskDueCount: {
     ...typography.numberHero,
-    color: colors.white,
+    color: colors.success,
     lineHeight: 58,
   },
   taskDueLabel: {
     ...typography.sectionTitle,
-    color: colors.white,
+    color: colors.success,
     marginBottom: spacing.xs,
     fontSize: 18,
     lineHeight: 24,
@@ -790,8 +790,8 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: '#2A2B31',
-    backgroundColor: '#141519',
+    borderColor: '#D7ECDF',
+    backgroundColor: '#FEFFFE',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
     minHeight: 84,
@@ -799,12 +799,12 @@ const styles = StyleSheet.create({
   },
   taskStatLabel: {
     ...typography.caption,
-    color: '#C1C4CC',
+    color: colors.success,
     fontWeight: '600',
   },
   taskStatValue: {
     ...typography.sectionTitle,
-    color: colors.white,
+    color: colors.success,
     fontSize: 26,
     lineHeight: 32,
     flexShrink: 1,
@@ -813,7 +813,7 @@ const styles = StyleSheet.create({
   statsHint: {
     marginTop: spacing.md,
     ...typography.caption,
-    color: '#C1C4CC',
+    color: colors.success,
   },
   statsHintError: {
     color: '#F8B4B4',
@@ -842,14 +842,14 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.black,
-    backgroundColor: colors.black,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
   stateActionText: {
     ...typography.caption,
-    color: colors.white,
+    color: colors.success,
     fontWeight: '700',
   },
   actionButtonContent: {
@@ -863,8 +863,8 @@ const styles = StyleSheet.create({
     minHeight: 56,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: '#04070D',
-    backgroundColor: '#04070D',
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
     ...shadows.card,
@@ -874,7 +874,7 @@ const styles = StyleSheet.create({
   },
   primaryActionButtonText: {
     ...typography.sectionTitle,
-    color: colors.white,
+    color: colors.success,
     fontWeight: '700',
   },
   secondaryActionButton: {
@@ -882,7 +882,7 @@ const styles = StyleSheet.create({
     minHeight: 56,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: '#C9CBD2',
+    borderColor: '#D7E6DC',
     backgroundColor: '#FFFFFF',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
@@ -893,7 +893,7 @@ const styles = StyleSheet.create({
   },
   secondaryActionButtonText: {
     ...typography.sectionTitle,
-    color: '#141519',
+    color: colors.success,
     fontWeight: '700',
   },
   exportHintText: {

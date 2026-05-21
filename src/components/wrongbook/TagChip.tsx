@@ -46,8 +46,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   selected: {
-    backgroundColor: colors.black,
-    borderColor: colors.black,
+    backgroundColor: colors.successBg,
+    borderColor: colors.successBorder,
   },
   unselected: {
     backgroundColor: colors.surface,
@@ -61,7 +61,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   selectedText: {
-    color: colors.white,
+    color: colors.success,
   },
   unselectedText: {
     color: colors.textPrimary,

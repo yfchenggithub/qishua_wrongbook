@@ -397,7 +397,9 @@ const styles = StyleSheet.create({
   primaryButton: {
     minHeight: 48,
     borderRadius: radius.lg,
-    backgroundColor: colors.black,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
@@ -407,7 +409,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonText: {
     ...typography.body,
-    color: colors.white,
+    color: colors.success,
     fontWeight: '700',
   },
   secondaryButton: {

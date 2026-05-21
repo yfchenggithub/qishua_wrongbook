@@ -17,6 +17,7 @@ export const colors = {
   white: '#FFFFFF',
   success: '#2EBB61',
   successBg: '#EAF8EE',
+  successBorder: '#BFEACD',
   danger: '#D84A4A',
   shadow: '#000000',
 } as const;
