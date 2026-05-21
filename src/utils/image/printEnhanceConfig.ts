@@ -1,15 +1,11 @@
 export type PrintEnhanceMode = 'original' | 'clear_print' | 'bw_scan';
-export type PrintEnhanceBwScanStrength = 'weak' | 'medium' | 'strong';
+export type PrintEnhanceClearPrintStrength = 'weak' | 'medium' | 'strong';
 
 export type ActivePrintEnhanceMode = PrintEnhanceMode;
 
 export type ClearPrintEnhanceConfig = {
   maxLongEdgePx: number;
   jpegQuality: number;
-  cssFilter: string;
-};
-
-export type BwScanEnhanceConfig = {
   cssFilter: string;
 };
 
@@ -30,13 +26,8 @@ export const CLEAR_PRINT_ENHANCE_CONFIG: ClearPrintEnhanceConfig = {
   cssFilter: 'grayscale(1) contrast(1.14) brightness(1.04)',
 };
 
-export const BW_SCAN_ENHANCE_CONFIG: BwScanEnhanceConfig = {
-  // Keep a stronger fallback scan-like filter when preprocessing is unavailable.
-  cssFilter: 'grayscale(1) contrast(1.26) brightness(1.08)',
-};
-
 export const DEFAULT_PRINT_ENHANCE_MODE: ActivePrintEnhanceMode = 'clear_print';
-export const DEFAULT_BW_SCAN_STRENGTH: PrintEnhanceBwScanStrength = 'medium';
+export const DEFAULT_CLEAR_PRINT_STRENGTH: PrintEnhanceClearPrintStrength = 'medium';
 
 export function toActivePrintEnhanceMode(mode?: PrintEnhanceMode | null): ActivePrintEnhanceMode {
   // Keep backward compatibility for persisted values, but only two modes are active in product.
@@ -46,13 +37,13 @@ export function toActivePrintEnhanceMode(mode?: PrintEnhanceMode | null): Active
   return DEFAULT_PRINT_ENHANCE_MODE;
 }
 
-export function toActiveBwScanStrength(
-  strength?: PrintEnhanceBwScanStrength | null,
-): PrintEnhanceBwScanStrength {
+export function toActiveClearPrintStrength(
+  strength?: PrintEnhanceClearPrintStrength | null,
+): PrintEnhanceClearPrintStrength {
   if (strength === 'weak' || strength === 'medium' || strength === 'strong') {
     return strength;
   }
-  return DEFAULT_BW_SCAN_STRENGTH;
+  return DEFAULT_CLEAR_PRINT_STRENGTH;
 }
 
 export function getPrintEnhanceCssFilter(mode: ActivePrintEnhanceMode): string | null {

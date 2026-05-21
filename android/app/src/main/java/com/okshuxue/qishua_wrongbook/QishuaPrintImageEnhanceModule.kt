@@ -41,7 +41,7 @@ class QishuaPrintImageEnhanceModule(
     BW_SCAN,
   }
 
-  private enum class BwScanStrength {
+  private enum class ClearPrintStrength {
     WEAK,
     MEDIUM,
     STRONG,
@@ -73,7 +73,7 @@ class QishuaPrintImageEnhanceModule(
     val sourceUri: String,
     val outputUri: String,
     val mode: EnhanceMode,
-    val bwScanStrength: BwScanStrength,
+    val clearPrintStrength: ClearPrintStrength,
     val maxLongEdgePx: Int,
     val jpegQualityPercent: Int,
   )
@@ -89,8 +89,8 @@ class QishuaPrintImageEnhanceModule(
       request = request,
       promise = promise,
       engineName = "opencv",
-      enhance = { sourceBitmap, mode, bwScanStrength ->
-        enhanceWithOpenCv(sourceBitmap, mode, bwScanStrength)
+      enhance = { sourceBitmap, mode, clearPrintStrength ->
+        enhanceWithOpenCv(sourceBitmap, mode, clearPrintStrength)
       },
     )
   }
@@ -101,8 +101,8 @@ class QishuaPrintImageEnhanceModule(
       request = request,
       promise = promise,
       engineName = "bitmap_fallback",
-      enhance = { sourceBitmap, mode, bwScanStrength ->
-        enhanceWithBitmap(sourceBitmap, mode, bwScanStrength)
+      enhance = { sourceBitmap, mode, clearPrintStrength ->
+        enhanceWithBitmap(sourceBitmap, mode, clearPrintStrength)
       },
     )
   }
@@ -111,7 +111,7 @@ class QishuaPrintImageEnhanceModule(
     request: ReadableMap,
     promise: Promise,
     engineName: String,
-    enhance: (sourceBitmap: Bitmap, mode: EnhanceMode, bwScanStrength: BwScanStrength) -> Bitmap,
+    enhance: (sourceBitmap: Bitmap, mode: EnhanceMode, clearPrintStrength: ClearPrintStrength) -> Bitmap,
   ) {
     val startedAt = SystemClock.elapsedRealtime()
     try {
@@ -121,7 +121,7 @@ class QishuaPrintImageEnhanceModule(
         if (engineName == "opencv") {
           ensureOpenCvInitialized()
         }
-        enhance(sourceBitmap, parsedRequest.mode, parsedRequest.bwScanStrength)
+        enhance(sourceBitmap, parsedRequest.mode, parsedRequest.clearPrintStrength)
       } finally {
         sourceBitmap.recycle()
       }
@@ -144,7 +144,7 @@ class QishuaPrintImageEnhanceModule(
         putString("outputUri", parsedRequest.outputUri)
         putString("engine", engineName)
         putString("outputFormat", if (parsedRequest.mode == EnhanceMode.BW_SCAN) "png" else "jpeg")
-        putString("bwScanStrength", parsedRequest.bwScanStrength.name.lowercase())
+        putString("clearPrintStrength", parsedRequest.clearPrintStrength.name.lowercase())
         putInt("width", outputWidth)
         putInt("height", outputHeight)
         putDouble("durationMs", (SystemClock.elapsedRealtime() - startedAt).toDouble())
@@ -164,7 +164,7 @@ class QishuaPrintImageEnhanceModule(
     val sourceUri = readRequiredString(request, "sourceUri")
     val outputUri = readRequiredString(request, "outputUri")
     val mode = parseMode(readRequiredString(request, "mode"))
-    val bwScanStrength = parseBwScanStrength(request)
+    val clearPrintStrength = parseClearPrintStrength(request)
     val maxLongEdgePx = parseMaxLongEdge(request)
     val jpegQualityPercent = parseJpegQualityPercent(request)
 
@@ -172,7 +172,7 @@ class QishuaPrintImageEnhanceModule(
       sourceUri = sourceUri,
       outputUri = outputUri,
       mode = mode,
-      bwScanStrength = bwScanStrength,
+      clearPrintStrength = clearPrintStrength,
       maxLongEdgePx = maxLongEdgePx,
       jpegQualityPercent = jpegQualityPercent,
     )
@@ -197,17 +197,17 @@ class QishuaPrintImageEnhanceModule(
     }
   }
 
-  private fun parseBwScanStrength(request: ReadableMap): BwScanStrength {
-    val raw = if (request.hasKey("bwScanStrength") && !request.isNull("bwScanStrength")) {
-      request.getString("bwScanStrength")?.trim()?.lowercase()
+  private fun parseClearPrintStrength(request: ReadableMap): ClearPrintStrength {
+    val raw = if (request.hasKey("clearPrintStrength") && !request.isNull("clearPrintStrength")) {
+      request.getString("clearPrintStrength")?.trim()?.lowercase()
     } else {
       null
     }
 
     return when (raw) {
-      "weak" -> BwScanStrength.WEAK
-      "strong" -> BwScanStrength.STRONG
-      else -> BwScanStrength.MEDIUM
+      "weak" -> ClearPrintStrength.WEAK
+      "strong" -> ClearPrintStrength.STRONG
+      else -> ClearPrintStrength.MEDIUM
     }
   }
 
@@ -352,7 +352,7 @@ class QishuaPrintImageEnhanceModule(
   private fun enhanceWithOpenCv(
     sourceBitmap: Bitmap,
     mode: EnhanceMode,
-    bwScanStrength: BwScanStrength,
+    clearPrintStrength: ClearPrintStrength,
   ): Bitmap {
     val rgba = Mat()
     Utils.bitmapToMat(sourceBitmap, rgba)
@@ -364,8 +364,8 @@ class QishuaPrintImageEnhanceModule(
     Imgproc.cvtColor(rgba, gray, Imgproc.COLOR_RGBA2GRAY)
 
     val processedGray = when (mode) {
-      EnhanceMode.CLEAR_PRINT -> buildClearPrintMat(gray, bwScanStrength)
-      EnhanceMode.BW_SCAN -> buildBwScanMat(gray, bwScanStrength)
+      EnhanceMode.CLEAR_PRINT -> buildClearPrintMat(gray, clearPrintStrength)
+      EnhanceMode.BW_SCAN -> buildBwScanMat(gray, clearPrintStrength)
     }
 
     val outputRgba = Mat()
@@ -381,9 +381,9 @@ class QishuaPrintImageEnhanceModule(
     return outputBitmap
   }
 
-  private fun resolveClearPrintParams(strength: BwScanStrength): ClearPrintParams {
+  private fun resolveClearPrintParams(strength: ClearPrintStrength): ClearPrintParams {
     return when (strength) {
-      BwScanStrength.WEAK -> ClearPrintParams(
+      ClearPrintStrength.WEAK -> ClearPrintParams(
         illuminationSigma = 30.0,
         claheClipLimit = 1.8,
         unsharpAmount = 0.34,
@@ -397,7 +397,7 @@ class QishuaPrintImageEnhanceModule(
         textMaskDilateKernel = 1,
         backgroundGray = 248.0,
       )
-      BwScanStrength.STRONG -> ClearPrintParams(
+      ClearPrintStrength.STRONG -> ClearPrintParams(
         illuminationSigma = 38.0,
         claheClipLimit = 2.8,
         unsharpAmount = 0.58,
@@ -411,7 +411,7 @@ class QishuaPrintImageEnhanceModule(
         textMaskDilateKernel = 2,
         backgroundGray = 246.0,
       )
-      BwScanStrength.MEDIUM -> ClearPrintParams(
+      ClearPrintStrength.MEDIUM -> ClearPrintParams(
         illuminationSigma = 34.0,
         claheClipLimit = 2.2,
         unsharpAmount = 0.46,
@@ -428,7 +428,7 @@ class QishuaPrintImageEnhanceModule(
     }
   }
 
-  private fun buildClearPrintMat(gray: Mat, strength: BwScanStrength): Mat {
+  private fun buildClearPrintMat(gray: Mat, strength: ClearPrintStrength): Mat {
     val params = resolveClearPrintParams(strength)
     val denoised = Mat()
     Photo.fastNlMeansDenoising(gray, denoised)
@@ -488,21 +488,21 @@ class QishuaPrintImageEnhanceModule(
     return reinforced
   }
 
-  private fun resolveBwScanParams(strength: BwScanStrength): BwScanParams {
+  private fun resolveBwScanParams(strength: ClearPrintStrength): BwScanParams {
     return when (strength) {
-      BwScanStrength.WEAK -> BwScanParams(
+      ClearPrintStrength.WEAK -> BwScanParams(
         illuminationSigma = 29.0,
         adaptiveBlockSize = 41,
         adaptiveC = 9.0,
         minComponentAreaPx = 14,
       )
-      BwScanStrength.STRONG -> BwScanParams(
+      ClearPrintStrength.STRONG -> BwScanParams(
         illuminationSigma = 42.0,
         adaptiveBlockSize = 63,
         adaptiveC = 19.0,
         minComponentAreaPx = 36,
       )
-      BwScanStrength.MEDIUM -> BwScanParams(
+      ClearPrintStrength.MEDIUM -> BwScanParams(
         illuminationSigma = 35.0,
         adaptiveBlockSize = 51,
         adaptiveC = 9.0,
@@ -511,12 +511,12 @@ class QishuaPrintImageEnhanceModule(
     }
   }
 
-  private fun buildBwScanMat(gray: Mat, strength: BwScanStrength): Mat {
-    if (strength == BwScanStrength.WEAK) {
+  private fun buildBwScanMat(gray: Mat, strength: ClearPrintStrength): Mat {
+    if (strength == ClearPrintStrength.WEAK) {
       val weakResult = buildBwScanMatWeak(gray)
       if (!isBwScanResultPlausible(weakResult)) {
         weakResult.release()
-        return buildBwScanMat(gray, BwScanStrength.MEDIUM)
+        return buildBwScanMat(gray, ClearPrintStrength.MEDIUM)
       }
       return weakResult
     }
@@ -559,7 +559,7 @@ class QishuaPrintImageEnhanceModule(
     val cleaned = removeTinyDarkComponents(closed, params.minComponentAreaPx)
     val normalizedBinary = Mat()
     Imgproc.threshold(cleaned, normalizedBinary, 0.0, 255.0, Imgproc.THRESH_BINARY or Imgproc.THRESH_OTSU)
-    val output = if (strength == BwScanStrength.STRONG) {
+    val output = if (strength == ClearPrintStrength.STRONG) {
       normalizedBinary
     } else {
       val soft = composeSoftBwScanFromBinary(
@@ -957,15 +957,15 @@ class QishuaPrintImageEnhanceModule(
   private fun enhanceWithBitmap(
     sourceBitmap: Bitmap,
     mode: EnhanceMode,
-    bwScanStrength: BwScanStrength,
+    clearPrintStrength: ClearPrintStrength,
   ): Bitmap {
     return when (mode) {
-      EnhanceMode.CLEAR_PRINT -> enhanceBitmapClearPrint(sourceBitmap, bwScanStrength)
-      EnhanceMode.BW_SCAN -> enhanceBitmapBwScan(sourceBitmap, bwScanStrength)
+      EnhanceMode.CLEAR_PRINT -> enhanceBitmapClearPrint(sourceBitmap, clearPrintStrength)
+      EnhanceMode.BW_SCAN -> enhanceBitmapBwScan(sourceBitmap, clearPrintStrength)
     }
   }
 
-  private fun enhanceBitmapClearPrint(sourceBitmap: Bitmap, strength: BwScanStrength): Bitmap {
+  private fun enhanceBitmapClearPrint(sourceBitmap: Bitmap, strength: ClearPrintStrength): Bitmap {
     val output = Bitmap.createBitmap(sourceBitmap.width, sourceBitmap.height, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(output)
     val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -975,14 +975,14 @@ class QishuaPrintImageEnhanceModule(
     }
 
     val contrast = when (strength) {
-      BwScanStrength.WEAK -> 1.14f
-      BwScanStrength.STRONG -> 1.3f
-      BwScanStrength.MEDIUM -> 1.22f
+      ClearPrintStrength.WEAK -> 1.14f
+      ClearPrintStrength.STRONG -> 1.3f
+      ClearPrintStrength.MEDIUM -> 1.22f
     }
     val brightness = when (strength) {
-      BwScanStrength.WEAK -> 8f
-      BwScanStrength.STRONG -> 14f
-      BwScanStrength.MEDIUM -> 12f
+      ClearPrintStrength.WEAK -> 8f
+      ClearPrintStrength.STRONG -> 14f
+      ClearPrintStrength.MEDIUM -> 12f
     }
     val translate = ((-0.5f * contrast) + 0.5f) * 255f + brightness
     val contrastMatrix = ColorMatrix(
@@ -1002,7 +1002,7 @@ class QishuaPrintImageEnhanceModule(
     return output
   }
 
-  private fun enhanceBitmapBwScan(sourceBitmap: Bitmap, strength: BwScanStrength): Bitmap {
+  private fun enhanceBitmapBwScan(sourceBitmap: Bitmap, strength: ClearPrintStrength): Bitmap {
     val width = sourceBitmap.width
     val height = sourceBitmap.height
     val pixelCount = width * height
@@ -1019,9 +1019,9 @@ class QishuaPrintImageEnhanceModule(
     }
 
     val thresholdOffset = when (strength) {
-      BwScanStrength.WEAK -> -8
-      BwScanStrength.STRONG -> 12
-      BwScanStrength.MEDIUM -> 0
+      ClearPrintStrength.WEAK -> -8
+      ClearPrintStrength.STRONG -> 12
+      ClearPrintStrength.MEDIUM -> 0
     }
     val threshold = (computeOtsuThreshold(luminance) + thresholdOffset).coerceIn(60, 220)
     val outputPixels = IntArray(pixelCount)
@@ -1124,3 +1124,4 @@ class QishuaPrintImageEnhanceModule(
     private const val MODULE_NAME = "QishuaPrintImageEnhanceModule"
   }
 }
+

@@ -15,12 +15,12 @@ import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
-  DEFAULT_BW_SCAN_STRENGTH,
+  DEFAULT_CLEAR_PRINT_STRENGTH,
   DEFAULT_PRINT_ENHANCE_MODE,
   getPrintEnhanceCssFilter,
-  toActiveBwScanStrength,
+  toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
-  type PrintEnhanceBwScanStrength,
+  type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
 
@@ -45,7 +45,7 @@ const EMPTY_MESSAGE = '今天没有待复做题，无需导出练习卷';
 export type ExportTodayReviewPdfOptions = {
   date?: string;
   printEnhanceMode?: PrintEnhanceMode;
-  printEnhanceBwScanStrength?: PrintEnhanceBwScanStrength;
+  printEnhanceClearPrintStrength?: PrintEnhanceClearPrintStrength;
   onProgress?: (progress: ExportTodayReviewPdfProgress) => void;
 };
 
@@ -97,7 +97,7 @@ type TodayReviewPdfRenderItem = {
 
 type QuestionImageEnhanceTrace = {
   mode: PrintEnhanceMode;
-  bwScanStrength: PrintEnhanceBwScanStrength;
+  clearPrintStrength: PrintEnhanceClearPrintStrength;
   sourceUri: string;
   enhancedUri: string;
   selectedUri: string | null;
@@ -277,7 +277,7 @@ async function toImageDataUri(uri: string): Promise<string | null> {
 async function buildQuestionImageSrc(
   uri: string,
   printEnhanceMode: PrintEnhanceMode,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): Promise<BuildQuestionImageSrcResult> {
   const normalizedUri = normalizeOptionalText(uri);
   if (!normalizedUri) {
@@ -288,7 +288,7 @@ async function buildQuestionImageSrc(
     };
   }
 
-  const enhanceResult = await enhanceImageForPdfPrint(normalizedUri, printEnhanceMode, bwScanStrength);
+  const enhanceResult = await enhanceImageForPdfPrint(normalizedUri, printEnhanceMode, clearPrintStrength);
   const enhancedUri = normalizeOptionalText(enhanceResult.outputUri) ?? normalizedUri;
   const temporaryEnhancedUri = (enhancedUri !== normalizedUri)
     ? enhancedUri
@@ -300,7 +300,7 @@ async function buildQuestionImageSrc(
     if (dataUri) {
       const trace: QuestionImageEnhanceTrace = {
         mode: printEnhanceMode,
-        bwScanStrength,
+        clearPrintStrength,
         sourceUri: normalizedUri,
         enhancedUri,
         selectedUri: candidateUri,
@@ -331,7 +331,7 @@ async function buildQuestionImageSrc(
     temporaryEnhancedUri,
     trace: {
       mode: printEnhanceMode,
-      bwScanStrength,
+      clearPrintStrength,
       sourceUri: normalizedUri,
       enhancedUri,
       selectedUri: null,
@@ -679,7 +679,7 @@ function buildPdfHtml(
 async function buildRenderItems(
   items: TodayReviewExportItem[],
   printEnhanceMode: PrintEnhanceMode,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): Promise<BuildRenderItemsResult> {
   const renderItems: TodayReviewPdfRenderItem[] = [];
   const temporaryEnhancedUris: string[] = [];
@@ -687,7 +687,7 @@ async function buildRenderItems(
   for (const item of items) {
     const questionImageUri = normalizeOptionalText(item.questionImageUri);
     const imageResult = questionImageUri
-      ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, bwScanStrength)
+      ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, clearPrintStrength)
       : {
         imageDataUri: null,
         temporaryEnhancedUri: null,
@@ -702,7 +702,7 @@ async function buildRenderItems(
       Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_enhance_trace', {
         mistakeId: item.mistakeId,
         printEnhanceMode: imageResult.trace.mode,
-        bwScanStrength: imageResult.trace.bwScanStrength,
+        clearPrintStrength: imageResult.trace.clearPrintStrength,
         enhanceEngine: imageResult.trace.engine,
         outputFormat: imageResult.trace.outputFormat,
         enhanceSuccess: imageResult.trace.success,
@@ -772,8 +772,8 @@ export async function exportTodayReviewPdf(
   const activePrintEnhanceMode = toActivePrintEnhanceMode(
     options?.printEnhanceMode ?? DEFAULT_EXPORT_PRINT_ENHANCE_MODE,
   );
-  const activeBwScanStrength = toActiveBwScanStrength(
-    options?.printEnhanceBwScanStrength ?? DEFAULT_BW_SCAN_STRENGTH,
+  const activeClearPrintStrength = toActiveClearPrintStrength(
+    options?.printEnhanceClearPrintStrength ?? DEFAULT_CLEAR_PRINT_STRENGTH,
   );
   const imageFilterCss = getPrintEnhanceCssFilter(activePrintEnhanceMode);
 
@@ -793,7 +793,7 @@ export async function exportTodayReviewPdf(
     const renderResult = await buildRenderItems(
       exportItems,
       activePrintEnhanceMode,
-      activeBwScanStrength,
+      activeClearPrintStrength,
     );
     temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
     const html = buildPdfHtml(renderResult.renderItems, dateString, imageFilterCss);
@@ -828,7 +828,7 @@ export async function exportTodayReviewPdf(
       exportedCount: exportItems.length,
       fileUriPreview: toSafeUriPreview(exportedFileUri),
       printEnhanceMode: activePrintEnhanceMode,
-      bwScanStrength: activeBwScanStrength,
+      clearPrintStrength: activeClearPrintStrength,
       enhancedImageCount: renderResult.temporaryEnhancedUris.length,
     });
 

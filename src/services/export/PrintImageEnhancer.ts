@@ -6,9 +6,9 @@ import { Logger } from '@/src/services/Logger';
 import {
   CLEAR_PRINT_ENHANCE_CONFIG,
   PRINT_ENHANCE_TEMP_DIR_PARTS,
-  toActiveBwScanStrength,
+  toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
-  type PrintEnhanceBwScanStrength,
+  type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
 
@@ -74,7 +74,7 @@ type OpenCvNativeEnhanceRequest = {
   sourceUri: string;
   outputUri: string;
   mode: Exclude<PrintEnhanceMode, 'original'>;
-  bwScanStrength: PrintEnhanceBwScanStrength;
+  clearPrintStrength: PrintEnhanceClearPrintStrength;
   maxLongEdgePx: number;
   jpegQuality: number;
 };
@@ -157,16 +157,16 @@ function buildResizeByLongEdge(
 
 function resolveEnhanceMaxLongEdgePx(
   mode: Exclude<PrintEnhanceMode, 'original'>,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): number {
   const fallback = CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx;
   if (mode !== 'clear_print') {
     return fallback;
   }
-  if (bwScanStrength === 'strong') {
+  if (clearPrintStrength === 'strong') {
     return 3000;
   }
-  if (bwScanStrength === 'weak') {
+  if (clearPrintStrength === 'weak') {
     return 2400;
   }
   return 2700;
@@ -279,11 +279,11 @@ function resolveNativeEnhanceModule(): OpenCvNativeEnhanceModule | null {
 async function runOpenCvEnhanceProvider(
   sourceUri: string,
   mode: Exclude<PrintEnhanceMode, 'original'>,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
   const preferredOutputFormat = getPreferredOutputFormat(mode);
-  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, bwScanStrength);
+  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength);
 
   if (Platform.OS !== 'android') {
     return {
@@ -318,7 +318,7 @@ async function runOpenCvEnhanceProvider(
       sourceUri,
       outputUri: tempOutputFile.uri,
       mode,
-      bwScanStrength,
+      clearPrintStrength,
       maxLongEdgePx,
       jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
     });
@@ -384,11 +384,11 @@ async function runOpenCvEnhanceProvider(
 async function runBitmapFallbackEnhanceProvider(
   sourceUri: string,
   mode: Exclude<PrintEnhanceMode, 'original'>,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
   const preferredOutputFormat = getPreferredOutputFormat(mode);
-  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, bwScanStrength);
+  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength);
   if (Platform.OS === 'android') {
     const nativeModule = resolveNativeEnhanceModule();
     if (!nativeModule || typeof nativeModule.enhanceForPdfPrintBitmap !== 'function') {
@@ -414,7 +414,7 @@ async function runBitmapFallbackEnhanceProvider(
         sourceUri,
         outputUri: tempOutputFile.uri,
         mode,
-        bwScanStrength,
+        clearPrintStrength,
         maxLongEdgePx,
         jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
       });
@@ -545,12 +545,12 @@ async function runBitmapFallbackEnhanceProvider(
 export async function enhanceImageForPdfPrint(
   sourceUriInput: string,
   modeInput?: PrintEnhanceMode,
-  bwScanStrengthInput?: PrintEnhanceBwScanStrength,
+  clearPrintStrengthInput?: PrintEnhanceClearPrintStrength,
 ): Promise<PrintEnhanceResult> {
   const startedAt = Date.now();
   const sourceUri = normalizeRequiredUri(sourceUriInput);
   const mode = toActivePrintEnhanceMode(modeInput);
-  const bwScanStrength = toActiveBwScanStrength(bwScanStrengthInput);
+  const clearPrintStrength = toActiveClearPrintStrength(clearPrintStrengthInput);
 
   if (mode === 'original') {
     const outputFormat = inferOutputFormatFromUri(sourceUri) ?? 'jpeg';
@@ -582,19 +582,19 @@ export async function enhanceImageForPdfPrint(
 
     Logger.info(SERVICE_SCOPE, 'print_image_enhance_start', {
       mode,
-      bwScanStrength,
+      clearPrintStrength,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
       originalFileSize,
     });
 
-    const openCvResult = await runOpenCvEnhanceProvider(sourceUri, mode, bwScanStrength);
+    const openCvResult = await runOpenCvEnhanceProvider(sourceUri, mode, clearPrintStrength);
     if (openCvResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
         mode,
-        bwScanStrength,
+        clearPrintStrength,
         engine: 'opencv',
         outputFormat: openCvResult.outputFormat,
         sourceUriPreview: toShortUri(sourceUri),
@@ -637,13 +637,13 @@ export async function enhanceImageForPdfPrint(
     const bitmapFallbackResult = await runBitmapFallbackEnhanceProvider(
       sourceUri,
       mode,
-      bwScanStrength,
+      clearPrintStrength,
     );
     if (bitmapFallbackResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
         mode,
-        bwScanStrength,
+        clearPrintStrength,
         engine: 'bitmap_fallback',
         outputFormat: bitmapFallbackResult.outputFormat,
         sourceUriPreview: toShortUri(sourceUri),
@@ -686,7 +686,7 @@ export async function enhanceImageForPdfPrint(
     const durationMs = Date.now() - startedAt;
     Logger.warn(SERVICE_SCOPE, 'print_image_enhance_failed_fallback_original', {
       mode,
-      bwScanStrength,
+      clearPrintStrength,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
@@ -707,7 +707,7 @@ export async function enhanceImageForPdfPrint(
     const durationMs = Date.now() - startedAt;
     Logger.warn(SERVICE_SCOPE, 'print_image_enhance_failed_fallback_original', {
       mode,
-      bwScanStrength,
+      clearPrintStrength,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,

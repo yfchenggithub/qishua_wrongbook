@@ -2,11 +2,11 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { Logger } from '@/src/services/Logger';
 import {
-  DEFAULT_BW_SCAN_STRENGTH,
+  DEFAULT_CLEAR_PRINT_STRENGTH,
   DEFAULT_PRINT_ENHANCE_MODE,
-  toActiveBwScanStrength,
+  toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
-  type PrintEnhanceBwScanStrength,
+  type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
 
@@ -17,7 +17,7 @@ const SETTINGS_FILE_NAME = 'export_image_mode.json';
 
 export type ExportImageSettings = {
   mode: PrintEnhanceMode;
-  bwScanStrength: PrintEnhanceBwScanStrength;
+  clearPrintStrength: PrintEnhanceClearPrintStrength;
   updatedAt: string;
 };
 
@@ -32,7 +32,7 @@ function getSettingsFile(): File {
 function normalizePersistedSettings(input: unknown): ExportImageSettings {
   const raw = input as Partial<ExportImageSettings> | null | undefined;
   const mode = toActivePrintEnhanceMode(raw?.mode);
-  const bwScanStrength = toActiveBwScanStrength(raw?.bwScanStrength);
+  const clearPrintStrength = toActiveClearPrintStrength(raw?.clearPrintStrength);
   const updatedAt =
     typeof raw?.updatedAt === 'string' && raw.updatedAt.trim().length > 0
       ? raw.updatedAt.trim()
@@ -40,18 +40,18 @@ function normalizePersistedSettings(input: unknown): ExportImageSettings {
 
   return {
     mode,
-    bwScanStrength,
+    clearPrintStrength,
     updatedAt,
   };
 }
 
 async function writePersistedSettings(
   mode: PrintEnhanceMode,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): Promise<ExportImageSettings> {
   const next: ExportImageSettings = {
     mode: toActivePrintEnhanceMode(mode),
-    bwScanStrength: toActiveBwScanStrength(bwScanStrength),
+    clearPrintStrength: toActiveClearPrintStrength(clearPrintStrength),
     updatedAt: new Date().toISOString(),
   };
 
@@ -69,7 +69,7 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
     if (!settingsFile.exists) {
       return {
         mode: DEFAULT_PRINT_ENHANCE_MODE,
-        bwScanStrength: DEFAULT_BW_SCAN_STRENGTH,
+        clearPrintStrength: DEFAULT_CLEAR_PRINT_STRENGTH,
         updatedAt: new Date(0).toISOString(),
       };
     }
@@ -83,7 +83,7 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
     });
     return {
       mode: DEFAULT_PRINT_ENHANCE_MODE,
-      bwScanStrength: DEFAULT_BW_SCAN_STRENGTH,
+      clearPrintStrength: DEFAULT_CLEAR_PRINT_STRENGTH,
       updatedAt: new Date(0).toISOString(),
     };
   }
@@ -91,14 +91,14 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
 
 export async function saveExportImageSettings(
   mode: PrintEnhanceMode,
-  bwScanStrength: PrintEnhanceBwScanStrength,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
 ): Promise<ExportImageSettings> {
   try {
-    return await writePersistedSettings(mode, bwScanStrength);
+    return await writePersistedSettings(mode, clearPrintStrength);
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to save export image mode.', {
       mode,
-      bwScanStrength,
+      clearPrintStrength,
       error,
     });
     throw error;
@@ -112,19 +112,19 @@ export async function loadExportImageMode(): Promise<PrintEnhanceMode> {
 
 export async function saveExportImageMode(mode: PrintEnhanceMode): Promise<PrintEnhanceMode> {
   const current = await loadExportImageSettings();
-  const persisted = await saveExportImageSettings(mode, current.bwScanStrength);
+  const persisted = await saveExportImageSettings(mode, current.clearPrintStrength);
   return persisted.mode;
 }
 
-export async function loadExportImageBwScanStrength(): Promise<PrintEnhanceBwScanStrength> {
+export async function loadExportImageClearPrintStrength(): Promise<PrintEnhanceClearPrintStrength> {
   const settings = await loadExportImageSettings();
-  return settings.bwScanStrength;
+  return settings.clearPrintStrength;
 }
 
-export async function saveExportImageBwScanStrength(
-  strength: PrintEnhanceBwScanStrength,
-): Promise<PrintEnhanceBwScanStrength> {
+export async function saveExportImageClearPrintStrength(
+  strength: PrintEnhanceClearPrintStrength,
+): Promise<PrintEnhanceClearPrintStrength> {
   const current = await loadExportImageSettings();
   const persisted = await saveExportImageSettings(current.mode, strength);
-  return persisted.bwScanStrength;
+  return persisted.clearPrintStrength;
 }
