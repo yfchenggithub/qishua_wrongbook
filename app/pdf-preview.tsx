@@ -1,5 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Print from 'expo-print';
+import { File } from 'expo-file-system';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import Pdf from 'react-native-pdf';
@@ -44,6 +45,34 @@ function toChineseAlertMessage(
   return /[\u4e00-\u9fff]/.test(normalized) ? normalized : fallbackMessage;
 }
 
+function toSafeUriPreview(uri: string | null | undefined): string | null {
+  if (!uri) {
+    return null;
+  }
+  const normalized = uri.trim();
+  if (normalized.length <= 72) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 28)}...${normalized.slice(-24)}`;
+}
+
+function readPdfFileInfo(uri: string): { exists: boolean; sizeBytes: number | null } {
+  try {
+    const info = new File(uri).info();
+    if (!info.exists) {
+      return { exists: false, sizeBytes: null };
+    }
+    return {
+      exists: true,
+      sizeBytes: typeof info.size === 'number' && Number.isFinite(info.size)
+        ? Math.max(0, Math.floor(info.size))
+        : null,
+    };
+  } catch {
+    return { exists: false, sizeBytes: null };
+  }
+}
+
 export default function PdfPreviewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -70,11 +99,15 @@ export default function PdfPreviewScreen() {
       return;
     }
 
+    const fileInfo = readPdfFileInfo(pdfUri);
     setLoadError(null);
     setIsLoading(true);
     Logger.info(PAGE_SCOPE, 'pdf_preview_load_start', {
-      pdfUri,
+      pdfUriPreview: toSafeUriPreview(pdfUri),
       attempt: previewKey + 1,
+      sourceCache: false,
+      fileExists: fileInfo.exists,
+      fileSizeBytes: fileInfo.sizeBytes,
     });
   }, [pdfUri, previewKey]);
 
@@ -201,8 +234,12 @@ export default function PdfPreviewScreen() {
               setPageCount(numberOfPages);
               setIsLoading(false);
               setLoadError(null);
+              const fileInfo = pdfUri ? readPdfFileInfo(pdfUri) : { exists: false, sizeBytes: null };
               Logger.info(PAGE_SCOPE, 'pdf_preview_load_success', {
                 pageCount: numberOfPages,
+                pdfUriPreview: toSafeUriPreview(pdfUri),
+                fileExists: fileInfo.exists,
+                fileSizeBytes: fileInfo.sizeBytes,
               });
             }}
             onPageChanged={(page) => {
@@ -215,8 +252,12 @@ export default function PdfPreviewScreen() {
               const message = toErrorMessage(error);
               setLoadError('PDF 预览失败，可以尝试用其他应用打开。');
               setIsLoading(false);
+              const fileInfo = pdfUri ? readPdfFileInfo(pdfUri) : { exists: false, sizeBytes: null };
               Logger.warn(PAGE_SCOPE, 'pdf_preview_load_failed', {
                 error: message,
+                pdfUriPreview: toSafeUriPreview(pdfUri),
+                fileExists: fileInfo.exists,
+                fileSizeBytes: fileInfo.sizeBytes,
               });
             }}
           />

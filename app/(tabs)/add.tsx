@@ -4,6 +4,7 @@ import { Alert, Animated, Image, Linking, Pressable, ScrollView, StyleSheet, Tex
 import {
   BrandHeader,
   CardContainer,
+  FloatingBottomCta,
   ImagePreviewModal,
   PrimaryButton,
   ScreenContainer,
@@ -1394,29 +1395,21 @@ export default function AddScreen() {
       />
       </ScreenContainer>
 
-      <View pointerEvents="box-none" style={styles.bottomSaveBarOverlay}>
-        <View
-          onLayout={(event) => {
-            const nextHeight = Math.ceil(event.nativeEvent.layout.height);
-            setSaveBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+      <FloatingBottomCta
+        bottom={saveBarBottomOffset}
+        hintText={saveHintTextV2}
+        hintActive={canSave}
+        onHeightChange={(nextHeight) => {
+          setSaveBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+        }}>
+        <PrimaryButton
+          title={saveButtonTitle}
+          disabled={!canSave}
+          onPress={() => {
+            void handleSaveDraft();
           }}
-          style={[styles.bottomSaveBarWrap, { bottom: saveBarBottomOffset }]}>
-          <CardContainer style={styles.saveCard} padding={spacing.md}>
-            <Text
-              maxFontSizeMultiplier={1.1}
-              style={[styles.saveHint, canSave ? styles.saveHintReady : null]}>
-              {saveHintTextV2}
-            </Text>
-            <PrimaryButton
-              title={saveButtonTitle}
-              disabled={!canSave}
-              onPress={() => {
-                void handleSaveDraft();
-              }}
-            />
-          </CardContainer>
-        </View>
-      </View>
+        />
+      </FloatingBottomCta>
 
       {toastVisible ? (
         <Animated.View
@@ -1447,14 +1440,6 @@ const styles = StyleSheet.create({
   screenContent: {
     paddingTop: spacing.lg,
     gap: spacing.md,
-  },
-  bottomSaveBarOverlay: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  bottomSaveBarWrap: {
-    position: 'absolute',
-    left: spacing.screenPadding,
-    right: spacing.screenPadding,
   },
   sectionBlock: {
     gap: spacing.sm,
@@ -1660,18 +1645,6 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.danger,
     fontWeight: '700',
-  },
-  saveCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
-  },
-  saveHint: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  saveHintReady: {
-    color: colors.success,
   },
   optionalSection: {
     marginTop: spacing.xs,

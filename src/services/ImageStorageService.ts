@@ -57,6 +57,24 @@ function normalizeStartIndex(index?: number): number {
   return normalized > 0 ? normalized : 1;
 }
 
+function createFileVersionSuffix(): string {
+  const randomPart = Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, '0');
+  return `${Date.now()}_${randomPart}`;
+}
+
+function appendVersionSuffix(fileName: string, suffix: string): string {
+  const lastDotIndex = fileName.lastIndexOf('.');
+  if (lastDotIndex <= 0) {
+    return `${fileName}_${suffix}`;
+  }
+
+  const name = fileName.slice(0, lastDotIndex);
+  const extension = fileName.slice(lastDotIndex);
+  return `${name}_${suffix}${extension}`;
+}
+
 function resolveTargetFile(
   directory: Directory,
   type: LocalImageType,
@@ -66,7 +84,8 @@ function resolveTargetFile(
   let attempts = 0;
 
   while (attempts < MISTAKE_IMAGE_NAME_LIMIT) {
-    const fileName = buildImageFileName(type, index);
+    const baseFileName = buildImageFileName(type, index);
+    const fileName = appendVersionSuffix(baseFileName, createFileVersionSuffix());
     const file = new File(directory, fileName);
     if (!file.exists) {
       return { file, fileName };
@@ -75,7 +94,10 @@ function resolveTargetFile(
     attempts += 1;
   }
 
-  const fallbackName = buildImageFileName(type, Date.now());
+  const fallbackName = appendVersionSuffix(
+    buildImageFileName(type, Date.now()),
+    createFileVersionSuffix(),
+  );
   return {
     file: new File(directory, fallbackName),
     fileName: fallbackName,
