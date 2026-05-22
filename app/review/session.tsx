@@ -19,6 +19,7 @@ import {
   BrandHeader,
   calculateImagePreviewHeight,
   CardContainer,
+  FloatingBottomCta,
   ImagePreviewModal,
   PrimaryButton,
   ScreenContainer,
@@ -366,6 +367,7 @@ export default function ReviewSessionPage() {
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
+  const [actionBarHeight, setActionBarHeight] = useState(0);
 
   const queueRequestIdRef = useRef(0);
   const currentRequestIdRef = useRef(0);
@@ -1059,14 +1061,26 @@ export default function ReviewSessionPage() {
 
   const progressCurrent = totalCount <= 0 ? 0 : Math.min(currentIndex + 1, totalCount);
   const reviewRound = currentMeta?.nextReviewIndex ?? currentQueueItem?.nextReviewIndex ?? 1;
-  const actionSectionBottomSpace = insets.bottom + spacing.sm;
-  const toastBottomOffset = insets.bottom + spacing.lg;
+  const showResultActions =
+    sessionState === 'ready' && !isCompleted && !isLoadingCurrent && !currentErrorMessage;
+  const actionBarBottomOffset = Math.max(insets.bottom + spacing.xs, spacing.xs);
+  const fallbackActionBarHeight = 112;
+  const effectiveActionBarHeight = actionBarHeight > 0 ? actionBarHeight : fallbackActionBarHeight;
+  const contentBottomPadding = showResultActions
+    ? actionBarBottomOffset + effectiveActionBarHeight + spacing.lg
+    : spacing.xl;
+  const toastBottomOffset = showResultActions
+    ? actionBarBottomOffset + effectiveActionBarHeight + spacing.sm
+    : insets.bottom + spacing.lg;
 
   return (
     <View style={styles.pageRoot}>
       <View pointerEvents="none" style={styles.pageGlowTop} />
       <View pointerEvents="none" style={styles.pageGlowBottom} />
-      <ScreenContainer scroll style={styles.screenSafeArea} contentStyle={styles.screenContent}>
+      <ScreenContainer
+        scroll
+        style={styles.screenSafeArea}
+        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}>
         <Pressable style={styles.exitButton} onPress={handleRequestExit}>
           <Text style={styles.exitButtonText}>退出今日复做</Text>
         </Pressable>
@@ -1294,34 +1308,6 @@ export default function ReviewSessionPage() {
               </CardContainer>
             ) : null}
 
-            {!isLoadingCurrent && !currentErrorMessage ? (
-              <View style={[styles.actionSection, { paddingBottom: actionSectionBottomSpace }]}>
-                <View style={styles.actionHintRow}>
-                  <MaterialIcons name="info-outline" size={17} color="#64748B" />
-                  <Text style={styles.actionHint}>{'\u9009\u62e9\u7ed3\u679c\u540e\u4f1a\u81ea\u52a8\u8fdb\u5165\u4e0b\u4e00\u9898'}</Text>
-                </View>
-                {REVIEW_ACTIONS.map((action) => (
-                  <Pressable
-                    key={action.value}
-                    onPress={() => void handleSelectResult(action.value, action.statsKey)}
-                    disabled={isSubmitting}
-                    style={[
-                      styles.resultButton,
-                      action.tone === 'known'
-                        ? styles.resultButtonKnown
-                        : action.tone === 'fuzzy'
-                          ? styles.resultButtonFuzzy
-                          : styles.resultButtonUnknown,
-                      isSubmitting ? styles.disabledControl : null,
-                    ]}>
-                    <View style={styles.resultButtonContent}>
-                      {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
-                      <Text style={styles.resultButtonText}>{isSubmitting ? '\u8bb0\u5f55\u4e2d...' : action.label}</Text>
-                    </View>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
           </>
         ) : null}
       </ScreenContainer>
@@ -1334,6 +1320,40 @@ export default function ReviewSessionPage() {
         logSource="review_session"
         onClose={handleClosePreview}
       />
+
+      {showResultActions ? (
+        <FloatingBottomCta
+          bottom={actionBarBottomOffset}
+          hintText={'\u9009\u62e9\u7ed3\u679c\u540e\u4f1a\u81ea\u52a8\u8fdb\u5165\u4e0b\u4e00\u9898'}
+          onHeightChange={(nextHeight) => {
+            setActionBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+          }}>
+          <View style={styles.actionRow}>
+            {REVIEW_ACTIONS.map((action) => (
+              <Pressable
+                key={action.value}
+                onPress={() => void handleSelectResult(action.value, action.statsKey)}
+                disabled={isSubmitting}
+                style={[
+                  styles.resultButton,
+                  action.tone === 'known'
+                    ? styles.resultButtonKnown
+                    : action.tone === 'fuzzy'
+                      ? styles.resultButtonFuzzy
+                      : styles.resultButtonUnknown,
+                  isSubmitting ? styles.disabledControl : null,
+                ]}>
+                <View style={styles.resultButtonContent}>
+                  {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
+                  <Text numberOfLines={1} style={styles.resultButtonText}>
+                    {isSubmitting ? '\u8bb0\u5f55\u4e2d...' : action.label}
+                  </Text>
+                </View>
+              </Pressable>
+            ))}
+          </View>
+        </FloatingBottomCta>
+      ) : null}
 
       {toastVisible ? (
         <Animated.View
@@ -1698,28 +1718,18 @@ const styles = StyleSheet.create({
   voiceButtonPressed: {
     opacity: 0.78,
   },
-  actionSection: {
-    gap: spacing.sm,
-  },
-  actionHintRow: {
+  actionRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
-    paddingHorizontal: spacing.xs,
-  },
-  actionHint: {
-    ...typography.bodySmall,
-    color: '#64748B',
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '600',
   },
   resultButton: {
+    flex: 1,
     minHeight: 56,
-    borderRadius: 18,
+    borderRadius: 16,
     borderWidth: 1,
     justifyContent: 'center',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm,
   },
   resultButtonKnown: {
     backgroundColor: '#22C55E',
@@ -1737,21 +1747,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   resultButtonIcon: {
     ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: 16,
+    lineHeight: 20,
     color: colors.white,
     fontWeight: '800',
   },
   resultButtonText: {
     ...typography.sectionTitle,
-    fontSize: 20,
-    lineHeight: 27,
+    fontSize: 17,
+    lineHeight: 22,
     color: colors.white,
     fontWeight: '800',
+    flexShrink: 1,
   },
   completeCard: {
     borderRadius: radius.xl,
