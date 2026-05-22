@@ -1,5 +1,6 @@
 export type PrintEnhanceMode = 'original' | 'clear_print' | 'bw_scan';
 export type PrintEnhanceClearPrintStrength = 'weak' | 'medium' | 'strong';
+export type PrintEnhanceConcurrency = number;
 
 export type ActivePrintEnhanceMode = PrintEnhanceMode;
 
@@ -16,7 +17,9 @@ export const PRINT_ENHANCE_TEMP_DIR_PARTS = [
   'print-enhanced',
 ] as const;
 
-export const PRINT_ENHANCE_MAX_CONCURRENCY = 1;
+export const PRINT_ENHANCE_MIN_CONCURRENCY = 1;
+export const PRINT_ENHANCE_MAX_CONCURRENCY = 3;
+export const DEFAULT_PRINT_ENHANCE_CONCURRENCY: PrintEnhanceConcurrency = 1;
 
 export const CLEAR_PRINT_ENHANCE_CONFIG: ClearPrintEnhanceConfig = {
   // Keep long edge in a print-safe range to reduce memory pressure in batch export.
@@ -44,6 +47,22 @@ export function toActiveClearPrintStrength(
     return strength;
   }
   return DEFAULT_CLEAR_PRINT_STRENGTH;
+}
+
+export function toActivePrintEnhanceConcurrency(
+  concurrency?: number | null,
+): PrintEnhanceConcurrency {
+  if (typeof concurrency !== 'number' || !Number.isFinite(concurrency)) {
+    return DEFAULT_PRINT_ENHANCE_CONCURRENCY;
+  }
+  const normalized = Math.floor(concurrency);
+  if (normalized < PRINT_ENHANCE_MIN_CONCURRENCY) {
+    return PRINT_ENHANCE_MIN_CONCURRENCY;
+  }
+  if (normalized > PRINT_ENHANCE_MAX_CONCURRENCY) {
+    return PRINT_ENHANCE_MAX_CONCURRENCY;
+  }
+  return normalized;
 }
 
 export function getPrintEnhanceCssFilter(mode: ActivePrintEnhanceMode): string | null {

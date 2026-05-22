@@ -15,11 +15,14 @@ import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
+  DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   DEFAULT_CLEAR_PRINT_STRENGTH,
   DEFAULT_PRINT_ENHANCE_MODE,
   getPrintEnhanceCssFilter,
+  toActivePrintEnhanceConcurrency,
   toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
+  type PrintEnhanceConcurrency,
   type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
@@ -46,6 +49,7 @@ export type ExportTodayReviewPdfOptions = {
   date?: string;
   printEnhanceMode?: PrintEnhanceMode;
   printEnhanceClearPrintStrength?: PrintEnhanceClearPrintStrength;
+  printEnhanceConcurrency?: PrintEnhanceConcurrency;
   onProgress?: (progress: ExportTodayReviewPdfProgress) => void;
 };
 
@@ -120,11 +124,32 @@ type BuildQuestionImageSrcResult = {
   imageDataUri: string | null;
   temporaryEnhancedUri: string | null;
   trace: QuestionImageEnhanceTrace | null;
+  base64ReadDurationMs: number;
+  base64ReadAttemptCount: number;
+};
+
+type BuildRenderItemsProcessMetrics = {
+  processedImageItemCount: number;
+  enhanceDurationTotalMs: number;
+  base64ReadDurationTotalMs: number;
+  base64ReadAttemptTotalCount: number;
+  enhanceDurationMaxMs: number;
+  base64ReadDurationMaxMs: number;
 };
 
 type BuildRenderItemsResult = {
   renderItems: TodayReviewPdfRenderItem[];
   temporaryEnhancedUris: string[];
+  processMetrics: BuildRenderItemsProcessMetrics;
+};
+
+type RenderItemBuildResult = {
+  renderItem: TodayReviewPdfRenderItem;
+  temporaryEnhancedUri: string | null;
+  enhanceDurationMs: number;
+  base64ReadDurationMs: number;
+  base64ReadAttemptCount: number;
+  processedImageItemCount: number;
 };
 
 type BuildItemsProgress = {
@@ -338,6 +363,8 @@ async function buildQuestionImageSrc(
       imageDataUri: null,
       temporaryEnhancedUri: null,
       trace: null,
+      base64ReadDurationMs: 0,
+      base64ReadAttemptCount: 0,
     };
   }
 
@@ -347,9 +374,14 @@ async function buildQuestionImageSrc(
     ? enhancedUri
     : null;
   const candidateUris = enhancedUri === normalizedUri ? [normalizedUri] : [enhancedUri, normalizedUri];
+  let base64ReadDurationMs = 0;
+  let base64ReadAttemptCount = 0;
 
   for (const candidateUri of candidateUris) {
+    const base64StartedAt = Date.now();
     const dataUri = await toImageDataUri(candidateUri);
+    base64ReadDurationMs += Math.max(0, Date.now() - base64StartedAt);
+    base64ReadAttemptCount += 1;
     if (dataUri) {
       const trace: QuestionImageEnhanceTrace = {
         mode: printEnhanceMode,
@@ -367,6 +399,8 @@ async function buildQuestionImageSrc(
         imageDataUri: dataUri,
         temporaryEnhancedUri,
         trace,
+        base64ReadDurationMs,
+        base64ReadAttemptCount,
       };
     }
   }
@@ -394,6 +428,8 @@ async function buildQuestionImageSrc(
       usedFallback: enhanceResult.usedFallback,
       durationMs: enhanceResult.durationMs,
     },
+    base64ReadDurationMs,
+    base64ReadAttemptCount,
   };
 }
 
@@ -748,70 +784,139 @@ async function yieldToUiFrame(): Promise<void> {
   });
 }
 
+async function buildSingleRenderItem(
+  item: TodayReviewExportItem,
+  printEnhanceMode: PrintEnhanceMode,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
+): Promise<RenderItemBuildResult> {
+  const questionImageUri = normalizeOptionalText(item.questionImageUri);
+  const imageResult = questionImageUri
+    ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, clearPrintStrength)
+    : {
+      imageDataUri: null,
+      temporaryEnhancedUri: null,
+      trace: null,
+      base64ReadDurationMs: 0,
+      base64ReadAttemptCount: 0,
+    };
+
+  if (imageResult.trace) {
+    Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_enhance_trace', {
+      mistakeId: item.mistakeId,
+      printEnhanceMode: imageResult.trace.mode,
+      clearPrintStrength: imageResult.trace.clearPrintStrength,
+      enhanceEngine: imageResult.trace.engine,
+      outputFormat: imageResult.trace.outputFormat,
+      enhanceSuccess: imageResult.trace.success,
+      enhanceUsedFallback: imageResult.trace.usedFallback,
+      enhanceDurationMs: imageResult.trace.durationMs,
+      base64ReadDurationMs: imageResult.base64ReadDurationMs,
+      base64ReadAttemptCount: imageResult.base64ReadAttemptCount,
+      sourceUriPreview: toSafeUriPreview(imageResult.trace.sourceUri),
+      enhancedUriPreview: toSafeUriPreview(imageResult.trace.enhancedUri),
+      selectedUriPreview: toSafeUriPreview(imageResult.trace.selectedUri),
+      hasImageData: imageResult.imageDataUri !== null,
+    });
+  } else {
+    Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_missing', {
+      mistakeId: item.mistakeId,
+    });
+  }
+
+  return {
+    renderItem: {
+      raw: item,
+      questionImageSrc: imageResult.imageDataUri,
+    },
+    temporaryEnhancedUri: imageResult.temporaryEnhancedUri,
+    enhanceDurationMs: imageResult.trace ? Math.max(0, imageResult.trace.durationMs) : 0,
+    base64ReadDurationMs: Math.max(0, imageResult.base64ReadDurationMs),
+    base64ReadAttemptCount: Math.max(0, imageResult.base64ReadAttemptCount),
+    processedImageItemCount: imageResult.trace ? 1 : 0,
+  };
+}
+
 async function buildRenderItems(
   items: TodayReviewExportItem[],
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  enhanceConcurrency: PrintEnhanceConcurrency,
   onItemProcessed?: (progress: BuildItemsProgress) => void,
 ): Promise<BuildRenderItemsResult> {
-  const renderItems: TodayReviewPdfRenderItem[] = [];
+  const renderItems: (TodayReviewPdfRenderItem | null)[] = new Array(items.length).fill(null);
   const temporaryEnhancedUris: string[] = [];
   const total = items.length;
-
-  for (let index = 0; index < total; index += 1) {
-    const item = items[index];
-    const questionImageUri = normalizeOptionalText(item.questionImageUri);
-    const imageResult = questionImageUri
-      ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, clearPrintStrength)
-      : {
-        imageDataUri: null,
-        temporaryEnhancedUri: null,
-        trace: null,
-      };
-
-    if (imageResult.temporaryEnhancedUri) {
-      temporaryEnhancedUris.push(imageResult.temporaryEnhancedUri);
-    }
-
-    if (imageResult.trace) {
-      Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_enhance_trace', {
-        mistakeId: item.mistakeId,
-        printEnhanceMode: imageResult.trace.mode,
-        clearPrintStrength: imageResult.trace.clearPrintStrength,
-        enhanceEngine: imageResult.trace.engine,
-        outputFormat: imageResult.trace.outputFormat,
-        enhanceSuccess: imageResult.trace.success,
-        enhanceUsedFallback: imageResult.trace.usedFallback,
-        enhanceDurationMs: imageResult.trace.durationMs,
-        sourceUriPreview: toSafeUriPreview(imageResult.trace.sourceUri),
-        enhancedUriPreview: toSafeUriPreview(imageResult.trace.enhancedUri),
-        selectedUriPreview: toSafeUriPreview(imageResult.trace.selectedUri),
-        hasImageData: imageResult.imageDataUri !== null,
-      });
-    } else {
-      Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_missing', {
-        mistakeId: item.mistakeId,
-      });
-    }
-
-    renderItems.push({
-      raw: item,
-      questionImageSrc: imageResult.imageDataUri,
-    });
-
-    if (onItemProcessed) {
-      onItemProcessed({
-        current: index + 1,
-        total,
-      });
-    }
-
-    await yieldToUiFrame();
+  if (total <= 0) {
+    return {
+      renderItems: [],
+      temporaryEnhancedUris,
+      processMetrics: {
+        processedImageItemCount: 0,
+        enhanceDurationTotalMs: 0,
+        base64ReadDurationTotalMs: 0,
+        base64ReadAttemptTotalCount: 0,
+        enhanceDurationMaxMs: 0,
+        base64ReadDurationMaxMs: 0,
+      },
+    };
   }
 
+  const workerCount = Math.min(total, toActivePrintEnhanceConcurrency(enhanceConcurrency));
+  let nextIndex = 0;
+  let completedCount = 0;
+  let processedImageItemCount = 0;
+  let enhanceDurationTotalMs = 0;
+  let base64ReadDurationTotalMs = 0;
+  let base64ReadAttemptTotalCount = 0;
+  let enhanceDurationMaxMs = 0;
+  let base64ReadDurationMaxMs = 0;
+
+  const runWorker = async () => {
+    while (true) {
+      const index = nextIndex;
+      if (index >= total) {
+        break;
+      }
+      nextIndex += 1;
+      const item = items[index];
+      const built = await buildSingleRenderItem(item, printEnhanceMode, clearPrintStrength);
+      renderItems[index] = built.renderItem;
+      if (built.temporaryEnhancedUri) {
+        temporaryEnhancedUris.push(built.temporaryEnhancedUri);
+      }
+      processedImageItemCount += built.processedImageItemCount;
+      enhanceDurationTotalMs += built.enhanceDurationMs;
+      base64ReadDurationTotalMs += built.base64ReadDurationMs;
+      base64ReadAttemptTotalCount += built.base64ReadAttemptCount;
+      enhanceDurationMaxMs = Math.max(enhanceDurationMaxMs, built.enhanceDurationMs);
+      base64ReadDurationMaxMs = Math.max(base64ReadDurationMaxMs, built.base64ReadDurationMs);
+      completedCount += 1;
+      if (onItemProcessed) {
+        onItemProcessed({
+          current: completedCount,
+          total,
+        });
+      }
+      await yieldToUiFrame();
+    }
+  };
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
   return {
-    renderItems,
+    renderItems: renderItems.map((item, index) => item ?? {
+      raw: items[index],
+      questionImageSrc: null,
+    }),
     temporaryEnhancedUris,
+      processMetrics: {
+        processedImageItemCount,
+        enhanceDurationTotalMs,
+        base64ReadDurationTotalMs,
+        base64ReadAttemptTotalCount,
+        enhanceDurationMaxMs,
+        base64ReadDurationMaxMs,
+      },
   };
 }
 
@@ -837,11 +942,33 @@ export async function exportTodayReviewPdf(
   options?: ExportTodayReviewPdfOptions,
 ): Promise<ExportTodayReviewPdfResult> {
   const onProgress = options?.onProgress;
+  const exportStartedAt = Date.now();
+  const stageTiming = {
+    prepareItemsMs: 0,
+    processImagesMs: 0,
+    buildHtmlMs: 0,
+    printPdfMs: 0,
+    savePdfMs: 0,
+  };
+  const processImageMetrics: BuildRenderItemsProcessMetrics = {
+    processedImageItemCount: 0,
+    enhanceDurationTotalMs: 0,
+    base64ReadDurationTotalMs: 0,
+    base64ReadAttemptTotalCount: 0,
+    enhanceDurationMaxMs: 0,
+    base64ReadDurationMaxMs: 0,
+  };
+  let exportOutcome: 'success' | 'empty' | 'generate_failed' | 'busy' | 'unknown' = 'unknown';
+  let exportFailureReason: string | null = null;
+  let exportItemCount = 0;
+  let exportFileUriPreview: string | null = null;
 
   if (isExportInProgress) {
     Logger.warn(SERVICE_SCOPE, 'Skip export because another export/share flow is in progress.', {
       date: options?.date ?? null,
     });
+    exportOutcome = 'busy';
+    exportFailureReason = 'busy';
     return {
       success: false,
       reason: 'busy',
@@ -859,16 +986,27 @@ export async function exportTodayReviewPdf(
   const activeClearPrintStrength = toActiveClearPrintStrength(
     options?.printEnhanceClearPrintStrength ?? DEFAULT_CLEAR_PRINT_STRENGTH,
   );
+  const configuredEnhanceConcurrency = toActivePrintEnhanceConcurrency(
+    options?.printEnhanceConcurrency ?? DEFAULT_PRINT_ENHANCE_CONCURRENCY,
+  );
+  const activeEnhanceConcurrency = activePrintEnhanceMode === 'clear_print'
+    ? configuredEnhanceConcurrency
+    : 1;
   const imageFilterCss = getPrintEnhanceCssFilter(activePrintEnhanceMode);
 
   try {
+    const prepareStartedAt = Date.now();
     reportExportProgress(onProgress, {
       stage: 'prepare_items',
       current: 0,
       total: 0,
     });
     const exportItems = await getTodayReviewExportItems(options?.date);
+    exportItemCount = exportItems.length;
+    stageTiming.prepareItemsMs = Math.max(0, Date.now() - prepareStartedAt);
     if (exportItems.length <= 0) {
+      exportOutcome = 'empty';
+      exportFailureReason = 'empty';
       return {
         success: false,
         reason: 'empty',
@@ -882,10 +1020,12 @@ export async function exportTodayReviewPdf(
       current: 0,
       total: exportItems.length,
     });
+    const processStartedAt = Date.now();
     const renderResult = await buildRenderItems(
       exportItems,
       activePrintEnhanceMode,
       activeClearPrintStrength,
+      activeEnhanceConcurrency,
       ({ current, total }) => {
         reportExportProgress(onProgress, {
           stage: 'process_images',
@@ -894,7 +1034,15 @@ export async function exportTodayReviewPdf(
         });
       },
     );
+    stageTiming.processImagesMs = Math.max(0, Date.now() - processStartedAt);
+    processImageMetrics.processedImageItemCount = renderResult.processMetrics.processedImageItemCount;
+    processImageMetrics.enhanceDurationTotalMs = renderResult.processMetrics.enhanceDurationTotalMs;
+    processImageMetrics.base64ReadDurationTotalMs = renderResult.processMetrics.base64ReadDurationTotalMs;
+    processImageMetrics.base64ReadAttemptTotalCount = renderResult.processMetrics.base64ReadAttemptTotalCount;
+    processImageMetrics.enhanceDurationMaxMs = renderResult.processMetrics.enhanceDurationMaxMs;
+    processImageMetrics.base64ReadDurationMaxMs = renderResult.processMetrics.base64ReadDurationMaxMs;
     temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
+    const buildHtmlStartedAt = Date.now();
     const html = buildPdfHtml(
       renderResult.renderItems,
       dateString,
@@ -907,6 +1055,7 @@ export async function exportTodayReviewPdf(
         });
       },
     );
+    stageTiming.buildHtmlMs = Math.max(0, Date.now() - buildHtmlStartedAt);
 
     let generatedPdfUri = '';
     try {
@@ -916,16 +1065,21 @@ export async function exportTodayReviewPdf(
         total: exportItems.length,
         message: '正在生成练习卷 PDF...',
       });
+      const printStartedAt = Date.now();
       const printResult = await Print.printToFileAsync({
         html,
         width: 595,
         height: 842,
       });
       generatedPdfUri = printResult.uri;
+      stageTiming.printPdfMs = Math.max(0, Date.now() - printStartedAt);
     } catch (error) {
+      exportOutcome = 'generate_failed';
+      exportFailureReason = 'print_to_file_failed';
       Logger.error(SERVICE_SCOPE, 'Failed to generate export PDF with expo-print.', {
         date: options?.date ?? null,
         itemCount: exportItems.length,
+        stageTiming,
         error,
       });
       return {
@@ -942,13 +1096,19 @@ export async function exportTodayReviewPdf(
       current: exportItems.length,
       total: exportItems.length,
     });
+    const saveStartedAt = Date.now();
     const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
+    stageTiming.savePdfMs = Math.max(0, Date.now() - saveStartedAt);
+    exportFileUriPreview = toSafeUriPreview(exportedFileUri);
+    exportOutcome = 'success';
     Logger.info(SERVICE_SCOPE, 'Today review PDF exported successfully.', {
       date: dateString,
       exportedCount: exportItems.length,
-      fileUriPreview: toSafeUriPreview(exportedFileUri),
+      fileUriPreview: exportFileUriPreview,
       printEnhanceMode: activePrintEnhanceMode,
       clearPrintStrength: activeClearPrintStrength,
+      enhanceConcurrency: activeEnhanceConcurrency,
+      configuredEnhanceConcurrency,
       enhancedImageCount: renderResult.temporaryEnhancedUris.length,
     });
 
@@ -958,8 +1118,11 @@ export async function exportTodayReviewPdf(
       exportedCount: exportItems.length,
     };
   } catch (error) {
+    exportOutcome = 'unknown';
+    exportFailureReason = 'unexpected_error';
     Logger.error(SERVICE_SCOPE, 'Unexpected error in exportTodayReviewPdf.', {
       date: options?.date ?? null,
+      stageTiming,
       error,
     });
     return {
@@ -968,6 +1131,46 @@ export async function exportTodayReviewPdf(
       message: FALLBACK_EXPORT_ERROR_MESSAGE,
     };
   } finally {
+    const totalDurationMs = Math.max(0, Date.now() - exportStartedAt);
+    const processImagesKnownAccumulatedMs =
+      processImageMetrics.enhanceDurationTotalMs + processImageMetrics.base64ReadDurationTotalMs;
+    const processImagesKnownPerItemMs = processImageMetrics.processedImageItemCount > 0
+      ? processImagesKnownAccumulatedMs / processImageMetrics.processedImageItemCount
+      : 0;
+    const enhancePerItemMs = processImageMetrics.processedImageItemCount > 0
+      ? processImageMetrics.enhanceDurationTotalMs / processImageMetrics.processedImageItemCount
+      : 0;
+    const base64PerItemMs = processImageMetrics.processedImageItemCount > 0
+      ? processImageMetrics.base64ReadDurationTotalMs / processImageMetrics.processedImageItemCount
+      : 0;
+    Logger.info(SERVICE_SCOPE, 'export_pdf_stage_timing_summary', {
+      date: dateString,
+      outcome: exportOutcome,
+      failureReason: exportFailureReason,
+      itemCount: exportItemCount,
+      printEnhanceMode: activePrintEnhanceMode,
+      clearPrintStrength: activeClearPrintStrength,
+      enhanceConcurrency: activeEnhanceConcurrency,
+      configuredEnhanceConcurrency,
+      prepareItemsMs: stageTiming.prepareItemsMs,
+      processImagesMs: stageTiming.processImagesMs,
+      processImagesProcessedImageItemCount: processImageMetrics.processedImageItemCount,
+      processImagesEnhanceDurationAccumulatedMs: processImageMetrics.enhanceDurationTotalMs,
+      processImagesBase64ReadDurationAccumulatedMs: processImageMetrics.base64ReadDurationTotalMs,
+      processImagesBase64ReadAttemptTotalCount: processImageMetrics.base64ReadAttemptTotalCount,
+      processImagesEnhanceDurationMaxMs: processImageMetrics.enhanceDurationMaxMs,
+      processImagesBase64ReadDurationMaxMs: processImageMetrics.base64ReadDurationMaxMs,
+      processImagesKnownAccumulatedMs,
+      processImagesKnownPerItemMs,
+      processImagesEnhancePerItemMs: enhancePerItemMs,
+      processImagesBase64ReadPerItemMs: base64PerItemMs,
+      processImagesAccumulatedMinusWallMs: processImagesKnownAccumulatedMs - stageTiming.processImagesMs,
+      buildHtmlMs: stageTiming.buildHtmlMs,
+      printPdfMs: stageTiming.printPdfMs,
+      savePdfMs: stageTiming.savePdfMs,
+      totalDurationMs,
+      fileUriPreview: exportFileUriPreview,
+    });
     if (temporaryEnhancedUris.length > 0) {
       cleanupPrintEnhancedTempFiles(temporaryEnhancedUris);
     }

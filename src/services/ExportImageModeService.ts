@@ -2,10 +2,13 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { Logger } from '@/src/services/Logger';
 import {
+  DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   DEFAULT_CLEAR_PRINT_STRENGTH,
   DEFAULT_PRINT_ENHANCE_MODE,
+  toActivePrintEnhanceConcurrency,
   toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
+  type PrintEnhanceConcurrency,
   type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
@@ -18,6 +21,7 @@ const SETTINGS_FILE_NAME = 'export_image_mode.json';
 export type ExportImageSettings = {
   mode: PrintEnhanceMode;
   clearPrintStrength: PrintEnhanceClearPrintStrength;
+  enhanceConcurrency: PrintEnhanceConcurrency;
   updatedAt: string;
 };
 
@@ -33,6 +37,7 @@ function normalizePersistedSettings(input: unknown): ExportImageSettings {
   const raw = input as Partial<ExportImageSettings> | null | undefined;
   const mode = toActivePrintEnhanceMode(raw?.mode);
   const clearPrintStrength = toActiveClearPrintStrength(raw?.clearPrintStrength);
+  const enhanceConcurrency = toActivePrintEnhanceConcurrency(raw?.enhanceConcurrency);
   const updatedAt =
     typeof raw?.updatedAt === 'string' && raw.updatedAt.trim().length > 0
       ? raw.updatedAt.trim()
@@ -41,6 +46,7 @@ function normalizePersistedSettings(input: unknown): ExportImageSettings {
   return {
     mode,
     clearPrintStrength,
+    enhanceConcurrency,
     updatedAt,
   };
 }
@@ -48,10 +54,12 @@ function normalizePersistedSettings(input: unknown): ExportImageSettings {
 async function writePersistedSettings(
   mode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  enhanceConcurrency: PrintEnhanceConcurrency,
 ): Promise<ExportImageSettings> {
   const next: ExportImageSettings = {
     mode: toActivePrintEnhanceMode(mode),
     clearPrintStrength: toActiveClearPrintStrength(clearPrintStrength),
+    enhanceConcurrency: toActivePrintEnhanceConcurrency(enhanceConcurrency),
     updatedAt: new Date().toISOString(),
   };
 
@@ -70,6 +78,7 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
       return {
         mode: DEFAULT_PRINT_ENHANCE_MODE,
         clearPrintStrength: DEFAULT_CLEAR_PRINT_STRENGTH,
+        enhanceConcurrency: DEFAULT_PRINT_ENHANCE_CONCURRENCY,
         updatedAt: new Date(0).toISOString(),
       };
     }
@@ -84,6 +93,7 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
     return {
       mode: DEFAULT_PRINT_ENHANCE_MODE,
       clearPrintStrength: DEFAULT_CLEAR_PRINT_STRENGTH,
+      enhanceConcurrency: DEFAULT_PRINT_ENHANCE_CONCURRENCY,
       updatedAt: new Date(0).toISOString(),
     };
   }
@@ -92,13 +102,15 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
 export async function saveExportImageSettings(
   mode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  enhanceConcurrency: PrintEnhanceConcurrency,
 ): Promise<ExportImageSettings> {
   try {
-    return await writePersistedSettings(mode, clearPrintStrength);
+    return await writePersistedSettings(mode, clearPrintStrength, enhanceConcurrency);
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to save export image mode.', {
       mode,
       clearPrintStrength,
+      enhanceConcurrency,
       error,
     });
     throw error;
@@ -112,7 +124,11 @@ export async function loadExportImageMode(): Promise<PrintEnhanceMode> {
 
 export async function saveExportImageMode(mode: PrintEnhanceMode): Promise<PrintEnhanceMode> {
   const current = await loadExportImageSettings();
-  const persisted = await saveExportImageSettings(mode, current.clearPrintStrength);
+  const persisted = await saveExportImageSettings(
+    mode,
+    current.clearPrintStrength,
+    current.enhanceConcurrency,
+  );
   return persisted.mode;
 }
 
@@ -125,6 +141,27 @@ export async function saveExportImageClearPrintStrength(
   strength: PrintEnhanceClearPrintStrength,
 ): Promise<PrintEnhanceClearPrintStrength> {
   const current = await loadExportImageSettings();
-  const persisted = await saveExportImageSettings(current.mode, strength);
+  const persisted = await saveExportImageSettings(
+    current.mode,
+    strength,
+    current.enhanceConcurrency,
+  );
   return persisted.clearPrintStrength;
+}
+
+export async function loadExportImageEnhanceConcurrency(): Promise<PrintEnhanceConcurrency> {
+  const settings = await loadExportImageSettings();
+  return settings.enhanceConcurrency;
+}
+
+export async function saveExportImageEnhanceConcurrency(
+  concurrency: PrintEnhanceConcurrency,
+): Promise<PrintEnhanceConcurrency> {
+  const current = await loadExportImageSettings();
+  const persisted = await saveExportImageSettings(
+    current.mode,
+    current.clearPrintStrength,
+    concurrency,
+  );
+  return persisted.enhanceConcurrency;
 }
