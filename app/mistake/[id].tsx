@@ -2435,7 +2435,7 @@ export default function MistakeDetailScreen() {
               {browseSummaryText ? <Text style={styles.browseSummaryText}>{browseSummaryText}</Text> : null}
               {browseContext.ids.length > 1 ? (
                 <Text style={styles.browseHintText}>
-                  在边界继续拉动可切题：底部切下一题，顶部切上一题
+                  在边界快速拉动可切题：底部切下一题，顶部切上一题
                 </Text>
               ) : null}
             </CardContainer>

@@ -157,6 +157,8 @@ type SwipeZoomImageStageProps = {
   canSwipeNext: boolean;
   onRequestPrev: () => void;
   onRequestNext: () => void;
+  onReachFirstBoundary: () => void;
+  onReachLastBoundary: () => void;
   onSingleTapClose: () => void;
 };
 
@@ -166,6 +168,8 @@ function SwipeZoomImageStage({
   canSwipeNext,
   onRequestPrev,
   onRequestNext,
+  onReachFirstBoundary,
+  onReachLastBoundary,
   onSingleTapClose,
 }: SwipeZoomImageStageProps) {
   const [imageFailed, setImageFailed] = useState(false);
@@ -185,6 +189,7 @@ function SwipeZoomImageStage({
   const containerHeight = useSharedValue(0);
   const contentWidth = useSharedValue(0);
   const contentHeight = useSharedValue(0);
+  const hasPanMotion = useSharedValue(0);
 
   const containedSize = useMemo(
     () => computeContainedSize(containerSizeState, intrinsicSize),
@@ -267,6 +272,9 @@ function SwipeZoomImageStage({
     .maxDuration(250)
     .onEnd((_event, success) => {
       if (!success) {
+        return;
+      }
+      if (hasPanMotion.value > 0.5) {
         return;
       }
       runOnJS(onSingleTapClose)();
@@ -387,10 +395,15 @@ function SwipeZoomImageStage({
     .minDistance(1)
     .maxPointers(1)
     .onStart(() => {
+      hasPanMotion.value = 0;
       panStartX.value = translateX.value;
       panStartY.value = translateY.value;
     })
     .onUpdate((event) => {
+      if (Math.abs(event.translationX) > 6 || Math.abs(event.translationY) > 6) {
+        hasPanMotion.value = 1;
+      }
+
       if (scale.value > MIN_SCALE + 0.01) {
         const rawTranslateX = panStartX.value + event.translationX;
         const rawTranslateY = panStartY.value + event.translationY;
@@ -444,22 +457,30 @@ function SwipeZoomImageStage({
         panStartX.value = nextTranslateX;
         panStartY.value = nextTranslateY;
         pageTranslateY.value = withSpring(0, SPRING_CONFIG);
+        hasPanMotion.value = withTiming(0, { duration: 130 });
         return;
       }
 
       const shiftY = pageTranslateY.value;
-      const shouldPrev =
-        canSwipePrev && (shiftY > SWIPE_SWITCH_DISTANCE || event.velocityY > SWIPE_SWITCH_VELOCITY);
-      const shouldNext =
-        canSwipeNext && (shiftY < -SWIPE_SWITCH_DISTANCE || event.velocityY < -SWIPE_SWITCH_VELOCITY);
+      const shouldPrev = shiftY > SWIPE_SWITCH_DISTANCE || event.velocityY > SWIPE_SWITCH_VELOCITY;
+      const shouldNext = shiftY < -SWIPE_SWITCH_DISTANCE || event.velocityY < -SWIPE_SWITCH_VELOCITY;
 
       if (shouldPrev) {
-        runOnJS(onRequestPrev)();
+        if (canSwipePrev) {
+          runOnJS(onRequestPrev)();
+        } else {
+          runOnJS(onReachFirstBoundary)();
+        }
       } else if (shouldNext) {
-        runOnJS(onRequestNext)();
+        if (canSwipeNext) {
+          runOnJS(onRequestNext)();
+        } else {
+          runOnJS(onReachLastBoundary)();
+        }
       }
 
       pageTranslateY.value = withSpring(0, SPRING_CONFIG);
+      hasPanMotion.value = withTiming(0, { duration: 130 });
     });
 
   const gesture = Gesture.Simultaneous(
@@ -535,7 +556,10 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
   }, [items]);
 
   const [activeIndex, setActiveIndex] = useState(0);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
   const switchingRef = useRef(false);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stageHeightRef = useRef(0);
   const stageTranslateY = useSharedValue(0);
   const stageOpacity = useSharedValue(1);
@@ -563,6 +587,25 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
 
   const clearSwitchingFlag = useCallback(() => {
     switchingRef.current = false;
+  }, []);
+
+  const showBoundaryToast = useCallback((message: string) => {
+    const nextMessage = message.trim();
+    if (!nextMessage) {
+      return;
+    }
+
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+
+    setToastMessage(nextMessage);
+    setToastVisible(true);
+    toastTimerRef.current = setTimeout(() => {
+      setToastVisible(false);
+      toastTimerRef.current = null;
+    }, 1400);
   }, []);
 
   const animateSwitchToIndex = useCallback(
@@ -632,7 +675,22 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
     switchingRef.current = false;
     stageTranslateY.value = 0;
     stageOpacity.value = 1;
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToastVisible(false);
   }, [stageOpacity, stageTranslateY, visible]);
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    },
+    [],
+  );
 
   const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
 
@@ -693,6 +751,12 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
                 canSwipeNext={canSwipeNext}
                 onRequestPrev={handleSwitchPrev}
                 onRequestNext={handleSwitchNext}
+                onReachFirstBoundary={() => {
+                  showBoundaryToast('当前是第一张');
+                }}
+                onReachLastBoundary={() => {
+                  showBoundaryToast('当前是最后一张');
+                }}
                 onSingleTapClose={onClose}
               />
             ) : (
@@ -707,6 +771,14 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
               <Text style={styles.progressText}>
                 {activeIndex + 1} / {normalizedItems.length}
               </Text>
+            </View>
+          ) : null}
+
+          {toastVisible ? (
+            <View pointerEvents="none" style={styles.toastWrap}>
+              <View style={styles.toastBubble}>
+                <Text style={styles.toastText}>{toastMessage}</Text>
+              </View>
             </View>
           ) : null}
         </View>
@@ -830,6 +902,27 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 11,
     lineHeight: 14,
+    fontWeight: '600',
+  },
+  toastWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: spacing.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastBubble: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.32)',
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: '#F3F4F6',
     fontWeight: '600',
   },
 });
