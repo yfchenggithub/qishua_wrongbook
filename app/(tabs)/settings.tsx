@@ -17,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
+import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
@@ -381,9 +382,6 @@ export default function SettingsScreen() {
   const [isOverviewRefreshing, setIsOverviewRefreshing] = useState(false);
   const [overviewErrorMessage, setOverviewErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
-  const [isExportingWorksheet, setIsExportingWorksheet] = useState(false);
-  const [worksheetExportStage, setWorksheetExportStage] =
-    useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
   const [exportImageMode, setExportImageMode] = useState<PrintEnhanceMode>(DEFAULT_EXPORT_IMAGE_MODE);
   const [exportClearPrintStrength, setExportClearPrintStrength] =
     useState<PrintEnhanceClearPrintStrength>(DEFAULT_EXPORT_CLEAR_PRINT_STRENGTH);
@@ -470,6 +468,33 @@ export default function SettingsScreen() {
     },
     [hideToast, toastOpacity, toastTranslateY],
   );
+
+  const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
+  const {
+    isExporting: isExportingWorksheet,
+    exportStage: worksheetExportStage,
+    progress: worksheetExportProgress,
+    progressPercent: worksheetExportProgressPercent,
+    exportTodayWorksheet: exportTodayWorksheetShared,
+  } = useTodayWorksheetExport({
+    scope: PAGE_SCOPE,
+    dueToday: worksheetPendingCount,
+    longToastDurationMs: TOAST_DURATION_LONG,
+    printEnhanceMode: exportImageMode,
+    printEnhanceClearPrintStrength: exportClearPrintStrength,
+    showToast,
+    onSuccess: (pdfUri: string) => {
+      Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
+        pdfUri,
+      });
+      router.push({
+        pathname: '/pdf-preview',
+        params: {
+          pdfUri,
+        },
+      } as never);
+    },
+  });
 
   useEffect(() => {
     return () => {
@@ -1135,7 +1160,7 @@ export default function SettingsScreen() {
     ],
   );
 
-  const handleExportTodayWorksheet = useCallback(async () => {
+  /* const handleExportTodayWorksheet = useCallback(async () => {
     if (isExportingWorksheet) {
       return;
     }
@@ -1294,7 +1319,11 @@ export default function SettingsScreen() {
       setIsExportingWorksheet(false);
       setWorksheetExportStage(null);
     }
-  }, [dataOverview.dueToday, exportClearPrintStrength, exportImageMode, isExportingWorksheet, router, showToast]);
+  }, [dataOverview.dueToday, exportClearPrintStrength, exportImageMode, isExportingWorksheet, router, showToast]); */
+
+  const handleExportTodayWorksheet = useCallback(async () => {
+    await exportTodayWorksheetShared();
+  }, [exportTodayWorksheetShared]);
 
   const handleToggleReminder = useCallback(
     async (nextValue: boolean) => {
@@ -1458,7 +1487,6 @@ export default function SettingsScreen() {
   const displayStorageText = shouldMaskStats
     ? STATS_PLACEHOLDER
     : formatStorageSize(dataOverview.storageBytes);
-  const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
   const canExportTodayWorksheet = worksheetPendingCount > 0;
   const worksheetExportButtonText = isExportingWorksheet
     ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
@@ -1471,6 +1499,13 @@ export default function SettingsScreen() {
     : canExportTodayWorksheet
       ? `将导出今日待复做的 ${worksheetPendingCount} 题，便于打印。`
       : '今日没有待复做错题，暂不可导出。';
+  const worksheetExportProgressHeadline = isExportingWorksheet
+    ? (worksheetExportProgress.message || worksheetExportButtonText)
+    : worksheetExportHintText;
+  const worksheetExportProgressDetailText =
+    isExportingWorksheet && worksheetExportProgress.total > 0
+      ? `已处理 ${worksheetExportProgress.current} / ${worksheetExportProgress.total} 题 · 用时 ${formatElapsedSeconds(worksheetExportProgress.elapsedSeconds)}`
+      : '';
   const selectedExportImageModeOption = useMemo(
     () =>
       EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)
@@ -1916,7 +1951,22 @@ export default function SettingsScreen() {
                   {worksheetExportButtonText}
                 </Text>
               </Pressable>
-              <Text style={styles.metaText}>{worksheetExportHintText}</Text>
+              <View style={styles.exportHintWrap}>
+                <Text style={styles.metaText}>{worksheetExportProgressHeadline}</Text>
+                {worksheetExportProgressDetailText ? (
+                  <Text style={styles.exportProgressMetaText}>{worksheetExportProgressDetailText}</Text>
+                ) : null}
+                {isExportingWorksheet && worksheetExportProgress.total > 0 ? (
+                  <View style={styles.exportProgressTrack}>
+                    <View
+                      style={[
+                        styles.exportProgressFill,
+                        { width: `${Math.round(worksheetExportProgressPercent * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                ) : null}
+              </View>
             </View>
           </View>
         </CardContainer>
@@ -2256,6 +2306,25 @@ const styles = StyleSheet.create({
   metaText: {
     ...typography.bodySmall,
     color: colors.textSecondary,
+  },
+  exportHintWrap: {
+    gap: spacing.xs,
+  },
+  exportProgressMetaText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  exportProgressTrack: {
+    height: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    overflow: 'hidden',
+  },
+  exportProgressFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.success,
   },
   backupMetaRow: {
     flexDirection: 'row',

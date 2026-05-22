@@ -49,11 +49,19 @@ export type ExportTodayReviewPdfOptions = {
   onProgress?: (progress: ExportTodayReviewPdfProgress) => void;
 };
 
-export type ExportTodayReviewPdfStage = 'prepare_items' | 'generate_pdf' | 'open_share';
+export type ExportTodayReviewPdfStage =
+  | 'prepare_items'
+  | 'process_images'
+  | 'generate_pdf'
+  | 'save_pdf'
+  | 'open_share';
 
 export type ExportTodayReviewPdfProgress = {
   stage: ExportTodayReviewPdfStage;
   itemCount: number | null;
+  current: number;
+  total: number;
+  message: string;
 };
 
 export type ExportTodayReviewPdfResult =
@@ -117,6 +125,11 @@ type BuildQuestionImageSrcResult = {
 type BuildRenderItemsResult = {
   renderItems: TodayReviewPdfRenderItem[];
   temporaryEnhancedUris: string[];
+};
+
+type BuildItemsProgress = {
+  current: number;
+  total: number;
 };
 
 function escapeHtml(value: string): string {
@@ -198,30 +211,70 @@ function buildExportFileName(dateString: string): string {
   return `${PDF_FILE_PREFIX}_${dateString}.pdf`;
 }
 
-function toSafeProgressItemCount(itemCount: number | null | undefined): number | null {
-  if (typeof itemCount !== 'number' || !Number.isFinite(itemCount)) {
-    return null;
+function toSafeProgressCounter(value: number | null | undefined): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 0;
   }
-  return Math.max(0, Math.floor(itemCount));
+  return Math.max(0, Math.floor(value));
+}
+
+function buildExportProgressMessage(
+  stage: ExportTodayReviewPdfStage,
+  current: number,
+  total: number,
+): string {
+  if (stage === 'prepare_items') {
+    return total > 0 ? `准备题目中（${total} 题）...` : '准备题目中...';
+  }
+  if (stage === 'process_images') {
+    return total > 0
+      ? `处理图片 ${Math.max(0, Math.min(current, total))} / ${total}`
+      : '正在处理图片...';
+  }
+  if (stage === 'generate_pdf') {
+    return total > 0
+      ? `生成 PDF 页面 ${Math.max(0, Math.min(current, total))} / ${total}`
+      : '正在生成 PDF 页面...';
+  }
+  if (stage === 'save_pdf') {
+    return '正在保存 PDF...';
+  }
+  return '正在准备分享...';
 }
 
 function reportExportProgress(
   reporter: ExportTodayReviewPdfOptions['onProgress'],
-  stage: ExportTodayReviewPdfStage,
-  itemCount?: number | null,
+  progress: {
+    stage: ExportTodayReviewPdfStage;
+    current?: number | null;
+    total?: number | null;
+    itemCount?: number | null;
+    message?: string;
+  },
 ): void {
   if (!reporter) {
     return;
   }
+  const safeTotal = toSafeProgressCounter(progress.total ?? progress.itemCount ?? 0);
+  const safeCurrent = safeTotal > 0
+    ? Math.min(safeTotal, toSafeProgressCounter(progress.current))
+    : toSafeProgressCounter(progress.current);
+  const safeMessage = normalizeOptionalText(progress.message)
+    ?? buildExportProgressMessage(progress.stage, safeCurrent, safeTotal);
+
   try {
     reporter({
-      stage,
-      itemCount: toSafeProgressItemCount(itemCount),
+      stage: progress.stage,
+      itemCount: safeTotal > 0 ? safeTotal : null,
+      current: safeCurrent,
+      total: safeTotal,
+      message: safeMessage,
     });
   } catch (error) {
     Logger.warn(SERVICE_SCOPE, 'Export progress reporter callback failed.', {
-      stage,
-      itemCount: toSafeProgressItemCount(itemCount),
+      stage: progress.stage,
+      current: safeCurrent,
+      total: safeTotal,
       error,
     });
   }
@@ -437,10 +490,23 @@ function buildPdfHtml(
   items: TodayReviewPdfRenderItem[],
   dateString: string,
   imageFilterCss: string | null,
+  onPageProgress?: (progress: BuildItemsProgress) => void,
 ): string {
-  const pagesHtml = items
-    .map((item, index) => buildWorksheetPageHtml(item, index, items.length, dateString))
-    .join('\n');
+  const total = items.length;
+  const pageHtmlList: string[] = [];
+
+  for (let index = 0; index < total; index += 1) {
+    const item = items[index];
+    pageHtmlList.push(buildWorksheetPageHtml(item, index, total, dateString));
+    if (onPageProgress) {
+      onPageProgress({
+        current: index + 1,
+        total,
+      });
+    }
+  }
+
+  const pagesHtml = pageHtmlList.join('\n');
   const imageFilterStyle = imageFilterCss ? `filter: ${imageFilterCss};` : '';
 
   return `
@@ -676,15 +742,24 @@ function buildPdfHtml(
   `;
 }
 
+async function yieldToUiFrame(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 async function buildRenderItems(
   items: TodayReviewExportItem[],
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  onItemProcessed?: (progress: BuildItemsProgress) => void,
 ): Promise<BuildRenderItemsResult> {
   const renderItems: TodayReviewPdfRenderItem[] = [];
   const temporaryEnhancedUris: string[] = [];
+  const total = items.length;
 
-  for (const item of items) {
+  for (let index = 0; index < total; index += 1) {
+    const item = items[index];
     const questionImageUri = normalizeOptionalText(item.questionImageUri);
     const imageResult = questionImageUri
       ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, clearPrintStrength)
@@ -723,6 +798,15 @@ async function buildRenderItems(
       raw: item,
       questionImageSrc: imageResult.imageDataUri,
     });
+
+    if (onItemProcessed) {
+      onItemProcessed({
+        current: index + 1,
+        total,
+      });
+    }
+
+    await yieldToUiFrame();
   }
 
   return {
@@ -778,7 +862,11 @@ export async function exportTodayReviewPdf(
   const imageFilterCss = getPrintEnhanceCssFilter(activePrintEnhanceMode);
 
   try {
-    reportExportProgress(onProgress, 'prepare_items', null);
+    reportExportProgress(onProgress, {
+      stage: 'prepare_items',
+      current: 0,
+      total: 0,
+    });
     const exportItems = await getTodayReviewExportItems(options?.date);
     if (exportItems.length <= 0) {
       return {
@@ -789,18 +877,45 @@ export async function exportTodayReviewPdf(
       };
     }
 
-    reportExportProgress(onProgress, 'prepare_items', exportItems.length);
+    reportExportProgress(onProgress, {
+      stage: 'prepare_items',
+      current: 0,
+      total: exportItems.length,
+    });
     const renderResult = await buildRenderItems(
       exportItems,
       activePrintEnhanceMode,
       activeClearPrintStrength,
+      ({ current, total }) => {
+        reportExportProgress(onProgress, {
+          stage: 'process_images',
+          current,
+          total,
+        });
+      },
     );
     temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
-    const html = buildPdfHtml(renderResult.renderItems, dateString, imageFilterCss);
+    const html = buildPdfHtml(
+      renderResult.renderItems,
+      dateString,
+      imageFilterCss,
+      ({ current, total }) => {
+        reportExportProgress(onProgress, {
+          stage: 'generate_pdf',
+          current,
+          total,
+        });
+      },
+    );
 
     let generatedPdfUri = '';
     try {
-      reportExportProgress(onProgress, 'generate_pdf', exportItems.length);
+      reportExportProgress(onProgress, {
+        stage: 'generate_pdf',
+        current: exportItems.length,
+        total: exportItems.length,
+        message: '正在生成练习卷 PDF...',
+      });
       const printResult = await Print.printToFileAsync({
         html,
         width: 595,
@@ -822,6 +937,11 @@ export async function exportTodayReviewPdf(
     }
 
     const exportFileName = buildExportFileName(dateString);
+    reportExportProgress(onProgress, {
+      stage: 'save_pdf',
+      current: exportItems.length,
+      total: exportItems.length,
+    });
     const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
     Logger.info(SERVICE_SCOPE, 'Today review PDF exported successfully.', {
       date: dateString,

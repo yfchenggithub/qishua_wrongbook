@@ -9,14 +9,21 @@ import type {
 const SERVICE_SCOPE = 'TodayWorksheetExportService';
 
 const MESSAGE_EMPTY = '今天没有待复做错题可导出';
-const MESSAGE_BUSY = '上一次导出或分享尚未结束，请先关闭分享面板后重试';
+const MESSAGE_BUSY = '上一轮导出或分享还未结束，请先关闭分享面板后重试';
 const MESSAGE_FAILED = '导出失败，请稍后重试';
 
-export type TodayWorksheetExportStage = 'preparing' | 'generating' | 'sharing';
+export type TodayWorksheetExportStage =
+  | 'preparing'
+  | 'processing_images'
+  | 'generating_pages'
+  | 'saving'
+  | 'sharing';
 
 export type TodayWorksheetExportProgress = {
   stage: TodayWorksheetExportStage;
   pendingCount: number | null;
+  current: number;
+  total: number;
   message: string;
 };
 
@@ -78,8 +85,14 @@ function buildFailedMessageFromPdfResult(
 function mapPdfProgressStageToWorksheetStage(
   stage: TodayReviewPdfExportService.ExportTodayReviewPdfStage,
 ): TodayWorksheetExportStage {
+  if (stage === 'process_images') {
+    return 'processing_images';
+  }
   if (stage === 'generate_pdf') {
-    return 'generating';
+    return 'generating_pages';
+  }
+  if (stage === 'save_pdf') {
+    return 'saving';
   }
   if (stage === 'open_share') {
     return 'sharing';
@@ -91,21 +104,35 @@ function emitProgress(
   reporter: ExportTodayWorksheetOptions['onProgress'],
   stage: TodayWorksheetExportStage,
   pendingCount: number | null,
+  current?: number | null,
+  total?: number | null,
+  message?: string | null,
 ): void {
   if (!reporter) {
     return;
   }
   const safeCount = toSafeCount(pendingCount);
+  const safeTotal = toSafeCount(total ?? safeCount);
+  const safeCurrentRaw = toSafeCount(current);
+  const safeCurrent = safeTotal > 0 ? Math.min(safeTotal, safeCurrentRaw) : safeCurrentRaw;
+  const safeMessage = typeof message === 'string' && message.trim().length > 0
+    ? message.trim()
+    : buildTodayWorksheetExportProgressMessage(stage, safeCount, safeCurrent, safeTotal);
+
   try {
     reporter({
       stage,
       pendingCount: safeCount,
-      message: buildTodayWorksheetExportProgressMessage(stage, safeCount),
+      current: safeCurrent,
+      total: safeTotal,
+      message: safeMessage,
     });
   } catch (error) {
     Logger.warn(SERVICE_SCOPE, 'Worksheet export progress reporter callback failed.', {
       stage,
       pendingCount: safeCount,
+      current: safeCurrent,
+      total: safeTotal,
       error,
     });
   }
@@ -118,16 +145,35 @@ export function buildTodayWorksheetExportButtonLabel(pendingCount: number): stri
 export function buildTodayWorksheetExportProgressMessage(
   stage: TodayWorksheetExportStage,
   pendingCount?: number,
+  current?: number,
+  total?: number,
 ): string {
   const safeCount = toSafeCount(pendingCount);
+  const safeTotal = toSafeCount(total ?? safeCount);
+  const safeCurrent = safeTotal > 0
+    ? Math.min(safeTotal, toSafeCount(current))
+    : toSafeCount(current);
+
   if (stage === 'preparing') {
     if (safeCount > 0) {
       return `正在整理题目（${formatCountSuffix(safeCount)}）...`;
     }
     return '正在整理题目...';
   }
-  if (stage === 'generating') {
+  if (stage === 'processing_images') {
+    if (safeTotal > 0) {
+      return `处理图片 ${safeCurrent} / ${safeTotal}...`;
+    }
+    return '正在处理图片...';
+  }
+  if (stage === 'generating_pages') {
+    if (safeTotal > 0) {
+      return `生成 PDF 页面 ${safeCurrent} / ${safeTotal}...`;
+    }
     return '正在生成 PDF...';
+  }
+  if (stage === 'saving') {
+    return '正在保存 PDF...';
   }
   return '正在打开分享面板...';
 }
@@ -159,7 +205,7 @@ export async function exportTodayWorksheet(
     };
   }
 
-  emitProgress(options?.onProgress, 'preparing', pendingCount);
+  emitProgress(options?.onProgress, 'preparing', pendingCount, 0, pendingCount);
   try {
     const result = await TodayReviewPdfExportService.exportTodayReviewPdf({
       printEnhanceMode: options?.printEnhanceMode,
@@ -170,7 +216,15 @@ export async function exportTodayWorksheet(
           progress.itemCount !== null && progress.itemCount !== undefined
             ? progress.itemCount
             : pendingCount;
-        emitProgress(options?.onProgress, mappedStage, countInProgress);
+
+        emitProgress(
+          options?.onProgress,
+          mappedStage,
+          countInProgress,
+          progress.current,
+          progress.total,
+          progress.message,
+        );
       },
     });
 
@@ -201,9 +255,13 @@ export async function exportTodayWorksheet(
     }
 
     if (result.reason === 'busy') {
-      Logger.info(SERVICE_SCOPE, 'Skip worksheet export because another export/share flow is in progress.', {
-        message: result.message,
-      });
+      Logger.info(
+        SERVICE_SCOPE,
+        'Skip worksheet export because another export/share flow is in progress.',
+        {
+          message: result.message,
+        },
+      );
       return {
         outcome: 'busy',
         message,

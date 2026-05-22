@@ -12,6 +12,7 @@ import {
   SectionTitle,
   StatusPill,
 } from '@/src/components';
+import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
 import { todayMock } from '@/src/mocks/today';
 import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
@@ -247,9 +248,6 @@ export default function TodayScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [isExportingPdf, setIsExportingPdf] = useState(false);
-  const [exportStage, setExportStage] =
-    useState<TodayWorksheetExportService.TodayWorksheetExportStage | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
@@ -425,6 +423,37 @@ export default function TodayScreen() {
     [router],
   );
 
+  const dueTodayCount = Number.isFinite(summary.todayDueCount)
+    ? Math.max(0, Math.floor(summary.todayDueCount))
+    : 0;
+
+  const {
+    isExporting: isExportingPdf,
+    exportStage,
+    progress: exportPdfProgress,
+    progressPercent: exportPdfProgressPercent,
+    exportTodayWorksheet: handleExportTodayWorksheet,
+  } = useTodayWorksheetExport({
+    scope: PAGE_SCOPE,
+    dueToday: dueTodayCount,
+    longToastDurationMs: TOAST_DURATION_LONG,
+    showToast,
+    onSuccess: (pdfUri: string) => {
+      Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
+        pdfUri,
+      });
+      router.push({
+        pathname: '/pdf-preview',
+        params: {
+          pdfUri,
+        },
+      } as never);
+    },
+    onEmpty: () => {
+      void loadHomeData('refresh');
+    },
+  });
+
   const handleStartTodayReview = useCallback(async () => {
     if (isStartingSession) {
       return;
@@ -448,7 +477,7 @@ export default function TodayScreen() {
     }
   }, [isStartingSession, loadHomeData, router, showToast]);
 
-  const handleExportTodayWorksheet = useCallback(async () => {
+  /* const handleExportTodayWorksheet = useCallback(async () => {
     if (Number.isFinite(summary.todayDueCount)) {
       const dueToday = Math.max(0, Math.floor(summary.todayDueCount));
       if (isExportingPdf) {
@@ -577,18 +606,25 @@ export default function TodayScreen() {
       setIsExportingPdf(false);
       setExportStage(null);
     }
-  }, [isExportingPdf, loadHomeData, router, showToast, summary.todayDueCount]);
+  }, [isExportingPdf, loadHomeData, router, showToast, summary.todayDueCount]); */
 
-  const canExportTodayWorksheet = summary.todayDueCount > 0;
+  const canExportTodayWorksheet = dueTodayCount > 0;
   const exportButtonText = isExportingPdf
     ? (exportStage === 'preparing' ? '正在生成练习卷 PDF...' : '正在生成练习卷 PDF...')
-    : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(summary.todayDueCount);
+    : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(dueTodayCount);
   const exportHintText = isExportingPdf
     ? exportButtonText
     : canExportTodayWorksheet
       ? `将导出今日待复做的 ${summary.todayDueCount} 题，便于打印练习。`
       : '今日没有待复做错题，暂不可导出。';
   const startTodayReviewButtonText = isStartingSession ? '正在进入今日复做…' : '开始今日复做';
+  const exportProgressHeadline = isExportingPdf
+    ? (exportPdfProgress.message || '正在生成练习卷 PDF...')
+    : exportHintText;
+  const exportProgressDetailText =
+    isExportingPdf && exportPdfProgress.total > 0
+      ? `已处理 ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · 用时 ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
+      : '';
   const canShowExportButton =
     summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
@@ -657,7 +693,22 @@ export default function TodayScreen() {
                   <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                 </View>
               </Pressable>
-              <Text style={styles.exportHintText}>{exportHintText}</Text>
+              <View style={styles.exportHintWrap}>
+                <Text style={styles.exportHintText}>{exportProgressHeadline}</Text>
+                {exportProgressDetailText ? (
+                  <Text style={styles.exportProgressMetaText}>{exportProgressDetailText}</Text>
+                ) : null}
+                {isExportingPdf && exportPdfProgress.total > 0 ? (
+                  <View style={styles.exportProgressTrack}>
+                    <View
+                      style={[
+                        styles.exportProgressFill,
+                        { width: `${Math.round(exportPdfProgressPercent * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                ) : null}
+              </View>
             </View>
           ) : errorMessage && !isLoading ? (
             <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
@@ -684,7 +735,22 @@ export default function TodayScreen() {
                       <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                     </View>
                   </Pressable>
-                  <Text style={styles.exportHintText}>{exportHintText}</Text>
+                  <View style={styles.exportHintWrap}>
+                    <Text style={styles.exportHintText}>{exportProgressHeadline}</Text>
+                    {exportProgressDetailText ? (
+                      <Text style={styles.exportProgressMetaText}>{exportProgressDetailText}</Text>
+                    ) : null}
+                    {isExportingPdf && exportPdfProgress.total > 0 ? (
+                      <View style={styles.exportProgressTrack}>
+                        <View
+                          style={[
+                            styles.exportProgressFill,
+                            { width: `${Math.round(exportPdfProgressPercent * 100)}%` },
+                          ]}
+                        />
+                      </View>
+                    ) : null}
+                  </View>
                 </>
               ) : null}
             </View>
@@ -899,7 +965,26 @@ const styles = StyleSheet.create({
   exportHintText: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  exportHintWrap: {
     marginTop: -spacing.xs,
+    gap: spacing.xs,
+  },
+  exportProgressMetaText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  exportProgressTrack: {
+    height: 5,
+    borderRadius: radius.pill,
+    backgroundColor: colors.surfaceMuted,
+    overflow: 'hidden',
+  },
+  exportProgressFill: {
+    height: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.success,
   },
   mistakeCard: {
     borderRadius: radius.xl,
