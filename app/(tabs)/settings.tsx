@@ -445,6 +445,7 @@ export default function SettingsScreen() {
     useState<PrintEnhanceConcurrency>(DEFAULT_EXPORT_ENHANCE_CONCURRENCY);
   const [exportEnhancePerformanceProfile, setExportEnhancePerformanceProfile] =
     useState<PrintEnhancePerformanceProfile>(DEFAULT_EXPORT_ENHANCE_PERFORMANCE_PROFILE);
+  const [isPrintEnhanceAdvancedVisible, setIsPrintEnhanceAdvancedVisible] = useState(false);
   const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
   const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -680,6 +681,7 @@ export default function SettingsScreen() {
     useCallback(() => {
       const mode: 'initial' | 'refresh' = hasFocusedRef.current ? 'refresh' : 'initial';
       hasFocusedRef.current = true;
+      setIsPrintEnhanceAdvancedVisible(false);
       void loadDataOverview(mode);
       void loadReminderState();
       void loadLastBackupState();
@@ -1189,6 +1191,16 @@ export default function SettingsScreen() {
       showToast,
     ],
   );
+
+  const handleTogglePrintEnhanceAdvancedSettings = useCallback(() => {
+    setIsPrintEnhanceAdvancedVisible((previous) => {
+      const next = !previous;
+      Logger.info(PAGE_SCOPE, 'Toggle clear_print advanced settings from long press.', {
+        nextVisible: next,
+      });
+      return next;
+    });
+  }, []);
 
   const handleSelectClearPrintStrength = useCallback(
     async (nextStrength: PrintEnhanceClearPrintStrength) => {
@@ -1762,6 +1774,11 @@ export default function SettingsScreen() {
   const exportImageModeStatusWithEnhanceSettingsText = exportImageMode === 'clear_print'
     ? `${exportImageModeStatusWithStrengthText} | 策略: ${selectedEnhancePerformanceOption.title} | 并发: ${selectedEnhanceConcurrencyOption.title}`
     : exportImageModeStatusText;
+  const shouldShowPrintEnhanceAdvancedSettings =
+    exportImageMode === 'clear_print' && isPrintEnhanceAdvancedVisible;
+  const exportImageModeStatusDisplayText = shouldShowPrintEnhanceAdvancedSettings
+    ? exportImageModeStatusWithEnhanceSettingsText
+    : exportImageModeStatusText;
 
   const handleShowStorageDetails = useCallback(() => {
     Alert.alert(
@@ -2096,6 +2113,11 @@ export default function SettingsScreen() {
                         key={option.mode}
                         accessibilityRole="button"
                         disabled={isExportImageModeBusy}
+                        onLongPress={
+                          option.mode === 'clear_print'
+                            ? handleTogglePrintEnhanceAdvancedSettings
+                            : undefined
+                        }
                         onPress={() => {
                           void handleSelectExportImageMode(option.mode);
                         }}
@@ -2136,135 +2158,137 @@ export default function SettingsScreen() {
                     );
                   })}
                 </View>
-                {exportImageMode === 'clear_print' ? (
-                  <View style={styles.clearPrintStrengthSection}>
-                    <Text style={styles.metaText}>清晰打印强度</Text>
-                    <View style={[styles.clearPrintStrengthTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                      {CLEAR_PRINT_STRENGTH_OPTIONS.map((option) => {
-                        const isSelected = option.value === exportClearPrintStrength;
-                        return (
-                          <Pressable
-                            key={option.value}
-                            accessibilityRole="button"
-                            disabled={isExportImageModeBusy}
-                            onPress={() => {
-                              void handleSelectClearPrintStrength(option.value);
-                            }}
-                            style={[
-                              styles.clearPrintStrengthStop,
-                              isSelected ? styles.clearPrintStrengthStopSelected : null,
-                            ]}>
-                            <Text
+                {shouldShowPrintEnhanceAdvancedSettings ? (
+                  <>
+                    <View style={styles.clearPrintStrengthSection}>
+                      <Text style={styles.metaText}>清晰打印强度</Text>
+                      <View style={[styles.clearPrintStrengthTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
+                        {CLEAR_PRINT_STRENGTH_OPTIONS.map((option) => {
+                          const isSelected = option.value === exportClearPrintStrength;
+                          return (
+                            <Pressable
+                              key={option.value}
+                              accessibilityRole="button"
+                              disabled={isExportImageModeBusy}
+                              onPress={() => {
+                                void handleSelectClearPrintStrength(option.value);
+                              }}
                               style={[
-                                styles.clearPrintStrengthStopText,
-                                isSelected ? styles.clearPrintStrengthStopTextSelected : null,
+                                styles.clearPrintStrengthStop,
+                                isSelected ? styles.clearPrintStrengthStopSelected : null,
                               ]}>
-                              {option.title}
-                            </Text>
-                          </Pressable>
-                        );
-                      })}
+                              <Text
+                                style={[
+                                  styles.clearPrintStrengthStopText,
+                                  isSelected ? styles.clearPrintStrengthStopTextSelected : null,
+                                ]}>
+                                {option.title}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      <Text style={styles.clearPrintStrengthDescription}>
+                        {selectedClearPrintStrengthOption.description}
+                      </Text>
                     </View>
-                    <Text style={styles.clearPrintStrengthDescription}>
-                      {selectedClearPrintStrengthOption.description}
-                    </Text>
-                  </View>
+                    <View style={styles.enhanceConcurrencySection}>
+                      <Text style={styles.metaText}>增强策略（仅影响清晰打印）</Text>
+                      <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
+                        {ENHANCE_PERFORMANCE_OPTIONS.map((option) => {
+                          const isSelected = option.value === exportEnhancePerformanceProfile;
+                          const isDisabled = isExportImageModeBusy || exportImageMode !== 'clear_print';
+                          return (
+                            <Pressable
+                              key={option.value}
+                              accessibilityRole="button"
+                              disabled={isDisabled}
+                              onPress={() => {
+                                void handleSelectEnhancePerformanceProfile(option.value);
+                              }}
+                              style={[
+                                styles.enhanceConcurrencyStop,
+                                isSelected ? styles.enhanceConcurrencyStopSelected : null,
+                                isDisabled ? styles.disabledButton : null,
+                              ]}>
+                              <View style={styles.enhanceConcurrencyStopInner}>
+                                <Text
+                                  style={[
+                                    styles.enhanceConcurrencyStopText,
+                                    isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
+                                  ]}>
+                                  {option.title}
+                                </Text>
+                                {option.recommended ? (
+                                  <Text
+                                    style={[
+                                      styles.enhanceConcurrencyStopHint,
+                                      isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
+                                    ]}>
+                                    推荐
+                                  </Text>
+                                ) : null}
+                              </View>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      <Text style={styles.enhanceConcurrencyDescription}>
+                        {selectedEnhancePerformanceOption.description}
+                      </Text>
+                      <Text style={styles.enhanceConcurrencyHint}>
+                        “速度优先”会降低增强参数，通常可显著缩短 clear_print 导出耗时。
+                      </Text>
+                    </View>
+                    <View style={styles.enhanceConcurrencySection}>
+                      <Text style={styles.metaText}>并发数量（仅影响清晰打印）</Text>
+                      <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
+                        {ENHANCE_CONCURRENCY_OPTIONS.map((option) => {
+                          const isSelected = option.value === exportEnhanceConcurrency;
+                          return (
+                            <Pressable
+                              key={option.value}
+                              accessibilityRole="button"
+                              disabled={isExportImageModeBusy}
+                              onPress={() => {
+                                void handleSelectEnhanceConcurrency(option.value);
+                              }}
+                              style={[
+                                styles.enhanceConcurrencyStop,
+                                isSelected ? styles.enhanceConcurrencyStopSelected : null,
+                              ]}>
+                              <View style={styles.enhanceConcurrencyStopInner}>
+                                <Text
+                                  style={[
+                                    styles.enhanceConcurrencyStopText,
+                                    isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
+                                  ]}>
+                                  {option.title}
+                                </Text>
+                                {option.recommended ? (
+                                  <Text
+                                    style={[
+                                      styles.enhanceConcurrencyStopHint,
+                                      isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
+                                    ]}>
+                                    推荐
+                                  </Text>
+                                ) : null}
+                              </View>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                      <Text style={styles.enhanceConcurrencyDescription}>
+                        {selectedEnhanceConcurrencyOption.description}
+                      </Text>
+                      <Text style={styles.enhanceConcurrencyHint}>
+                        并发越高通常越快，但会增加内存与发热；导出异常时建议先切回 1。
+                      </Text>
+                    </View>
+                  </>
                 ) : null}
-                <View style={styles.enhanceConcurrencySection}>
-                  <Text style={styles.metaText}>增强策略（仅影响清晰打印）</Text>
-                  <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                    {ENHANCE_PERFORMANCE_OPTIONS.map((option) => {
-                      const isSelected = option.value === exportEnhancePerformanceProfile;
-                      const isDisabled = isExportImageModeBusy || exportImageMode !== 'clear_print';
-                      return (
-                        <Pressable
-                          key={option.value}
-                          accessibilityRole="button"
-                          disabled={isDisabled}
-                          onPress={() => {
-                            void handleSelectEnhancePerformanceProfile(option.value);
-                          }}
-                          style={[
-                            styles.enhanceConcurrencyStop,
-                            isSelected ? styles.enhanceConcurrencyStopSelected : null,
-                            isDisabled ? styles.disabledButton : null,
-                          ]}>
-                          <View style={styles.enhanceConcurrencyStopInner}>
-                            <Text
-                              style={[
-                                styles.enhanceConcurrencyStopText,
-                                isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
-                              ]}>
-                              {option.title}
-                            </Text>
-                            {option.recommended ? (
-                              <Text
-                                style={[
-                                  styles.enhanceConcurrencyStopHint,
-                                  isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
-                                ]}>
-                                推荐
-                              </Text>
-                            ) : null}
-                          </View>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                  <Text style={styles.enhanceConcurrencyDescription}>
-                    {selectedEnhancePerformanceOption.description}
-                  </Text>
-                  <Text style={styles.enhanceConcurrencyHint}>
-                    “速度优先”会降低增强参数，通常可显著缩短 clear_print 导出耗时。
-                  </Text>
-                </View>
-                <View style={styles.enhanceConcurrencySection}>
-                  <Text style={styles.metaText}>并发数量（仅影响清晰打印）</Text>
-                  <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                    {ENHANCE_CONCURRENCY_OPTIONS.map((option) => {
-                      const isSelected = option.value === exportEnhanceConcurrency;
-                      return (
-                        <Pressable
-                          key={option.value}
-                          accessibilityRole="button"
-                          disabled={isExportImageModeBusy}
-                          onPress={() => {
-                            void handleSelectEnhanceConcurrency(option.value);
-                          }}
-                          style={[
-                            styles.enhanceConcurrencyStop,
-                            isSelected ? styles.enhanceConcurrencyStopSelected : null,
-                          ]}>
-                          <View style={styles.enhanceConcurrencyStopInner}>
-                            <Text
-                              style={[
-                                styles.enhanceConcurrencyStopText,
-                                isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
-                              ]}>
-                              {option.title}
-                            </Text>
-                            {option.recommended ? (
-                              <Text
-                                style={[
-                                  styles.enhanceConcurrencyStopHint,
-                                  isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
-                                ]}>
-                                推荐
-                              </Text>
-                            ) : null}
-                          </View>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
-                  <Text style={styles.enhanceConcurrencyDescription}>
-                    {selectedEnhanceConcurrencyOption.description}
-                  </Text>
-                  <Text style={styles.enhanceConcurrencyHint}>
-                    并发越高通常越快，但会增加内存与发热；导出异常时建议先切回 1。
-                  </Text>
-                </View>
-                <Text style={styles.metaText}>{exportImageModeStatusWithEnhanceSettingsText}</Text>
+                <Text style={styles.metaText}>{exportImageModeStatusDisplayText}</Text>
               </View>
               <Pressable
                 disabled={isExportingWorksheet || !canExportTodayWorksheet}
