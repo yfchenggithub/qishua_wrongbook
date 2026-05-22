@@ -1078,10 +1078,10 @@ export default function ReviewSessionPage() {
 
         <BrandHeader
           title="七刷错题本"
-          subtitle="今日复做会话"
+          subtitle=""
           style={styles.brandHeader}
           titleStyle={styles.brandHeaderTitle}
-          subtitleStyle={styles.brandHeaderSubtitle}
+          subtitleStyle={styles.brandHeaderSubtitleHidden}
         />
 
         {sessionState === 'loading' ? (
@@ -1140,12 +1140,6 @@ export default function ReviewSessionPage() {
         {sessionState === 'ready' && !isCompleted ? (
           <>
             <CardContainer style={styles.progressCard} padding={spacing.lg}>
-              <View style={styles.sectionHeaderRow}>
-                <View style={styles.sectionIconWrap}>
-                  <MaterialIcons name="assignment-turned-in" size={20} color="#16A34A" />
-                </View>
-                <Text style={styles.progressHeader}>今日复做</Text>
-              </View>
               <View style={styles.progressMainRow}>
                 <View style={styles.progressNumberRow}>
                   <Text style={styles.progressNumberCurrent}>{progressCurrent}</Text>
@@ -1407,12 +1401,8 @@ const styles = StyleSheet.create({
     color: '#0F172A',
     fontWeight: '800',
   },
-  brandHeaderSubtitle: {
-    ...typography.body,
-    fontSize: 15,
-    lineHeight: 21,
-    color: '#64748B',
-    fontWeight: '600',
+  brandHeaderSubtitleHidden: {
+    display: 'none',
   },
   exitButton: {
     alignSelf: 'flex-start',
@@ -1444,13 +1434,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     gap: spacing.sm,
   },
-  progressHeader: {
-    ...typography.sectionTitle,
-    fontSize: 22,
-    lineHeight: 30,
-    color: '#1F2937',
-    fontWeight: '700',
-  },
   progressMainRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1474,14 +1457,14 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.xs,
     fontSize: 28,
     lineHeight: 34,
-    color: '#334155',
+    color: '#059669',
     fontWeight: '700',
   },
   progressNumberTotal: {
     ...typography.titleLarge,
     fontSize: 40,
     lineHeight: 46,
-    color: '#111827',
+    color: '#059669',
     fontWeight: '800',
   },
   reviewPill: {
