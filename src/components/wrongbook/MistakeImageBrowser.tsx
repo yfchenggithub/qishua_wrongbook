@@ -13,6 +13,7 @@ import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
@@ -42,6 +43,8 @@ type NormalizedBrowserItem = MistakeImageBrowserItem & {
   normalizedUri: string;
 };
 
+type SwitchDirection = 'prev' | 'next';
+
 const MIN_SCALE = 1;
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2;
@@ -51,6 +54,7 @@ const SWIPE_SWITCH_DISTANCE = 64;
 const SWIPE_SWITCH_VELOCITY = 760;
 const SWITCH_EXIT_DURATION_MS = 140;
 const SWITCH_ENTER_DURATION_MS = 170;
+const TAP_GUARD_RELEASE_DELAY_MS = 240;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -61,16 +65,12 @@ function normalizeUri(uri: string | null | undefined): string | null {
   if (typeof uri !== 'string') {
     return null;
   }
-
   const trimmed = uri.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
 
 function clampIndex(index: number, length: number): number {
-  if (length <= 0) {
-    return 0;
-  }
-  if (!Number.isFinite(index)) {
+  if (length <= 0 || !Number.isFinite(index)) {
     return 0;
   }
   return Math.min(length - 1, Math.max(0, Math.floor(index)));
@@ -78,7 +78,6 @@ function clampIndex(index: number, length: number): number {
 
 function clampScale(value: number): number {
   'worklet';
-
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, value));
 }
 
@@ -96,7 +95,6 @@ function getTranslationLimit(contentSize: number, containerSize: number, scale: 
   if (scaledContentSize <= containerSize) {
     return 0;
   }
-
   return (scaledContentSize - containerSize) / 2;
 }
 
@@ -107,7 +105,6 @@ function clampTranslation(value: number, contentSize: number, containerSize: num
   if (limit <= 0) {
     return 0;
   }
-
   return Math.min(limit, Math.max(-limit, value));
 }
 
@@ -127,11 +124,9 @@ function applyTranslationResistance(
   if (value < -limit) {
     return -limit + ((value + limit) * EDGE_RESISTANCE);
   }
-
   if (value > limit) {
     return limit + ((value - limit) * EDGE_RESISTANCE);
   }
-
   return value;
 }
 
@@ -139,7 +134,6 @@ function computeContainedSize(container: Size, intrinsic: Size | null): Size {
   if (container.width <= 0 || container.height <= 0) {
     return { width: 0, height: 0 };
   }
-
   if (!intrinsic || intrinsic.width <= 0 || intrinsic.height <= 0) {
     return container;
   }
@@ -190,6 +184,7 @@ function SwipeZoomImageStage({
   const contentWidth = useSharedValue(0);
   const contentHeight = useSharedValue(0);
   const hasPanMotion = useSharedValue(0);
+  const suppressSingleTap = useSharedValue(0);
 
   const containedSize = useMemo(
     () => computeContainedSize(containerSizeState, intrinsicSize),
@@ -212,9 +207,12 @@ function SwipeZoomImageStage({
     pageTranslateY.value = 0;
     contentWidth.value = 0;
     contentHeight.value = 0;
+    hasPanMotion.value = 0;
+    suppressSingleTap.value = 0;
   }, [
     contentHeight,
     contentWidth,
+    hasPanMotion,
     pageTranslateY,
     panStartX,
     panStartY,
@@ -222,6 +220,7 @@ function SwipeZoomImageStage({
     pinchStartX,
     pinchStartY,
     scale,
+    suppressSingleTap,
     translateX,
     translateY,
     uri,
@@ -274,7 +273,7 @@ function SwipeZoomImageStage({
       if (!success) {
         return;
       }
-      if (hasPanMotion.value > 0.5) {
+      if (hasPanMotion.value > 0.5 || suppressSingleTap.value > 0.5) {
         return;
       }
       runOnJS(onSingleTapClose)();
@@ -332,6 +331,7 @@ function SwipeZoomImageStage({
       pinchStartX.value = translateX.value;
       pinchStartY.value = translateY.value;
       pageTranslateY.value = 0;
+      suppressSingleTap.value = 1;
     })
     .onUpdate((event) => {
       const nextScale = clampScale(pinchStartScale.value * event.scale);
@@ -339,10 +339,8 @@ function SwipeZoomImageStage({
       const focalY = event.focalY - (containerHeight.value / 2);
       const scaleRatio = nextScale / pinchStartScale.value;
 
-      const rawTranslateX =
-        pinchStartX.value + ((1 - scaleRatio) * (focalX - pinchStartX.value));
-      const rawTranslateY =
-        pinchStartY.value + ((1 - scaleRatio) * (focalY - pinchStartY.value));
+      const rawTranslateX = pinchStartX.value + ((1 - scaleRatio) * (focalX - pinchStartX.value));
+      const rawTranslateY = pinchStartY.value + ((1 - scaleRatio) * (focalY - pinchStartY.value));
 
       scale.value = nextScale;
       translateX.value = applyTranslationResistance(
@@ -388,6 +386,11 @@ function SwipeZoomImageStage({
         panStartY.value = nextTranslateY;
         pinchStartScale.value = nextScale;
       }
+
+      suppressSingleTap.value = withDelay(
+        TAP_GUARD_RELEASE_DELAY_MS,
+        withTiming(0, { duration: 80 }),
+      );
     });
 
   const panGesture = Gesture.Pan()
@@ -396,6 +399,7 @@ function SwipeZoomImageStage({
     .maxPointers(1)
     .onStart(() => {
       hasPanMotion.value = 0;
+      suppressSingleTap.value = 1;
       panStartX.value = translateX.value;
       panStartY.value = translateY.value;
     })
@@ -457,6 +461,10 @@ function SwipeZoomImageStage({
         panStartX.value = nextTranslateX;
         panStartY.value = nextTranslateY;
         pageTranslateY.value = withSpring(0, SPRING_CONFIG);
+        suppressSingleTap.value = withDelay(
+          TAP_GUARD_RELEASE_DELAY_MS,
+          withTiming(0, { duration: 80 }),
+        );
         hasPanMotion.value = withTiming(0, { duration: 130 });
         return;
       }
@@ -480,6 +488,10 @@ function SwipeZoomImageStage({
       }
 
       pageTranslateY.value = withSpring(0, SPRING_CONFIG);
+      suppressSingleTap.value = withDelay(
+        TAP_GUARD_RELEASE_DELAY_MS,
+        withTiming(0, { duration: 80 }),
+      );
       hasPanMotion.value = withTiming(0, { duration: 130 });
     });
 
@@ -609,7 +621,7 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
   }, []);
 
   const animateSwitchToIndex = useCallback(
-    (targetIndex: number, direction: 'prev' | 'next') => {
+    (targetIndex: number, direction: SwitchDirection) => {
       if (switchingRef.current) {
         return;
       }
@@ -693,6 +705,8 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
   );
 
   const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
+  const canSwipePrev = activeIndex > 0;
+  const canSwipeNext = activeIndex < normalizedItems.length - 1;
 
   const handleSwitchPrev = useCallback(() => {
     animateSwitchToIndex(activeIndex - 1, 'prev');
@@ -701,9 +715,6 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
   const handleSwitchNext = useCallback(() => {
     animateSwitchToIndex(activeIndex + 1, 'next');
   }, [activeIndex, animateSwitchToIndex]);
-
-  const canSwipePrev = activeIndex > 0;
-  const canSwipeNext = activeIndex < normalizedItems.length - 1;
 
   return (
     <Modal
