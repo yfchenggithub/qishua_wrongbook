@@ -7,6 +7,13 @@ export type DetailImageSlotType =
   | 'answer'
   | 'review_solution';
 
+export interface DetailPreviewImageItem {
+  id: string;
+  uri: string;
+  exists?: boolean;
+  fileSize?: number | null;
+}
+
 export interface DetailImageSlot {
   type: DetailImageSlotType;
   title: string;
@@ -18,6 +25,7 @@ export interface DetailImageSlot {
   imageWidth?: number | null;
   imageHeight?: number | null;
   emptyText: string;
+  previewImages?: DetailPreviewImageItem[];
 }
 
 export type DetailReviewResult = ReviewResult | 'known' | 'vague' | 'unknown' | null;
@@ -31,6 +39,7 @@ export interface DetailReviewRecordItem {
   solutionImageId?: string | null;
   solutionImageUri?: string | null;
   solutionImageExists?: boolean;
+  solutionImages?: DetailPreviewImageItem[];
 }
 
 export interface MistakeDetailViewModel {

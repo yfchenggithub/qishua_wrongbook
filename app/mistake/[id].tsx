@@ -22,7 +22,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   BrandHeader,
   CardContainer,
-  ImagePreviewModal,
+  MistakeImageBrowser,
   MistakeImageSection,
   ProgressDots,
   ScreenContainer,
@@ -81,13 +81,30 @@ type DetailPageState =
   | { kind: 'notFound'; message: string }
   | { kind: 'error'; message: string };
 
-type PreviewImageState = {
+type DetailImagePreviewItem = {
+  id: string;
   uri: string;
+  section: 'question' | 'solution' | 'answer' | 'review';
   title: string;
+  subtitle?: string;
+  reviewIndex?: number;
+  reviewTotal?: number;
+  imageIndexInSection?: number;
+  imageTotalInSection?: number;
 };
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
 type ReviewImageSource = 'camera' | 'album';
+type MaybePreviewImage = {
+  uri?: string | null;
+  exists?: boolean;
+};
+type DetailImageSlotWithPreviewImages = DetailImageSlot & {
+  previewImages?: MaybePreviewImage[];
+};
+type DetailReviewRecordWithImages = DetailReviewRecordItem & {
+  solutionImages?: MaybePreviewImage[];
+};
 
 const MANAGED_IMAGE_ORDER: ManagedDetailType[] = ['question', 'my_solution', 'answer'];
 const EMPTY_BROWSE_CONTEXT: MistakeDetailService.DetailBrowseContext = {
@@ -253,6 +270,133 @@ function sortManagedImageSlots(slots: DetailImageSlot[]): DetailImageSlot[] {
   );
 }
 
+function buildSlotPreviewImageUris(slot: DetailImageSlot): string[] {
+  const normalizedUris: string[] = [];
+  const slotWithImages = slot as DetailImageSlotWithPreviewImages;
+  const previewImages = slotWithImages.previewImages;
+
+  if (Array.isArray(previewImages) && previewImages.length > 0) {
+    for (const image of previewImages) {
+      const normalizedUri = normalizePreviewUri(image.uri);
+      if (!normalizedUri || image.exists === false) {
+        continue;
+      }
+      normalizedUris.push(normalizedUri);
+    }
+  }
+
+  if (normalizedUris.length > 0) {
+    return normalizedUris;
+  }
+
+  const fallbackUri = normalizePreviewUri(slot.uri);
+  if (!fallbackUri || slot.exists === false) {
+    return [];
+  }
+  return [fallbackUri];
+}
+
+function buildReviewPreviewImageUris(record: DetailReviewRecordItem): string[] {
+  const normalizedUris: string[] = [];
+  const recordWithImages = record as DetailReviewRecordWithImages;
+  const solutionImages = recordWithImages.solutionImages;
+
+  if (Array.isArray(solutionImages) && solutionImages.length > 0) {
+    for (const image of solutionImages) {
+      const normalizedUri = normalizePreviewUri(image.uri);
+      if (!normalizedUri || image.exists === false) {
+        continue;
+      }
+      normalizedUris.push(normalizedUri);
+    }
+  }
+
+  if (normalizedUris.length > 0) {
+    return normalizedUris;
+  }
+
+  const fallbackUri = normalizePreviewUri(record.solutionImageUri);
+  if (!fallbackUri || record.solutionImageExists === false) {
+    return [];
+  }
+  return [fallbackUri];
+}
+
+function normalizeReviewIndex(value: number, fallback: number, reviewTotal: number): number {
+  if (Number.isFinite(value) && value > 0) {
+    return Math.min(reviewTotal, Math.max(1, Math.floor(value)));
+  }
+  return Math.min(reviewTotal, Math.max(1, fallback));
+}
+
+function buildDetailImagePreviewItems(detail: MistakeDetailViewModel): DetailImagePreviewItem[] {
+  const previewItems: DetailImagePreviewItem[] = [];
+  const managedSlots = sortManagedImageSlots(detail.imageSlots);
+
+  for (const slot of managedSlots) {
+    if (!isManagedType(slot.type)) {
+      continue;
+    }
+
+    const sectionUris = buildSlotPreviewImageUris(slot);
+    if (sectionUris.length <= 0) {
+      continue;
+    }
+
+    const sectionTitle = getSlotPreviewTitle(slot.type);
+    const section = mapManagedTypeToImageSlot(slot.type);
+    const imageTotalInSection = sectionUris.length;
+    for (let index = 0; index < sectionUris.length; index += 1) {
+      previewItems.push({
+        id: `slot:${slot.type}:${index}`,
+        uri: sectionUris[index],
+        section,
+        title: sectionTitle,
+        subtitle: imageTotalInSection > 1 ? `图 ${index + 1}/${imageTotalInSection}` : undefined,
+        imageIndexInSection: index + 1,
+        imageTotalInSection,
+      });
+    }
+  }
+
+  const reviewTotal = Number.isFinite(detail.maxReviewCount) && detail.maxReviewCount > 0
+    ? Math.floor(detail.maxReviewCount)
+    : 7;
+  const sortedReviewRecords = [...detail.reviewRecords].sort((left, right) => {
+    if (left.reviewIndex !== right.reviewIndex) {
+      return left.reviewIndex - right.reviewIndex;
+    }
+    return left.createdAt.localeCompare(right.createdAt);
+  });
+
+  for (let recordIndex = 0; recordIndex < sortedReviewRecords.length; recordIndex += 1) {
+    const record = sortedReviewRecords[recordIndex];
+    const reviewIndex = normalizeReviewIndex(record.reviewIndex, recordIndex + 1, reviewTotal);
+    const reviewTitle = `复做 ${reviewIndex}/${reviewTotal}`;
+    const reviewUris = buildReviewPreviewImageUris(record);
+    if (reviewUris.length <= 0) {
+      continue;
+    }
+
+    const imageTotalInSection = reviewUris.length;
+    for (let imageIndex = 0; imageIndex < reviewUris.length; imageIndex += 1) {
+      previewItems.push({
+        id: `review:${record.id}:${imageIndex}`,
+        uri: reviewUris[imageIndex],
+        section: 'review',
+        title: reviewTitle,
+        subtitle: imageTotalInSection > 1 ? `图 ${imageIndex + 1}/${imageTotalInSection}` : undefined,
+        reviewIndex,
+        reviewTotal,
+        imageIndexInSection: imageIndex + 1,
+        imageTotalInSection,
+      });
+    }
+  }
+
+  return previewItems;
+}
+
 function getToastBackgroundColor(type: ToastType): string {
   if (type === 'success') {
     return 'rgba(24, 38, 30, 0.95)';
@@ -261,13 +405,6 @@ function getToastBackgroundColor(type: ToastType): string {
     return 'rgba(88, 28, 28, 0.95)';
   }
   return 'rgba(38, 44, 53, 0.95)';
-}
-
-function getReviewPreviewTitle(record: DetailReviewRecordItem): string {
-  if (Number.isFinite(record.reviewIndex) && record.reviewIndex > 0) {
-    return `第 ${record.reviewIndex} 刷记录`;
-  }
-  return '复做记录';
 }
 
 function normalizeErrorMessage(message?: string): string {
@@ -338,7 +475,7 @@ function ReviewRecordCard({
   recordingElapsedMs?: number;
   isVoiceLocked?: boolean;
   onAddImage?: (record: DetailReviewRecordItem) => void;
-  onPreview?: (uri: string, title: string) => void;
+  onPreview?: (targetImageId: string) => void;
   onOpenImageActions?: (record: DetailReviewRecordItem) => void;
   onToggleVoicePlayback?: (record: DetailReviewRecordItem) => void;
   onStartVoiceRecording?: (record: DetailReviewRecordItem) => void;
@@ -353,7 +490,6 @@ function ReviewRecordCard({
   const hasImage = !!normalizedUri;
   const imageExists = record.solutionImageExists !== false;
   const canShowImage = hasImage && imageExists && !imageFailed;
-  const previewTitle = getReviewPreviewTitle(record);
   const voiceNote = record.voiceNote ?? null;
   const voiceAddDisabled = isVoiceBusy || isVoiceLocked;
   const voiceAddButtonText = isVoiceLocked ? '其他录音中' : isVoiceBusy ? '处理中...' : '补充语音';
@@ -443,7 +579,7 @@ function ReviewRecordCard({
               if (!normalizedUri || !onPreview) {
                 return;
               }
-              onPreview(normalizedUri, previewTitle);
+              onPreview(`review:${record.id}:0`);
             }}
             onLongPress={() => {
               onOpenImageActions?.(record);
@@ -554,7 +690,9 @@ export default function MistakeDetailScreen() {
 
   const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
+  const [imageBrowserVisible, setImageBrowserVisible] = useState(false);
+  const [imageBrowserInitialIndex, setImageBrowserInitialIndex] = useState(0);
+  const [imageBrowserItems, setImageBrowserItems] = useState<DetailImagePreviewItem[]>([]);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -793,21 +931,25 @@ export default function MistakeDetailScreen() {
     });
   }, [activeVoiceRecordingRecordId, confirmLeaveWhileRecording, navigateBack]);
 
-  const handleClosePreview = useCallback(() => {
-    setPreviewImage(null);
+  const handleCloseImageBrowser = useCallback(() => {
+    setImageBrowserVisible(false);
   }, []);
 
-  const handleOpenPreview = useCallback((uri: string | null | undefined, title: string) => {
-    const normalizedUri = normalizePreviewUri(uri);
-    if (!normalizedUri) {
+  const openImageBrowser = useCallback((targetImageId: string) => {
+    if (state.kind !== 'success') {
       return;
     }
 
-    setPreviewImage({
-      uri: normalizedUri,
-      title,
-    });
-  }, []);
+    const previewItems = buildDetailImagePreviewItems(state.detail);
+    if (previewItems.length <= 0) {
+      return;
+    }
+
+    const targetIndex = previewItems.findIndex((item) => item.id === targetImageId);
+    setImageBrowserItems(previewItems);
+    setImageBrowserInitialIndex(targetIndex >= 0 ? targetIndex : 0);
+    setImageBrowserVisible(true);
+  }, [state]);
 
   const refreshDetail = useCallback(async () => {
     if (!routeId) {
@@ -2234,7 +2376,7 @@ export default function MistakeDetailScreen() {
                       }}
                       onEdit={() => handlePressEdit(slot)}
                       onDelete={() => handlePressDelete(slotType)}
-                      onPreview={() => handleOpenPreview(slot.uri, getSlotPreviewTitle(slotType))}
+                      onPreview={() => openImageBrowser(`slot:${slotType}:0`)}
                     />
                   );
                 })}
@@ -2275,7 +2417,7 @@ export default function MistakeDetailScreen() {
                       onAddImage={(targetRecord) => {
                         openReviewImagePickerActionSheet(targetRecord, 'add');
                       }}
-                      onPreview={(uri, title) => handleOpenPreview(uri, title)}
+                      onPreview={openImageBrowser}
                       onOpenImageActions={handleOpenReviewImageActions}
                       onToggleVoicePlayback={(targetRecord) => {
                         void handleToggleReviewVoicePlayback(targetRecord);
@@ -2301,13 +2443,11 @@ export default function MistakeDetailScreen() {
           </>
         ) : null}
 
-        <ImagePreviewModal
-          visible={previewImage !== null}
-          uri={previewImage?.uri ?? null}
-          title={previewImage?.title ?? ''}
-          interactionMode="zoomable"
-          logSource="mistake_detail"
-          onClose={handleClosePreview}
+        <MistakeImageBrowser
+          visible={imageBrowserVisible}
+          items={imageBrowserItems}
+          initialIndex={imageBrowserInitialIndex}
+          onClose={handleCloseImageBrowser}
         />
         </ScreenContainer>
       </Animated.View>

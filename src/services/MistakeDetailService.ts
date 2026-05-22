@@ -1,6 +1,7 @@
 ﻿import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type {
   DetailImageSlot,
+  DetailPreviewImageItem,
   DetailReviewRecordItem,
   DetailReviewResult,
   MistakeDetailViewModel,
@@ -90,7 +91,6 @@ export type UpdateMistakeTitleResult = {
 type SlotSeed = {
   type: DetailImageSlot['type'];
   title: string;
-  uri?: string | null;
   emptyText: string;
 };
 
@@ -186,19 +186,8 @@ function normalizeDetailReviewResult(result: string | null | undefined): DetailR
   return null;
 }
 
-function findFirstUriByType(images: MistakeImage[], type: DetailImageSlot['type']): string | null {
-  for (const image of images) {
-    if (image.type !== type) {
-      continue;
-    }
-
-    const uri = normalizeOptionalText(image.uri);
-    if (uri) {
-      return uri;
-    }
-  }
-
-  return null;
+function findImagesByType(images: MistakeImage[], type: DetailImageSlot['type']): MistakeImage[] {
+  return images.filter((image) => image.type === type);
 }
 
 function buildStatusLabel(status: MistakeStatus, reviewCount: number): string {
@@ -236,66 +225,79 @@ function buildSubtitle(mistake: Mistake): string {
   return subtitleParts.join(' · ');
 }
 
-async function enrichSlotWithLocalFileInfo(slot: DetailImageSlot): Promise<DetailImageSlot> {
-  const uri = normalizeOptionalText(slot.uri);
-  if (!uri) {
-    return {
-      ...slot,
-      uri: null,
-      exists: false,
-      fileSize: null,
-    };
-  }
+async function buildPreviewImages(images: MistakeImage[]): Promise<DetailPreviewImageItem[]> {
+  const mapped = await Promise.all(
+    images.map(async (image) => {
+      const normalizedUri = normalizeOptionalText(image.uri);
+      if (!normalizedUri) {
+        return null;
+      }
 
-  try {
-    const info = await getImageInfo(uri);
-    return {
-      ...slot,
-      uri,
-      exists: info.exists,
-      fileSize: info.size ?? null,
-    };
-  } catch (error) {
-    Logger.error(SERVICE_SCOPE, 'Image file check failed, fallback to exists=false.', {
-      uriShort: toShortUri(uri),
-      error,
-    });
-    return {
-      ...slot,
-      uri,
-      exists: false,
-      fileSize: null,
-    };
-  }
+      try {
+        const info = await getImageInfo(normalizedUri);
+        return {
+          id: image.id,
+          uri: normalizedUri,
+          exists: info.exists,
+          fileSize: info.size ?? null,
+        };
+      } catch (error) {
+        Logger.error(SERVICE_SCOPE, 'Image file check failed in preview image mapping.', {
+          imageId: image.id,
+          imageType: image.type,
+          uriShort: toShortUri(normalizedUri),
+          error,
+        });
+        return {
+          id: image.id,
+          uri: normalizedUri,
+          exists: false,
+          fileSize: null,
+        };
+      }
+    }),
+  );
+
+  return mapped.filter((item): item is NonNullable<typeof item> => item !== null);
 }
 
 async function buildImageSlots(_mistake: Mistake, images: MistakeImage[]): Promise<DetailImageSlot[]> {
-  const questionUri = findFirstUriByType(images, 'question');
-  const mySolutionUri = findFirstUriByType(images, 'my_solution');
-  const answerUri = findFirstUriByType(images, 'answer');
-
   const slotSeeds: SlotSeed[] = [
     {
       type: 'question',
       title: '题目',
-      uri: questionUri,
       emptyText: '还没有题目图片',
     },
     {
       type: 'my_solution',
       title: '我的做法',
-      uri: mySolutionUri,
       emptyText: '还没有添加做法图片',
     },
     {
       type: 'answer',
       title: '答案解析',
-      uri: answerUri,
       emptyText: '还没有添加答案解析图片',
     },
   ];
 
-  return Promise.all(slotSeeds.map((seed) => enrichSlotWithLocalFileInfo({ ...seed })));
+  const slots = await Promise.all(
+    slotSeeds.map(async (seed) => {
+      const slotImages = findImagesByType(images, seed.type);
+      const previewImages = await buildPreviewImages(slotImages);
+      const primaryImage =
+        previewImages.find((item) => item.exists !== false) ?? previewImages[0] ?? null;
+
+      return {
+        ...seed,
+        uri: primaryImage?.uri ?? null,
+        exists: primaryImage?.exists ?? false,
+        fileSize: primaryImage?.fileSize ?? null,
+        previewImages,
+      };
+    }),
+  );
+
+  return slots;
 }
 
 function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSlot[]): MistakeDetailViewModel {
@@ -325,24 +327,12 @@ async function mapReviewRecords(
   const mapped = await Promise.all(
     mistakeReviewRecords.map(async (record) => {
       const reviewSolutionImages = await MistakeImageRepository.getReviewSolutionImages(record.id);
-      const primaryImage = reviewSolutionImages[0];
+      const solutionImages = await buildPreviewImages(reviewSolutionImages);
+      const primaryImage =
+        solutionImages.find((item) => item.exists !== false) ?? solutionImages[0] ?? null;
       const solutionImageId = normalizeOptionalText(primaryImage?.id ?? null);
       const solutionImageUri = normalizeOptionalText(primaryImage?.uri ?? null);
-      let solutionImageExists = false;
-
-      if (solutionImageUri) {
-        try {
-          const info = await getImageInfo(solutionImageUri);
-          solutionImageExists = info.exists;
-        } catch (error) {
-          Logger.error(SERVICE_SCOPE, 'Failed to load review image info, fallback to unavailable.', {
-            reviewRecordId: record.id,
-            solutionImageUriShort: toShortUri(solutionImageUri),
-            error,
-          });
-          solutionImageExists = false;
-        }
-      }
+      const solutionImageExists = primaryImage?.exists === true;
 
       return {
         id: record.id,
@@ -353,6 +343,7 @@ async function mapReviewRecords(
         solutionImageId,
         solutionImageUri,
         solutionImageExists,
+        solutionImages,
       };
     }),
   );
