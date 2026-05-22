@@ -6,10 +6,14 @@ import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExpor
 import { Logger } from '@/src/services/Logger';
 import type {
   PrintEnhanceConcurrency,
+  PrintEnhancePerformanceProfile,
   PrintEnhanceClearPrintStrength,
   PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
-import { toActivePrintEnhanceConcurrency } from '@/src/utils/image/printEnhanceConfig';
+import {
+  toActivePrintEnhanceConcurrency,
+  toActivePrintEnhancePerformanceProfile,
+} from '@/src/utils/image/printEnhanceConfig';
 
 type ExportToastType = 'success' | 'info' | 'error';
 
@@ -38,6 +42,7 @@ export type UseTodayWorksheetExportOptions = {
   printEnhanceMode?: PrintEnhanceMode;
   printEnhanceClearPrintStrength?: PrintEnhanceClearPrintStrength;
   printEnhanceConcurrency?: PrintEnhanceConcurrency;
+  printEnhancePerformanceProfile?: PrintEnhancePerformanceProfile;
   showToast: (message: string, type?: ExportToastType, duration?: number) => void;
   onSuccess: (fileUri: string) => void;
   onEmpty?: () => void;
@@ -55,6 +60,7 @@ type ResolvedPrintEnhanceSettings = {
   mode: PrintEnhanceMode;
   clearPrintStrength: PrintEnhanceClearPrintStrength;
   concurrency: PrintEnhanceConcurrency;
+  performanceProfile: PrintEnhancePerformanceProfile;
   source: 'explicit' | 'saved' | 'mixed';
 };
 
@@ -81,25 +87,30 @@ async function resolvePrintEnhanceSettings(
   mode: PrintEnhanceMode | undefined,
   clearPrintStrength: PrintEnhanceClearPrintStrength | undefined,
   concurrency: PrintEnhanceConcurrency | undefined,
+  performanceProfile: PrintEnhancePerformanceProfile | undefined,
 ): Promise<ResolvedPrintEnhanceSettings> {
   const hasMode = typeof mode === 'string' && mode.trim().length > 0;
   const hasStrength = typeof clearPrintStrength === 'string' && clearPrintStrength.trim().length > 0;
   const hasConcurrency = typeof concurrency === 'number' && Number.isFinite(concurrency);
-  if (hasMode && hasStrength && hasConcurrency) {
+  const hasPerformanceProfile =
+    typeof performanceProfile === 'string' && performanceProfile.trim().length > 0;
+  if (hasMode && hasStrength && hasConcurrency && hasPerformanceProfile) {
     return {
       mode: mode as PrintEnhanceMode,
       clearPrintStrength: clearPrintStrength as PrintEnhanceClearPrintStrength,
       concurrency: toActivePrintEnhanceConcurrency(concurrency),
+      performanceProfile: toActivePrintEnhancePerformanceProfile(performanceProfile),
       source: 'explicit',
     };
   }
 
   const savedSettings = await ExportImageModeService.loadExportImageSettings();
-  if (!hasMode && !hasStrength && !hasConcurrency) {
+  if (!hasMode && !hasStrength && !hasConcurrency && !hasPerformanceProfile) {
     return {
       mode: savedSettings.mode,
       clearPrintStrength: savedSettings.clearPrintStrength,
       concurrency: savedSettings.enhanceConcurrency,
+      performanceProfile: savedSettings.performanceProfile,
       source: 'saved',
     };
   }
@@ -112,6 +123,9 @@ async function resolvePrintEnhanceSettings(
     concurrency: hasConcurrency
       ? toActivePrintEnhanceConcurrency(concurrency)
       : savedSettings.enhanceConcurrency,
+    performanceProfile: hasPerformanceProfile
+      ? toActivePrintEnhancePerformanceProfile(performanceProfile)
+      : savedSettings.performanceProfile,
     source: 'mixed',
   };
 }
@@ -165,6 +179,7 @@ export function useTodayWorksheetExport(
     printEnhanceMode,
     printEnhanceClearPrintStrength,
     printEnhanceConcurrency,
+    printEnhancePerformanceProfile,
     showToast,
     onSuccess,
     onEmpty,
@@ -224,12 +239,14 @@ export function useTodayWorksheetExport(
       printEnhanceMode,
       printEnhanceClearPrintStrength,
       printEnhanceConcurrency,
+      printEnhancePerformanceProfile,
     );
     Logger.info(scope, 'export_pdf_start', {
       total: safeDueToday,
       printEnhanceMode: resolvedEnhanceSettings.mode,
       printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
       printEnhanceConcurrency: resolvedEnhanceSettings.concurrency,
+      printEnhancePerformanceProfile: resolvedEnhanceSettings.performanceProfile,
       printEnhanceSettingsSource: resolvedEnhanceSettings.source,
     });
 
@@ -263,6 +280,7 @@ export function useTodayWorksheetExport(
         printEnhanceMode: resolvedEnhanceSettings.mode,
         printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
         printEnhanceConcurrency: resolvedEnhanceSettings.concurrency,
+        printEnhancePerformanceProfile: resolvedEnhanceSettings.performanceProfile,
         onProgress: (next) => {
           const elapsedMs = Math.max(0, Date.now() - startedAt);
           const total = toSafeCount(next.total ?? next.pendingCount ?? safeDueToday);
@@ -378,6 +396,7 @@ export function useTodayWorksheetExport(
     onSuccess,
     printEnhanceClearPrintStrength,
     printEnhanceConcurrency,
+    printEnhancePerformanceProfile,
     printEnhanceMode,
     scope,
     showToast,

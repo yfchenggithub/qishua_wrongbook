@@ -16,13 +16,16 @@ import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
+  DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
   DEFAULT_CLEAR_PRINT_STRENGTH,
   DEFAULT_PRINT_ENHANCE_MODE,
   getPrintEnhanceCssFilter,
   toActivePrintEnhanceConcurrency,
+  toActivePrintEnhancePerformanceProfile,
   toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
   type PrintEnhanceConcurrency,
+  type PrintEnhancePerformanceProfile,
   type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
@@ -50,6 +53,7 @@ export type ExportTodayReviewPdfOptions = {
   printEnhanceMode?: PrintEnhanceMode;
   printEnhanceClearPrintStrength?: PrintEnhanceClearPrintStrength;
   printEnhanceConcurrency?: PrintEnhanceConcurrency;
+  printEnhancePerformanceProfile?: PrintEnhancePerformanceProfile;
   onProgress?: (progress: ExportTodayReviewPdfProgress) => void;
 };
 
@@ -110,6 +114,7 @@ type TodayReviewPdfRenderItem = {
 type QuestionImageEnhanceTrace = {
   mode: PrintEnhanceMode;
   clearPrintStrength: PrintEnhanceClearPrintStrength;
+  performanceProfile: PrintEnhancePerformanceProfile;
   sourceUri: string;
   enhancedUri: string;
   selectedUri: string | null;
@@ -356,6 +361,7 @@ async function buildQuestionImageSrc(
   uri: string,
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): Promise<BuildQuestionImageSrcResult> {
   const normalizedUri = normalizeOptionalText(uri);
   if (!normalizedUri) {
@@ -368,7 +374,12 @@ async function buildQuestionImageSrc(
     };
   }
 
-  const enhanceResult = await enhanceImageForPdfPrint(normalizedUri, printEnhanceMode, clearPrintStrength);
+  const enhanceResult = await enhanceImageForPdfPrint(
+    normalizedUri,
+    printEnhanceMode,
+    clearPrintStrength,
+    performanceProfile,
+  );
   const enhancedUri = normalizeOptionalText(enhanceResult.outputUri) ?? normalizedUri;
   const temporaryEnhancedUri = (enhancedUri !== normalizedUri)
     ? enhancedUri
@@ -386,6 +397,7 @@ async function buildQuestionImageSrc(
       const trace: QuestionImageEnhanceTrace = {
         mode: printEnhanceMode,
         clearPrintStrength,
+        performanceProfile,
         sourceUri: normalizedUri,
         enhancedUri,
         selectedUri: candidateUri,
@@ -419,6 +431,7 @@ async function buildQuestionImageSrc(
     trace: {
       mode: printEnhanceMode,
       clearPrintStrength,
+      performanceProfile,
       sourceUri: normalizedUri,
       enhancedUri,
       selectedUri: null,
@@ -788,10 +801,16 @@ async function buildSingleRenderItem(
   item: TodayReviewExportItem,
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): Promise<RenderItemBuildResult> {
   const questionImageUri = normalizeOptionalText(item.questionImageUri);
   const imageResult = questionImageUri
-    ? await buildQuestionImageSrc(questionImageUri, printEnhanceMode, clearPrintStrength)
+    ? await buildQuestionImageSrc(
+      questionImageUri,
+      printEnhanceMode,
+      clearPrintStrength,
+      performanceProfile,
+    )
     : {
       imageDataUri: null,
       temporaryEnhancedUri: null,
@@ -805,6 +824,7 @@ async function buildSingleRenderItem(
       mistakeId: item.mistakeId,
       printEnhanceMode: imageResult.trace.mode,
       clearPrintStrength: imageResult.trace.clearPrintStrength,
+      performanceProfile: imageResult.trace.performanceProfile,
       enhanceEngine: imageResult.trace.engine,
       outputFormat: imageResult.trace.outputFormat,
       enhanceSuccess: imageResult.trace.success,
@@ -840,6 +860,7 @@ async function buildRenderItems(
   items: TodayReviewExportItem[],
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
   enhanceConcurrency: PrintEnhanceConcurrency,
   onItemProcessed?: (progress: BuildItemsProgress) => void,
 ): Promise<BuildRenderItemsResult> {
@@ -879,7 +900,12 @@ async function buildRenderItems(
       }
       nextIndex += 1;
       const item = items[index];
-      const built = await buildSingleRenderItem(item, printEnhanceMode, clearPrintStrength);
+      const built = await buildSingleRenderItem(
+        item,
+        printEnhanceMode,
+        clearPrintStrength,
+        performanceProfile,
+      );
       renderItems[index] = built.renderItem;
       if (built.temporaryEnhancedUri) {
         temporaryEnhancedUris.push(built.temporaryEnhancedUri);
@@ -986,6 +1012,9 @@ export async function exportTodayReviewPdf(
   const activeClearPrintStrength = toActiveClearPrintStrength(
     options?.printEnhanceClearPrintStrength ?? DEFAULT_CLEAR_PRINT_STRENGTH,
   );
+  const activePerformanceProfile = toActivePrintEnhancePerformanceProfile(
+    options?.printEnhancePerformanceProfile ?? DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
+  );
   const configuredEnhanceConcurrency = toActivePrintEnhanceConcurrency(
     options?.printEnhanceConcurrency ?? DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   );
@@ -1025,6 +1054,7 @@ export async function exportTodayReviewPdf(
       exportItems,
       activePrintEnhanceMode,
       activeClearPrintStrength,
+      activePerformanceProfile,
       activeEnhanceConcurrency,
       ({ current, total }) => {
         reportExportProgress(onProgress, {
@@ -1107,6 +1137,7 @@ export async function exportTodayReviewPdf(
       fileUriPreview: exportFileUriPreview,
       printEnhanceMode: activePrintEnhanceMode,
       clearPrintStrength: activeClearPrintStrength,
+      performanceProfile: activePerformanceProfile,
       enhanceConcurrency: activeEnhanceConcurrency,
       configuredEnhanceConcurrency,
       enhancedImageCount: renderResult.temporaryEnhancedUris.length,
@@ -1150,6 +1181,7 @@ export async function exportTodayReviewPdf(
       itemCount: exportItemCount,
       printEnhanceMode: activePrintEnhanceMode,
       clearPrintStrength: activeClearPrintStrength,
+      performanceProfile: activePerformanceProfile,
       enhanceConcurrency: activeEnhanceConcurrency,
       configuredEnhanceConcurrency,
       prepareItemsMs: stageTiming.prepareItemsMs,

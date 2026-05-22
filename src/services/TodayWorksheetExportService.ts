@@ -3,6 +3,7 @@ import * as MistakeListService from '@/src/services/MistakeListService';
 import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExportService';
 import type {
   PrintEnhanceConcurrency,
+  PrintEnhancePerformanceProfile,
   PrintEnhanceClearPrintStrength,
   PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
@@ -47,6 +48,7 @@ export type ExportTodayWorksheetOptions = {
   printEnhanceMode?: PrintEnhanceMode;
   printEnhanceClearPrintStrength?: PrintEnhanceClearPrintStrength;
   printEnhanceConcurrency?: PrintEnhanceConcurrency;
+  printEnhancePerformanceProfile?: PrintEnhancePerformanceProfile;
   onProgress?: (progress: TodayWorksheetExportProgress) => void;
 };
 
@@ -213,6 +215,7 @@ export async function exportTodayWorksheet(
       printEnhanceMode: options?.printEnhanceMode,
       printEnhanceClearPrintStrength: options?.printEnhanceClearPrintStrength,
       printEnhanceConcurrency: options?.printEnhanceConcurrency,
+      printEnhancePerformanceProfile: options?.printEnhancePerformanceProfile,
       onProgress: (progress) => {
         const mappedStage = mapPdfProgressStageToWorksheetStage(progress.stage);
         const countInProgress =

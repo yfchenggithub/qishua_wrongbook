@@ -6,10 +6,12 @@ import { Logger } from '@/src/services/Logger';
 import {
   CLEAR_PRINT_ENHANCE_CONFIG,
   PRINT_ENHANCE_TEMP_DIR_PARTS,
+  toActivePrintEnhancePerformanceProfile,
   toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
   type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
+  type PrintEnhancePerformanceProfile,
 } from '@/src/utils/image/printEnhanceConfig';
 
 const SERVICE_SCOPE = 'PrintImageEnhancer';
@@ -158,10 +160,20 @@ function buildResizeByLongEdge(
 function resolveEnhanceMaxLongEdgePx(
   mode: Exclude<PrintEnhanceMode, 'original'>,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): number {
   const fallback = CLEAR_PRINT_ENHANCE_CONFIG.maxLongEdgePx;
   if (mode !== 'clear_print') {
     return fallback;
+  }
+  if (performanceProfile === 'speed_first') {
+    if (clearPrintStrength === 'strong') {
+      return 2200;
+    }
+    if (clearPrintStrength === 'weak') {
+      return 1700;
+    }
+    return 1900;
   }
   if (clearPrintStrength === 'strong') {
     return 3000;
@@ -170,6 +182,26 @@ function resolveEnhanceMaxLongEdgePx(
     return 2400;
   }
   return 2700;
+}
+
+function resolveEnhanceJpegQuality(
+  mode: Exclude<PrintEnhanceMode, 'original'>,
+  clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
+): number {
+  if (mode !== 'clear_print') {
+    return CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality;
+  }
+  if (performanceProfile === 'speed_first') {
+    if (clearPrintStrength === 'strong') {
+      return 0.82;
+    }
+    if (clearPrintStrength === 'weak') {
+      return 0.72;
+    }
+    return 0.76;
+  }
+  return CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality;
 }
 
 function safeReadFileSize(uri: string): number | null {
@@ -280,10 +312,12 @@ async function runOpenCvEnhanceProvider(
   sourceUri: string,
   mode: Exclude<PrintEnhanceMode, 'original'>,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
   const preferredOutputFormat = getPreferredOutputFormat(mode);
-  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength);
+  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength, performanceProfile);
+  const jpegQuality = resolveEnhanceJpegQuality(mode, clearPrintStrength, performanceProfile);
 
   if (Platform.OS !== 'android') {
     return {
@@ -320,7 +354,7 @@ async function runOpenCvEnhanceProvider(
       mode,
       clearPrintStrength,
       maxLongEdgePx,
-      jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
+      jpegQuality,
     });
 
     const hasExplicitFailure =
@@ -385,10 +419,12 @@ async function runBitmapFallbackEnhanceProvider(
   sourceUri: string,
   mode: Exclude<PrintEnhanceMode, 'original'>,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): Promise<ProviderResult> {
   const startedAt = Date.now();
   const preferredOutputFormat = getPreferredOutputFormat(mode);
-  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength);
+  const maxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength, performanceProfile);
+  const jpegQuality = resolveEnhanceJpegQuality(mode, clearPrintStrength, performanceProfile);
   if (Platform.OS === 'android') {
     const nativeModule = resolveNativeEnhanceModule();
     if (!nativeModule || typeof nativeModule.enhanceForPdfPrintBitmap !== 'function') {
@@ -416,7 +452,7 @@ async function runBitmapFallbackEnhanceProvider(
         mode,
         clearPrintStrength,
         maxLongEdgePx,
-        jpegQuality: CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
+        jpegQuality,
       });
 
       const hasExplicitFailure =
@@ -496,7 +532,7 @@ async function runBitmapFallbackEnhanceProvider(
       : null;
 
     const manipulated = await manipulateAsync(sourceUri, resize ? [{ resize }] : [], {
-      compress: mode === 'bw_scan' ? 1 : CLEAR_PRINT_ENHANCE_CONFIG.jpegQuality,
+      compress: mode === 'bw_scan' ? 1 : jpegQuality,
       format: mode === 'bw_scan' ? SaveFormat.PNG : SaveFormat.JPEG,
       base64: false,
     });
@@ -546,11 +582,13 @@ export async function enhanceImageForPdfPrint(
   sourceUriInput: string,
   modeInput?: PrintEnhanceMode,
   clearPrintStrengthInput?: PrintEnhanceClearPrintStrength,
+  performanceProfileInput?: PrintEnhancePerformanceProfile,
 ): Promise<PrintEnhanceResult> {
   const startedAt = Date.now();
   const sourceUri = normalizeRequiredUri(sourceUriInput);
   const mode = toActivePrintEnhanceMode(modeInput);
   const clearPrintStrength = toActiveClearPrintStrength(clearPrintStrengthInput);
+  const performanceProfile = toActivePrintEnhancePerformanceProfile(performanceProfileInput);
 
   if (mode === 'original') {
     const outputFormat = inferOutputFormatFromUri(sourceUri) ?? 'jpeg';
@@ -565,15 +603,19 @@ export async function enhanceImageForPdfPrint(
   }
 
   let originalSize: ImageSize | null = null;
+  let activeMaxLongEdgePx: number | null = null;
+  let activeJpegQuality: number | null = null;
   const originalFileSize = safeReadFileSize(sourceUri);
-  const providerAttempts: Array<{
+  const providerAttempts: {
     provider: ProviderName;
     reason: 'unsupported' | 'failed';
     durationMs: number;
     error?: string;
-  }> = [];
+  }[] = [];
 
   try {
+    activeMaxLongEdgePx = resolveEnhanceMaxLongEdgePx(mode, clearPrintStrength, performanceProfile);
+    activeJpegQuality = resolveEnhanceJpegQuality(mode, clearPrintStrength, performanceProfile);
     try {
       originalSize = normalizeImageSize(await getImageSize(sourceUri));
     } catch {
@@ -583,18 +625,27 @@ export async function enhanceImageForPdfPrint(
     Logger.info(SERVICE_SCOPE, 'print_image_enhance_start', {
       mode,
       clearPrintStrength,
+      performanceProfile,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
       originalFileSize,
+      maxLongEdgePx: activeMaxLongEdgePx,
+      jpegQuality: activeJpegQuality,
     });
 
-    const openCvResult = await runOpenCvEnhanceProvider(sourceUri, mode, clearPrintStrength);
+    const openCvResult = await runOpenCvEnhanceProvider(
+      sourceUri,
+      mode,
+      clearPrintStrength,
+      performanceProfile,
+    );
     if (openCvResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
         mode,
         clearPrintStrength,
+        performanceProfile,
         engine: 'opencv',
         outputFormat: openCvResult.outputFormat,
         sourceUriPreview: toShortUri(sourceUri),
@@ -611,6 +662,8 @@ export async function enhanceImageForPdfPrint(
             : null
         ),
         providerDurationMs: openCvResult.durationMs,
+        maxLongEdgePx: activeMaxLongEdgePx,
+        jpegQuality: activeJpegQuality,
         durationMs,
       });
       return {
@@ -638,12 +691,14 @@ export async function enhanceImageForPdfPrint(
       sourceUri,
       mode,
       clearPrintStrength,
+      performanceProfile,
     );
     if (bitmapFallbackResult.success) {
       const durationMs = Date.now() - startedAt;
       Logger.info(SERVICE_SCOPE, 'print_image_enhance_success', {
         mode,
         clearPrintStrength,
+        performanceProfile,
         engine: 'bitmap_fallback',
         outputFormat: bitmapFallbackResult.outputFormat,
         sourceUriPreview: toShortUri(sourceUri),
@@ -660,6 +715,8 @@ export async function enhanceImageForPdfPrint(
             : null
         ),
         providerDurationMs: bitmapFallbackResult.durationMs,
+        maxLongEdgePx: activeMaxLongEdgePx,
+        jpegQuality: activeJpegQuality,
         durationMs,
       });
       return {
@@ -687,11 +744,14 @@ export async function enhanceImageForPdfPrint(
     Logger.warn(SERVICE_SCOPE, 'print_image_enhance_failed_fallback_original', {
       mode,
       clearPrintStrength,
+      performanceProfile,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
       originalFileSize,
       providerAttempts,
+      maxLongEdgePx: activeMaxLongEdgePx,
+      jpegQuality: activeJpegQuality,
       durationMs,
     });
 
@@ -708,11 +768,14 @@ export async function enhanceImageForPdfPrint(
     Logger.warn(SERVICE_SCOPE, 'print_image_enhance_failed_fallback_original', {
       mode,
       clearPrintStrength,
+      performanceProfile,
       sourceUriPreview: toShortUri(sourceUri),
       originalWidth: originalSize?.width ?? null,
       originalHeight: originalSize?.height ?? null,
       originalFileSize,
       providerAttempts,
+      maxLongEdgePx: activeMaxLongEdgePx,
+      jpegQuality: activeJpegQuality,
       durationMs,
       error,
     });

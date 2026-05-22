@@ -33,9 +33,12 @@ import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExpor
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
+  DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
   DEFAULT_CLEAR_PRINT_STRENGTH,
   toActivePrintEnhanceConcurrency,
+  toActivePrintEnhancePerformanceProfile,
   type PrintEnhanceConcurrency,
+  type PrintEnhancePerformanceProfile,
   type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
@@ -86,6 +89,13 @@ type EnhanceConcurrencyOption = {
   recommended?: boolean;
 };
 
+type EnhancePerformanceOption = {
+  value: PrintEnhancePerformanceProfile;
+  title: string;
+  description: string;
+  recommended?: boolean;
+};
+
 const DEFAULT_DATA_OVERVIEW_STATS: SettingsStats = {
   totalMistakes: 0,
   dueToday: 0,
@@ -109,6 +119,8 @@ const DEFAULT_REMINDER_SETTINGS: ReviewReminderSettings = {
 const DEFAULT_EXPORT_IMAGE_MODE: PrintEnhanceMode = 'clear_print';
 const DEFAULT_EXPORT_CLEAR_PRINT_STRENGTH: PrintEnhanceClearPrintStrength = DEFAULT_CLEAR_PRINT_STRENGTH;
 const DEFAULT_EXPORT_ENHANCE_CONCURRENCY: PrintEnhanceConcurrency = DEFAULT_PRINT_ENHANCE_CONCURRENCY;
+const DEFAULT_EXPORT_ENHANCE_PERFORMANCE_PROFILE: PrintEnhancePerformanceProfile =
+  DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE;
 
 const EXPORT_IMAGE_MODE_OPTIONS: ExportImageModeOption[] = [
   {
@@ -180,6 +192,20 @@ const ENHANCE_CONCURRENCY_OPTIONS: EnhanceConcurrencyOption[] = [
     value: 3,
     title: '3（更快）',
     description: '速度更快，但更占内存与性能。',
+  },
+];
+
+const ENHANCE_PERFORMANCE_OPTIONS: EnhancePerformanceOption[] = [
+  {
+    value: 'balanced',
+    title: '平衡',
+    description: '优先保持清晰度，耗时相对更高。',
+  },
+  {
+    value: 'speed_first',
+    title: '速度优先',
+    description: '降低增强参数，通常能明显缩短导出时间。',
+    recommended: true,
   },
 ];
 
@@ -417,6 +443,8 @@ export default function SettingsScreen() {
     useState<PrintEnhanceClearPrintStrength>(DEFAULT_EXPORT_CLEAR_PRINT_STRENGTH);
   const [exportEnhanceConcurrency, setExportEnhanceConcurrency] =
     useState<PrintEnhanceConcurrency>(DEFAULT_EXPORT_ENHANCE_CONCURRENCY);
+  const [exportEnhancePerformanceProfile, setExportEnhancePerformanceProfile] =
+    useState<PrintEnhancePerformanceProfile>(DEFAULT_EXPORT_ENHANCE_PERFORMANCE_PROFILE);
   const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
   const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -515,6 +543,7 @@ export default function SettingsScreen() {
     printEnhanceMode: exportImageMode,
     printEnhanceClearPrintStrength: exportClearPrintStrength,
     printEnhanceConcurrency: exportEnhanceConcurrency,
+    printEnhancePerformanceProfile: exportEnhancePerformanceProfile,
     showToast,
     onSuccess: (pdfUri: string) => {
       Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
@@ -591,16 +620,19 @@ export default function SettingsScreen() {
       setExportImageMode(settings.mode);
       setExportClearPrintStrength(settings.clearPrintStrength);
       setExportEnhanceConcurrency(settings.enhanceConcurrency);
+      setExportEnhancePerformanceProfile(settings.performanceProfile);
       Logger.info(PAGE_SCOPE, 'Loaded export image mode successfully.', {
         mode: settings.mode,
         clearPrintStrength: settings.clearPrintStrength,
         enhanceConcurrency: settings.enhanceConcurrency,
+        performanceProfile: settings.performanceProfile,
       });
     } catch (error) {
       Logger.warn(PAGE_SCOPE, 'Failed to load export image mode, fallback to default.', { error });
       setExportImageMode(DEFAULT_EXPORT_IMAGE_MODE);
       setExportClearPrintStrength(DEFAULT_EXPORT_CLEAR_PRINT_STRENGTH);
       setExportEnhanceConcurrency(DEFAULT_EXPORT_ENHANCE_CONCURRENCY);
+      setExportEnhancePerformanceProfile(DEFAULT_EXPORT_ENHANCE_PERFORMANCE_PROFILE);
     } finally {
       setIsExportImageModeLoading(false);
     }
@@ -1112,20 +1144,24 @@ export default function SettingsScreen() {
         previousMode: exportImageMode,
         clearPrintStrength: exportClearPrintStrength,
         enhanceConcurrency: exportEnhanceConcurrency,
+        performanceProfile: exportEnhancePerformanceProfile,
       });
       try {
         const savedSettings = await ExportImageModeService.saveExportImageSettings(
           nextMode,
           exportClearPrintStrength,
           exportEnhanceConcurrency,
+          exportEnhancePerformanceProfile,
         );
         setExportImageMode(savedSettings.mode);
         setExportClearPrintStrength(savedSettings.clearPrintStrength);
         setExportEnhanceConcurrency(savedSettings.enhanceConcurrency);
+        setExportEnhancePerformanceProfile(savedSettings.performanceProfile);
         Logger.info(PAGE_SCOPE, 'Saved export image mode successfully.', {
           savedMode: savedSettings.mode,
           clearPrintStrength: savedSettings.clearPrintStrength,
           enhanceConcurrency: savedSettings.enhanceConcurrency,
+          performanceProfile: savedSettings.performanceProfile,
         });
         showToast('导出图片模式已更新', 'success');
       } catch (error) {
@@ -1134,6 +1170,7 @@ export default function SettingsScreen() {
           previousMode: exportImageMode,
           clearPrintStrength: exportClearPrintStrength,
           enhanceConcurrency: exportEnhanceConcurrency,
+          performanceProfile: exportEnhancePerformanceProfile,
           error,
         });
         showToast('导出图片模式保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
@@ -1144,6 +1181,7 @@ export default function SettingsScreen() {
     [
       exportClearPrintStrength,
       exportEnhanceConcurrency,
+      exportEnhancePerformanceProfile,
       exportImageMode,
       isExportImageModeLoading,
       isExportImageModeSaving,
@@ -1168,20 +1206,24 @@ export default function SettingsScreen() {
         previousClearPrintStrength: exportClearPrintStrength,
         nextClearPrintStrength: nextStrength,
         enhanceConcurrency: exportEnhanceConcurrency,
+        performanceProfile: exportEnhancePerformanceProfile,
       });
       try {
         const savedSettings = await ExportImageModeService.saveExportImageSettings(
           exportImageMode,
           nextStrength,
           exportEnhanceConcurrency,
+          exportEnhancePerformanceProfile,
         );
         setExportImageMode(savedSettings.mode);
         setExportClearPrintStrength(savedSettings.clearPrintStrength);
         setExportEnhanceConcurrency(savedSettings.enhanceConcurrency);
+        setExportEnhancePerformanceProfile(savedSettings.performanceProfile);
         Logger.info(PAGE_SCOPE, 'Saved clear_print strength successfully.', {
           mode: savedSettings.mode,
           clearPrintStrength: savedSettings.clearPrintStrength,
           enhanceConcurrency: savedSettings.enhanceConcurrency,
+          performanceProfile: savedSettings.performanceProfile,
         });
         showToast('清晰打印强度已更新', 'success');
       } catch (error) {
@@ -1190,6 +1232,7 @@ export default function SettingsScreen() {
           previousClearPrintStrength: exportClearPrintStrength,
           nextClearPrintStrength: nextStrength,
           enhanceConcurrency: exportEnhanceConcurrency,
+          performanceProfile: exportEnhancePerformanceProfile,
           error,
         });
         showToast('清晰打印强度保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
@@ -1200,6 +1243,7 @@ export default function SettingsScreen() {
     [
       exportClearPrintStrength,
       exportEnhanceConcurrency,
+      exportEnhancePerformanceProfile,
       exportImageMode,
       isExportImageModeLoading,
       isExportImageModeSaving,
@@ -1223,6 +1267,7 @@ export default function SettingsScreen() {
       Logger.info(PAGE_SCOPE, 'Start saving print enhance concurrency.', {
         mode: exportImageMode,
         clearPrintStrength: exportClearPrintStrength,
+        performanceProfile: exportEnhancePerformanceProfile,
         previousEnhanceConcurrency: exportEnhanceConcurrency,
         nextEnhanceConcurrency: normalizedNext,
       });
@@ -1232,20 +1277,24 @@ export default function SettingsScreen() {
           exportImageMode,
           exportClearPrintStrength,
           normalizedNext,
+          exportEnhancePerformanceProfile,
         );
         setExportImageMode(savedSettings.mode);
         setExportClearPrintStrength(savedSettings.clearPrintStrength);
         setExportEnhanceConcurrency(savedSettings.enhanceConcurrency);
+        setExportEnhancePerformanceProfile(savedSettings.performanceProfile);
         Logger.info(PAGE_SCOPE, 'Saved print enhance concurrency successfully.', {
           mode: savedSettings.mode,
           clearPrintStrength: savedSettings.clearPrintStrength,
           enhanceConcurrency: savedSettings.enhanceConcurrency,
+          performanceProfile: savedSettings.performanceProfile,
         });
         showToast('导出并发数量已更新', 'success');
       } catch (error) {
         Logger.error(PAGE_SCOPE, 'Failed to save print enhance concurrency.', {
           mode: exportImageMode,
           clearPrintStrength: exportClearPrintStrength,
+          performanceProfile: exportEnhancePerformanceProfile,
           previousEnhanceConcurrency: exportEnhanceConcurrency,
           nextEnhanceConcurrency: normalizedNext,
           error,
@@ -1258,6 +1307,71 @@ export default function SettingsScreen() {
     [
       exportClearPrintStrength,
       exportEnhanceConcurrency,
+      exportEnhancePerformanceProfile,
+      exportImageMode,
+      isExportImageModeLoading,
+      isExportImageModeSaving,
+      isExportingWorksheet,
+      showToast,
+    ],
+  );
+
+  const handleSelectEnhancePerformanceProfile = useCallback(
+    async (nextProfile: PrintEnhancePerformanceProfile) => {
+      if (isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving) {
+        return;
+      }
+
+      const normalizedNext = toActivePrintEnhancePerformanceProfile(nextProfile);
+      if (normalizedNext === exportEnhancePerformanceProfile) {
+        return;
+      }
+
+      setIsExportImageModeSaving(true);
+      Logger.info(PAGE_SCOPE, 'Start saving print enhance performance profile.', {
+        mode: exportImageMode,
+        clearPrintStrength: exportClearPrintStrength,
+        enhanceConcurrency: exportEnhanceConcurrency,
+        previousPerformanceProfile: exportEnhancePerformanceProfile,
+        nextPerformanceProfile: normalizedNext,
+      });
+
+      try {
+        const savedSettings = await ExportImageModeService.saveExportImageSettings(
+          exportImageMode,
+          exportClearPrintStrength,
+          exportEnhanceConcurrency,
+          normalizedNext,
+        );
+        setExportImageMode(savedSettings.mode);
+        setExportClearPrintStrength(savedSettings.clearPrintStrength);
+        setExportEnhanceConcurrency(savedSettings.enhanceConcurrency);
+        setExportEnhancePerformanceProfile(savedSettings.performanceProfile);
+        Logger.info(PAGE_SCOPE, 'Saved print enhance performance profile successfully.', {
+          mode: savedSettings.mode,
+          clearPrintStrength: savedSettings.clearPrintStrength,
+          enhanceConcurrency: savedSettings.enhanceConcurrency,
+          performanceProfile: savedSettings.performanceProfile,
+        });
+        showToast('增强策略已更新', 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to save print enhance performance profile.', {
+          mode: exportImageMode,
+          clearPrintStrength: exportClearPrintStrength,
+          enhanceConcurrency: exportEnhanceConcurrency,
+          previousPerformanceProfile: exportEnhancePerformanceProfile,
+          nextPerformanceProfile: normalizedNext,
+          error,
+        });
+        showToast('增强策略保存失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
+      } finally {
+        setIsExportImageModeSaving(false);
+      }
+    },
+    [
+      exportClearPrintStrength,
+      exportEnhanceConcurrency,
+      exportEnhancePerformanceProfile,
       exportImageMode,
       isExportImageModeLoading,
       isExportImageModeSaving,
@@ -1630,6 +1744,12 @@ export default function SettingsScreen() {
       ?? ENHANCE_CONCURRENCY_OPTIONS[0],
     [exportEnhanceConcurrency],
   );
+  const selectedEnhancePerformanceOption = useMemo(
+    () =>
+      ENHANCE_PERFORMANCE_OPTIONS.find((item) => item.value === exportEnhancePerformanceProfile)
+      ?? ENHANCE_PERFORMANCE_OPTIONS[0],
+    [exportEnhancePerformanceProfile],
+  );
   const exportImageModeStatusText = isExportImageModeLoading
     ? '正在读取导出图片模式...'
     : isExportImageModeSaving
@@ -1639,8 +1759,9 @@ export default function SettingsScreen() {
   const exportImageModeStatusWithStrengthText = exportImageMode === 'clear_print'
     ? `${exportImageModeStatusText} | 强度: ${selectedClearPrintStrengthOption.title}`
     : exportImageModeStatusText;
-  const exportImageModeStatusWithConcurrencyText =
-    `${exportImageModeStatusWithStrengthText} | 并发: ${selectedEnhanceConcurrencyOption.title}`;
+  const exportImageModeStatusWithEnhanceSettingsText = exportImageMode === 'clear_print'
+    ? `${exportImageModeStatusWithStrengthText} | 策略: ${selectedEnhancePerformanceOption.title} | 并发: ${selectedEnhanceConcurrencyOption.title}`
+    : exportImageModeStatusText;
 
   const handleShowStorageDetails = useCallback(() => {
     Alert.alert(
@@ -2050,6 +2171,54 @@ export default function SettingsScreen() {
                   </View>
                 ) : null}
                 <View style={styles.enhanceConcurrencySection}>
+                  <Text style={styles.metaText}>增强策略（仅影响清晰打印）</Text>
+                  <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
+                    {ENHANCE_PERFORMANCE_OPTIONS.map((option) => {
+                      const isSelected = option.value === exportEnhancePerformanceProfile;
+                      const isDisabled = isExportImageModeBusy || exportImageMode !== 'clear_print';
+                      return (
+                        <Pressable
+                          key={option.value}
+                          accessibilityRole="button"
+                          disabled={isDisabled}
+                          onPress={() => {
+                            void handleSelectEnhancePerformanceProfile(option.value);
+                          }}
+                          style={[
+                            styles.enhanceConcurrencyStop,
+                            isSelected ? styles.enhanceConcurrencyStopSelected : null,
+                            isDisabled ? styles.disabledButton : null,
+                          ]}>
+                          <View style={styles.enhanceConcurrencyStopInner}>
+                            <Text
+                              style={[
+                                styles.enhanceConcurrencyStopText,
+                                isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
+                              ]}>
+                              {option.title}
+                            </Text>
+                            {option.recommended ? (
+                              <Text
+                                style={[
+                                  styles.enhanceConcurrencyStopHint,
+                                  isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
+                                ]}>
+                                推荐
+                              </Text>
+                            ) : null}
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.enhanceConcurrencyDescription}>
+                    {selectedEnhancePerformanceOption.description}
+                  </Text>
+                  <Text style={styles.enhanceConcurrencyHint}>
+                    “速度优先”会降低增强参数，通常可显著缩短 clear_print 导出耗时。
+                  </Text>
+                </View>
+                <View style={styles.enhanceConcurrencySection}>
                   <Text style={styles.metaText}>并发数量（仅影响清晰打印）</Text>
                   <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
                     {ENHANCE_CONCURRENCY_OPTIONS.map((option) => {
@@ -2095,7 +2264,7 @@ export default function SettingsScreen() {
                     并发越高通常越快，但会增加内存与发热；导出异常时建议先切回 1。
                   </Text>
                 </View>
-                <Text style={styles.metaText}>{exportImageModeStatusWithConcurrencyText}</Text>
+                <Text style={styles.metaText}>{exportImageModeStatusWithEnhanceSettingsText}</Text>
               </View>
               <Pressable
                 disabled={isExportingWorksheet || !canExportTodayWorksheet}

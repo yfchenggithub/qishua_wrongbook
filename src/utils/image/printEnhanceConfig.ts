@@ -1,6 +1,7 @@
 export type PrintEnhanceMode = 'original' | 'clear_print' | 'bw_scan';
 export type PrintEnhanceClearPrintStrength = 'weak' | 'medium' | 'strong';
 export type PrintEnhanceConcurrency = number;
+export type PrintEnhancePerformanceProfile = 'balanced' | 'speed_first';
 
 export type ActivePrintEnhanceMode = PrintEnhanceMode;
 
@@ -31,6 +32,7 @@ export const CLEAR_PRINT_ENHANCE_CONFIG: ClearPrintEnhanceConfig = {
 
 export const DEFAULT_PRINT_ENHANCE_MODE: ActivePrintEnhanceMode = 'clear_print';
 export const DEFAULT_CLEAR_PRINT_STRENGTH: PrintEnhanceClearPrintStrength = 'medium';
+export const DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE: PrintEnhancePerformanceProfile = 'balanced';
 
 export function toActivePrintEnhanceMode(mode?: PrintEnhanceMode | null): ActivePrintEnhanceMode {
   // Keep backward compatibility for persisted values, but only two modes are active in product.
@@ -63,6 +65,15 @@ export function toActivePrintEnhanceConcurrency(
     return PRINT_ENHANCE_MAX_CONCURRENCY;
   }
   return normalized;
+}
+
+export function toActivePrintEnhancePerformanceProfile(
+  profile?: PrintEnhancePerformanceProfile | null,
+): PrintEnhancePerformanceProfile {
+  if (profile === 'balanced' || profile === 'speed_first') {
+    return profile;
+  }
+  return DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE;
 }
 
 export function getPrintEnhanceCssFilter(mode: ActivePrintEnhanceMode): string | null {

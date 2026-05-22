@@ -4,13 +4,16 @@ import { Logger } from '@/src/services/Logger';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   DEFAULT_CLEAR_PRINT_STRENGTH,
+  DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
   DEFAULT_PRINT_ENHANCE_MODE,
   toActivePrintEnhanceConcurrency,
+  toActivePrintEnhancePerformanceProfile,
   toActiveClearPrintStrength,
   toActivePrintEnhanceMode,
   type PrintEnhanceConcurrency,
   type PrintEnhanceClearPrintStrength,
   type PrintEnhanceMode,
+  type PrintEnhancePerformanceProfile,
 } from '@/src/utils/image/printEnhanceConfig';
 
 const SERVICE_SCOPE = 'ExportImageModeService';
@@ -22,6 +25,7 @@ export type ExportImageSettings = {
   mode: PrintEnhanceMode;
   clearPrintStrength: PrintEnhanceClearPrintStrength;
   enhanceConcurrency: PrintEnhanceConcurrency;
+  performanceProfile: PrintEnhancePerformanceProfile;
   updatedAt: string;
 };
 
@@ -38,6 +42,7 @@ function normalizePersistedSettings(input: unknown): ExportImageSettings {
   const mode = toActivePrintEnhanceMode(raw?.mode);
   const clearPrintStrength = toActiveClearPrintStrength(raw?.clearPrintStrength);
   const enhanceConcurrency = toActivePrintEnhanceConcurrency(raw?.enhanceConcurrency);
+  const performanceProfile = toActivePrintEnhancePerformanceProfile(raw?.performanceProfile);
   const updatedAt =
     typeof raw?.updatedAt === 'string' && raw.updatedAt.trim().length > 0
       ? raw.updatedAt.trim()
@@ -47,6 +52,7 @@ function normalizePersistedSettings(input: unknown): ExportImageSettings {
     mode,
     clearPrintStrength,
     enhanceConcurrency,
+    performanceProfile,
     updatedAt,
   };
 }
@@ -55,11 +61,13 @@ async function writePersistedSettings(
   mode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
   enhanceConcurrency: PrintEnhanceConcurrency,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): Promise<ExportImageSettings> {
   const next: ExportImageSettings = {
     mode: toActivePrintEnhanceMode(mode),
     clearPrintStrength: toActiveClearPrintStrength(clearPrintStrength),
     enhanceConcurrency: toActivePrintEnhanceConcurrency(enhanceConcurrency),
+    performanceProfile: toActivePrintEnhancePerformanceProfile(performanceProfile),
     updatedAt: new Date().toISOString(),
   };
 
@@ -79,6 +87,7 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
         mode: DEFAULT_PRINT_ENHANCE_MODE,
         clearPrintStrength: DEFAULT_CLEAR_PRINT_STRENGTH,
         enhanceConcurrency: DEFAULT_PRINT_ENHANCE_CONCURRENCY,
+        performanceProfile: DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
         updatedAt: new Date(0).toISOString(),
       };
     }
@@ -94,6 +103,7 @@ export async function loadExportImageSettings(): Promise<ExportImageSettings> {
       mode: DEFAULT_PRINT_ENHANCE_MODE,
       clearPrintStrength: DEFAULT_CLEAR_PRINT_STRENGTH,
       enhanceConcurrency: DEFAULT_PRINT_ENHANCE_CONCURRENCY,
+      performanceProfile: DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
       updatedAt: new Date(0).toISOString(),
     };
   }
@@ -103,14 +113,21 @@ export async function saveExportImageSettings(
   mode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
   enhanceConcurrency: PrintEnhanceConcurrency,
+  performanceProfile: PrintEnhancePerformanceProfile,
 ): Promise<ExportImageSettings> {
   try {
-    return await writePersistedSettings(mode, clearPrintStrength, enhanceConcurrency);
+    return await writePersistedSettings(
+      mode,
+      clearPrintStrength,
+      enhanceConcurrency,
+      performanceProfile,
+    );
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to save export image mode.', {
       mode,
       clearPrintStrength,
       enhanceConcurrency,
+      performanceProfile,
       error,
     });
     throw error;
@@ -128,6 +145,7 @@ export async function saveExportImageMode(mode: PrintEnhanceMode): Promise<Print
     mode,
     current.clearPrintStrength,
     current.enhanceConcurrency,
+    current.performanceProfile,
   );
   return persisted.mode;
 }
@@ -145,6 +163,7 @@ export async function saveExportImageClearPrintStrength(
     current.mode,
     strength,
     current.enhanceConcurrency,
+    current.performanceProfile,
   );
   return persisted.clearPrintStrength;
 }
@@ -162,6 +181,25 @@ export async function saveExportImageEnhanceConcurrency(
     current.mode,
     current.clearPrintStrength,
     concurrency,
+    current.performanceProfile,
   );
   return persisted.enhanceConcurrency;
+}
+
+export async function loadExportImagePerformanceProfile(): Promise<PrintEnhancePerformanceProfile> {
+  const settings = await loadExportImageSettings();
+  return settings.performanceProfile;
+}
+
+export async function saveExportImagePerformanceProfile(
+  performanceProfile: PrintEnhancePerformanceProfile,
+): Promise<PrintEnhancePerformanceProfile> {
+  const current = await loadExportImageSettings();
+  const persisted = await saveExportImageSettings(
+    current.mode,
+    current.clearPrintStrength,
+    current.enhanceConcurrency,
+    performanceProfile,
+  );
+  return persisted.performanceProfile;
 }
