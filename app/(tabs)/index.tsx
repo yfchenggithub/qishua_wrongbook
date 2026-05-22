@@ -15,11 +15,13 @@ import {
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
 import { todayMock } from '@/src/mocks/today';
+import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { Logger } from '@/src/services/Logger';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
+import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
 
 const PAGE_SCOPE = 'TodayScreen';
 const UPCOMING_DAYS = 3;
@@ -65,6 +67,16 @@ function getToastBackgroundColor(type: ToastType): string {
     return 'rgba(88, 28, 28, 0.95)';
   }
   return 'rgba(38, 44, 53, 0.95)';
+}
+
+function buildExportModeHintText(mode: PrintEnhanceMode | null): string {
+  if (mode === null) {
+    return '当前导出模式：读取中...';
+  }
+  if (mode === 'clear_print') {
+    return '当前导出模式：清晰打印（较慢）';
+  }
+  return '当前导出模式：快速导出（更快）';
 }
 
 function buildHomePrimaryMessage(summary: HomeTaskSummary): string {
@@ -248,6 +260,7 @@ export default function TodayScreen() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [exportMode, setExportMode] = useState<PrintEnhanceMode | null>(null);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
@@ -300,6 +313,16 @@ export default function TodayScreen() {
     }
   }, []);
 
+  const loadExportMode = useCallback(async () => {
+    try {
+      const settings = await ExportImageModeService.loadExportImageSettings();
+      setExportMode(settings.mode);
+    } catch (error) {
+      Logger.warn(PAGE_SCOPE, 'Failed to load export image mode on home screen.', { error });
+      setExportMode(null);
+    }
+  }, []);
+
   const handleRetry = useCallback(() => {
     void loadHomeData('refresh');
   }, [loadHomeData]);
@@ -309,8 +332,9 @@ export default function TodayScreen() {
       const mode: 'initial' | 'refresh' = hasFocusedRef.current ? 'refresh' : 'initial';
       hasFocusedRef.current = true;
       void loadHomeData(mode);
+      void loadExportMode();
       return undefined;
-    }, [loadHomeData]),
+    }, [loadExportMode, loadHomeData]),
   );
 
   const hideToast = useCallback(() => {
@@ -625,6 +649,7 @@ export default function TodayScreen() {
     isExportingPdf && exportPdfProgress.total > 0
       ? `已处理 ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · 用时 ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
       : '';
+  const exportModeHintText = buildExportModeHintText(exportMode);
   const canShowExportButton =
     summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
@@ -698,6 +723,7 @@ export default function TodayScreen() {
                 {exportProgressDetailText ? (
                   <Text style={styles.exportProgressMetaText}>{exportProgressDetailText}</Text>
                 ) : null}
+                <Text style={styles.exportModeHintText}>{exportModeHintText}</Text>
                 {isExportingPdf && exportPdfProgress.total > 0 ? (
                   <View style={styles.exportProgressTrack}>
                     <View
@@ -740,6 +766,7 @@ export default function TodayScreen() {
                     {exportProgressDetailText ? (
                       <Text style={styles.exportProgressMetaText}>{exportProgressDetailText}</Text>
                     ) : null}
+                    <Text style={styles.exportModeHintText}>{exportModeHintText}</Text>
                     {isExportingPdf && exportPdfProgress.total > 0 ? (
                       <View style={styles.exportProgressTrack}>
                         <View
@@ -974,6 +1001,10 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     fontWeight: '600',
+  },
+  exportModeHintText: {
+    ...typography.caption,
+    color: colors.textMuted,
   },
   exportProgressTrack: {
     height: 5,

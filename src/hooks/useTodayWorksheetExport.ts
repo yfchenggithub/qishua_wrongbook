@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import type { TodayWorksheetExportStage } from '@/src/services/TodayWorksheetExportService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { Logger } from '@/src/services/Logger';
@@ -47,6 +48,12 @@ export type UseTodayWorksheetExportResult = {
   exportTodayWorksheet: () => Promise<void>;
 };
 
+type ResolvedPrintEnhanceSettings = {
+  mode: PrintEnhanceMode;
+  clearPrintStrength: PrintEnhanceClearPrintStrength;
+  source: 'explicit' | 'saved' | 'mixed';
+};
+
 const EMPTY_MESSAGE = '今天暂无需要复做的错题';
 const GENERATING_MESSAGE = '正在生成练习卷 PDF...';
 const GENERIC_FAILED_MESSAGE = '导出失败，请稍后重试';
@@ -64,6 +71,38 @@ function toSafeCount(value: number | null | undefined): number {
     return 0;
   }
   return Math.max(0, Math.floor(value));
+}
+
+async function resolvePrintEnhanceSettings(
+  mode: PrintEnhanceMode | undefined,
+  clearPrintStrength: PrintEnhanceClearPrintStrength | undefined,
+): Promise<ResolvedPrintEnhanceSettings> {
+  const hasMode = typeof mode === 'string' && mode.trim().length > 0;
+  const hasStrength = typeof clearPrintStrength === 'string' && clearPrintStrength.trim().length > 0;
+  if (hasMode && hasStrength) {
+    return {
+      mode: mode as PrintEnhanceMode,
+      clearPrintStrength: clearPrintStrength as PrintEnhanceClearPrintStrength,
+      source: 'explicit',
+    };
+  }
+
+  const savedSettings = await ExportImageModeService.loadExportImageSettings();
+  if (!hasMode && !hasStrength) {
+    return {
+      mode: savedSettings.mode,
+      clearPrintStrength: savedSettings.clearPrintStrength,
+      source: 'saved',
+    };
+  }
+
+  return {
+    mode: hasMode ? (mode as PrintEnhanceMode) : savedSettings.mode,
+    clearPrintStrength: hasStrength
+      ? (clearPrintStrength as PrintEnhanceClearPrintStrength)
+      : savedSettings.clearPrintStrength,
+    source: 'mixed',
+  };
 }
 
 function toProgressPhase(stage: TodayWorksheetExportStage | null): ExportPdfProgressPhase {
@@ -169,8 +208,15 @@ export function useTodayWorksheetExport(
     }
 
     const startedAt = Date.now();
+    const resolvedEnhanceSettings = await resolvePrintEnhanceSettings(
+      printEnhanceMode,
+      printEnhanceClearPrintStrength,
+    );
     Logger.info(scope, 'export_pdf_start', {
       total: safeDueToday,
+      printEnhanceMode: resolvedEnhanceSettings.mode,
+      printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
+      printEnhanceSettingsSource: resolvedEnhanceSettings.source,
     });
 
     if (isMountedRef.current) {
@@ -200,8 +246,8 @@ export function useTodayWorksheetExport(
     try {
       const result = await TodayWorksheetExportService.exportTodayWorksheet({
         expectedPendingCount: safeDueToday,
-        printEnhanceMode,
-        printEnhanceClearPrintStrength,
+        printEnhanceMode: resolvedEnhanceSettings.mode,
+        printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
         onProgress: (next) => {
           const elapsedMs = Math.max(0, Date.now() - startedAt);
           const total = toSafeCount(next.total ?? next.pendingCount ?? safeDueToday);
