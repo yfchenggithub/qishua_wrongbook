@@ -1077,7 +1077,7 @@ export default function ReviewSessionPage() {
         </Pressable>
 
         <BrandHeader
-          title="七刷错题本"
+          title="今日复做"
           subtitle=""
           style={styles.brandHeader}
           titleStyle={styles.brandHeaderTitle}
