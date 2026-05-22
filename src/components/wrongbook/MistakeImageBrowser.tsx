@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Image,
   Modal,
@@ -14,6 +14,7 @@ import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 
 import { colors, spacing, typography } from '@/src/styles/tokens';
@@ -48,6 +49,8 @@ const EDGE_RESISTANCE = 0.22;
 const PAGE_EDGE_RESISTANCE = 0.32;
 const SWIPE_SWITCH_DISTANCE = 64;
 const SWIPE_SWITCH_VELOCITY = 760;
+const SWITCH_EXIT_DURATION_MS = 140;
+const SWITCH_ENTER_DURATION_MS = 170;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -207,9 +210,9 @@ function SwipeZoomImageStage({
   }, [
     contentHeight,
     contentWidth,
+    pageTranslateY,
     panStartX,
     panStartY,
-    pageTranslateY,
     pinchStartScale,
     pinchStartX,
     pinchStartY,
@@ -532,23 +535,114 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
   }, [items]);
 
   const [activeIndex, setActiveIndex] = useState(0);
+  const switchingRef = useRef(false);
+  const stageHeightRef = useRef(0);
+  const stageTranslateY = useSharedValue(0);
+  const stageOpacity = useSharedValue(1);
+
+  const stageAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: stageOpacity.value,
+    transform: [{ translateY: stageTranslateY.value }],
+  }));
+
+  const resolveStageTravelDistance = useCallback(() => {
+    const measuredHeight = stageHeightRef.current;
+    if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
+      return 220;
+    }
+    return Math.max(160, measuredHeight * 0.42);
+  }, []);
+
+  const resolveStageEnterDistance = useCallback(() => {
+    const measuredHeight = stageHeightRef.current;
+    if (!Number.isFinite(measuredHeight) || measuredHeight <= 0) {
+      return 86;
+    }
+    return Math.max(72, measuredHeight * 0.22);
+  }, []);
+
+  const clearSwitchingFlag = useCallback(() => {
+    switchingRef.current = false;
+  }, []);
+
+  const animateSwitchToIndex = useCallback(
+    (targetIndex: number, direction: 'prev' | 'next') => {
+      if (switchingRef.current) {
+        return;
+      }
+      if (targetIndex < 0 || targetIndex >= normalizedItems.length || targetIndex === activeIndex) {
+        return;
+      }
+
+      switchingRef.current = true;
+      const exitSign = direction === 'next' ? -1 : 1;
+      const enterSign = -exitSign;
+      const exitDistance = resolveStageTravelDistance();
+      const enterDistance = resolveStageEnterDistance();
+
+      stageTranslateY.value = withTiming(
+        exitSign * exitDistance,
+        { duration: SWITCH_EXIT_DURATION_MS },
+        (finished) => {
+          if (!finished) {
+            runOnJS(clearSwitchingFlag)();
+            return;
+          }
+
+          runOnJS(setActiveIndex)(targetIndex);
+          stageTranslateY.value = enterSign * enterDistance;
+          stageOpacity.value = 0.92;
+          stageTranslateY.value = withSpring(0, SPRING_CONFIG, (enterFinished) => {
+            if (!enterFinished) {
+              runOnJS(clearSwitchingFlag)();
+              return;
+            }
+            runOnJS(clearSwitchingFlag)();
+          });
+          stageOpacity.value = withTiming(1, { duration: SWITCH_ENTER_DURATION_MS });
+        },
+      );
+    },
+    [
+      activeIndex,
+      clearSwitchingFlag,
+      normalizedItems.length,
+      resolveStageEnterDistance,
+      resolveStageTravelDistance,
+      stageOpacity,
+      stageTranslateY,
+    ],
+  );
 
   useEffect(() => {
     if (!visible) {
       return;
     }
-    setActiveIndex(clampIndex(initialIndex, normalizedItems.length));
-  }, [initialIndex, normalizedItems.length, visible]);
+    const safeInitialIndex = clampIndex(initialIndex, normalizedItems.length);
+    setActiveIndex(safeInitialIndex);
+    switchingRef.current = false;
+    stageTranslateY.value = 0;
+    stageOpacity.value = 1;
+  }, [initialIndex, normalizedItems.length, stageOpacity, stageTranslateY, visible]);
+
+  useEffect(() => {
+    if (visible) {
+      return;
+    }
+    switchingRef.current = false;
+    stageTranslateY.value = 0;
+    stageOpacity.value = 1;
+  }, [stageOpacity, stageTranslateY, visible]);
 
   const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
 
   const handleSwitchPrev = useCallback(() => {
-    setActiveIndex((current) => clampIndex(current - 1, normalizedItems.length));
-  }, [normalizedItems.length]);
+    animateSwitchToIndex(activeIndex - 1, 'prev');
+  }, [activeIndex, animateSwitchToIndex]);
 
   const handleSwitchNext = useCallback(() => {
-    setActiveIndex((current) => clampIndex(current + 1, normalizedItems.length));
-  }, [normalizedItems.length]);
+    animateSwitchToIndex(activeIndex + 1, 'next');
+  }, [activeIndex, animateSwitchToIndex]);
 
   const canSwipePrev = activeIndex > 0;
   const canSwipeNext = activeIndex < normalizedItems.length - 1;
@@ -582,7 +676,15 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
             </Pressable>
           </View>
 
-          <View style={styles.body}>
+          <Animated.View
+            style={[styles.body, stageAnimatedStyle]}
+            onLayout={(event) => {
+              const nextHeight = event.nativeEvent.layout.height;
+              if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
+                return;
+              }
+              stageHeightRef.current = nextHeight;
+            }}>
             {activeItem ? (
               <SwipeZoomImageStage
                 key={activeItem.id}
@@ -598,7 +700,7 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
                 <Text style={styles.errorText}>暂无可预览图片。</Text>
               </View>
             )}
-          </View>
+          </Animated.View>
 
           {activeItem ? (
             <View pointerEvents="none" style={styles.progressWrap}>
