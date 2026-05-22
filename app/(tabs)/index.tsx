@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, LayoutAnimation, Platform, Pressable, StyleSheet, Text, UIManager, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -25,6 +25,7 @@ import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
 
 const PAGE_SCOPE = 'TodayScreen';
 const UPCOMING_DAYS = 3;
+const TODAY_QUEUE_PREVIEW_COUNT = 5;
 const TOAST_DURATION_DEFAULT = 2200;
 const TOAST_DURATION_LONG = 3200;
 
@@ -232,11 +233,27 @@ function TodayQueueListCard({
   items: MistakeListItem[];
   onOpenDetail: (id: string) => void;
 }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const canToggle = items.length > TODAY_QUEUE_PREVIEW_COUNT;
+  const visibleItems = isExpanded ? items : items.slice(0, TODAY_QUEUE_PREVIEW_COUNT);
+  const remainingCount = Math.max(0, items.length - visibleItems.length);
+  
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
+
+  const handleToggleExpanded = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setIsExpanded((prev) => !prev);
+  }, []);
+
   return (
     <CardContainer padding={spacing.md} style={styles.upcomingCard}>
       <Text style={styles.upcomingDayTitle}>今天 · {items.length} 道</Text>
       <View style={styles.upcomingItemList}>
-        {items.map((item) => (
+        {visibleItems.map((item) => (
           <Pressable key={item.id} onPress={() => onOpenDetail(item.id)}>
             <View style={styles.upcomingItemRow}>
               <Text numberOfLines={1} style={styles.upcomingItemTitle}>
@@ -249,6 +266,18 @@ function TodayQueueListCard({
           </Pressable>
         ))}
       </View>
+      {canToggle ? (
+        <View style={styles.todayQueueFooter}>
+          {remainingCount > 0 ? <Text style={styles.upcomingRemainText}>还有 {remainingCount} 道未展示</Text> : null}
+          <Pressable
+            onPress={handleToggleExpanded}
+            style={styles.todayQueueToggleButton}
+            accessibilityRole="button"
+            accessibilityLabel={isExpanded ? '收起今日复做队列' : '展开全部今日复做队列'}>
+            <Text style={styles.todayQueueToggleText}>{isExpanded ? '收起' : '展开全部'}</Text>
+          </Pressable>
+        </View>
+      ) : null}
     </CardContainer>
   );
 }
@@ -1130,6 +1159,22 @@ const styles = StyleSheet.create({
   upcomingRemainText: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  todayQueueFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  todayQueueToggleButton: {
+    marginLeft: 'auto',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  todayQueueToggleText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '700',
   },
   toastContainer: {
     position: 'absolute',
