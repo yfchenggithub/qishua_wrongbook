@@ -510,6 +510,7 @@ export default function AddScreen() {
   const [toastMessage, setToastMessage] = useState<string>('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
+  const [saveBarHeight, setSaveBarHeight] = useState(0);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -520,7 +521,11 @@ export default function AddScreen() {
   const missingModule = !hasValue(draft.module);
   const canSave = !isBusy && !missingQuestionImage && !missingModule;
   const queueCount = photoQueue.length;
-  const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
+  const saveBarBottomOffset = Math.max(insets.bottom + spacing.xs, spacing.xs);
+  const fallbackSaveBarHeight = 96;
+  const effectiveSaveBarHeight = saveBarHeight > 0 ? saveBarHeight : fallbackSaveBarHeight;
+  const contentBottomPadding = saveBarBottomOffset + effectiveSaveBarHeight + spacing.lg;
+  const toastBottomOffset = saveBarBottomOffset + effectiveSaveBarHeight + spacing.sm;
 
   const saveHintTextV2 = isSaving
     ? '正在保存...'
@@ -1216,7 +1221,10 @@ export default function AddScreen() {
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
+      <ScreenContainer
+        scroll
+        safeAreaEdges={['top']}
+        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}>
       <BrandHeader title="新增错题" subtitle="拍题目，选模块，保存到 7 刷计划" />
 
       <View style={styles.sectionBlock}>
@@ -1248,23 +1256,6 @@ export default function AddScreen() {
             />
           ))}
         </View>
-      </View>
-
-      <View style={styles.sectionBlock}>
-        <CardContainer style={styles.saveCard} padding={spacing.md}>
-          <Text
-            maxFontSizeMultiplier={1.1}
-            style={[styles.saveHint, canSave ? styles.saveHintReady : null]}>
-            {saveHintTextV2}
-          </Text>
-          <PrimaryButton
-            title={saveButtonTitle}
-            disabled={!canSave}
-            onPress={() => {
-              void handleSaveDraft();
-            }}
-          />
-        </CardContainer>
       </View>
 
       {validationErrors.length > 0 ? (
@@ -1403,6 +1394,30 @@ export default function AddScreen() {
       />
       </ScreenContainer>
 
+      <View pointerEvents="box-none" style={styles.bottomSaveBarOverlay}>
+        <View
+          onLayout={(event) => {
+            const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+            setSaveBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
+          }}
+          style={[styles.bottomSaveBarWrap, { bottom: saveBarBottomOffset }]}>
+          <CardContainer style={styles.saveCard} padding={spacing.md}>
+            <Text
+              maxFontSizeMultiplier={1.1}
+              style={[styles.saveHint, canSave ? styles.saveHintReady : null]}>
+              {saveHintTextV2}
+            </Text>
+            <PrimaryButton
+              title={saveButtonTitle}
+              disabled={!canSave}
+              onPress={() => {
+                void handleSaveDraft();
+              }}
+            />
+          </CardContainer>
+        </View>
+      </View>
+
       {toastVisible ? (
         <Animated.View
           pointerEvents="none"
@@ -1431,8 +1446,15 @@ const styles = StyleSheet.create({
   },
   screenContent: {
     paddingTop: spacing.lg,
-    paddingBottom: layout.bottomTabHeight + spacing.lg,
     gap: spacing.md,
+  },
+  bottomSaveBarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  bottomSaveBarWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
   },
   sectionBlock: {
     gap: spacing.sm,
