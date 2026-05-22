@@ -282,7 +282,7 @@ function QuestionImageCard({
         <View style={styles.sectionIconWrap}>
           <MaterialIcons name="image" size={20} color="#16A34A" />
         </View>
-        <Text style={styles.questionTitle}>{'\u9898\u76ee\u56fe\u7247'}</Text>
+        <Text style={styles.questionTitle}>题目图片</Text>
       </View>
       <View
         onLayout={handleQuestionImageLayout}
@@ -490,15 +490,15 @@ export default function ReviewSessionPage() {
   const confirmLeaveWhileRecording = useCallback(
     (onContinue: () => void) => {
       Alert.alert(
-        '\u6b63\u5728\u5f55\u97f3',
-        '\u6b63\u5728\u5f55\u97f3\uff0c\u79bb\u5f00\u540e\u5c06\u653e\u5f03\u672c\u6b21\u5f55\u97f3\uff0c\u662f\u5426\u7ee7\u7eed\uff1f',
+        '正在录音',
+        '正在录音，离开后将放弃本次录音，是否继续？',
         [
           {
-            text: '\u7ee7\u7eed\u5f55\u97f3',
+            text: '继续录音',
             style: 'cancel',
           },
           {
-            text: '\u7ee7\u7eed\u79bb\u5f00',
+            text: '继续离开',
             style: 'destructive',
             onPress: () => {
               void (async () => {
@@ -524,8 +524,7 @@ export default function ReviewSessionPage() {
 
       const permissionResult = await VoiceNoteService.requestPermission();
       if (!permissionResult.granted) {
-        const friendlyMessage =
-          '\u672a\u83b7\u5f97\u9ea6\u514b\u98ce\u6743\u9650\uff0c\u65e0\u6cd5\u5f00\u59cb\u5f55\u97f3\u3002';
+        const friendlyMessage = '未获得麦克风权限，无法开始录音。';
         Logger.warn(PAGE_SCOPE, 'start_recording', {
           granted: false,
           canAskAgain: permissionResult.canAskAgain,
@@ -609,11 +608,7 @@ export default function ReviewSessionPage() {
           minimumDurationMs: VOICE_RECORDING_MIN_DURATION_MS,
         });
         void VoiceNoteService.deleteVoiceNote(nextVoiceNote.fileUri);
-        showToast(
-          '\u5f55\u97f3\u65f6\u95f4\u592a\u77ed\uff0c\u8bf7\u81f3\u5c11\u8bb23\u79d2',
-          'info',
-          TOAST_DURATION_LONG,
-        );
+        showToast('录音时间太短，请至少录3秒', 'info', TOAST_DURATION_LONG);
         setIsVoiceBusy(false);
         voiceStopInProgressRef.current = false;
         return;
@@ -626,13 +621,9 @@ export default function ReviewSessionPage() {
       }
 
       if (trigger === 'auto_limit') {
-        showToast(
-          '\u5df2\u8fbe\u52303\u5206\u949f\u4e0a\u9650\uff0c\u5f55\u97f3\u5df2\u4fdd\u5b58',
-          'success',
-          TOAST_DURATION_LONG,
-        );
+        showToast('已达到3分钟上限，录音已保存', 'success', TOAST_DURATION_LONG);
       } else {
-        showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u4fdd\u5b58', 'success');
+        showToast('语音讲解已保存', 'success');
       }
       setIsVoiceBusy(false);
       voiceStopInProgressRef.current = false;
@@ -681,12 +672,12 @@ export default function ReviewSessionPage() {
     }
 
     Alert.alert(
-      '\u786e\u8ba4\u91cd\u5f55',
-      '\u91cd\u5f55\u5c06\u66ff\u6362\u5f53\u524d\u8bb2\u89e3\uff0c\u786e\u5b9a\u7ee7\u7eed\u5417\uff1f',
+      '确认重录',
+      '重录将替换当前讲解，确定继续吗？',
       [
-        { text: '\u53d6\u6d88', style: 'cancel' },
+        { text: '取消', style: 'cancel' },
         {
-          text: '\u786e\u8ba4\u91cd\u5f55',
+          text: '确认重录',
           style: 'destructive',
           onPress: () => {
             void startVoiceRecording(true);
@@ -712,7 +703,7 @@ export default function ReviewSessionPage() {
 
     setVoiceNote(null);
     setIsVoicePlaying(false);
-    showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u5220\u9664', 'info');
+    showToast('语音讲解已删除', 'info');
     setIsVoiceBusy(false);
   }, [isVoiceBusy, isVoiceRecording, showToast, stopVoicePlayback, voiceNote]);
 
@@ -721,10 +712,10 @@ export default function ReviewSessionPage() {
       return;
     }
 
-    Alert.alert('\u786e\u8ba4\u5220\u9664', '\u5220\u9664\u540e\u5c06\u65e0\u6cd5\u6062\u590d\uff0c\u786e\u5b9a\u5220\u9664\u5417\uff1f', [
-      { text: '\u53d6\u6d88', style: 'cancel' },
+    Alert.alert('确认删除', '删除后将无法恢复，确定删除吗？', [
+      { text: '取消', style: 'cancel' },
       {
-        text: '\u5220\u9664',
+        text: '删除',
         style: 'destructive',
         onPress: () => {
           void deleteCurrentVoiceNote();
@@ -1000,7 +991,7 @@ export default function ReviewSessionPage() {
       }
 
       if (isVoiceRecording) {
-        showToast('\u8bf7\u5148\u505c\u6b62\u5e76\u4fdd\u5b58\u8bed\u97f3\u8bb2\u89e3\uff0c\u518d\u63d0\u4ea4\u672c\u9898\u7ed3\u679c\u3002', 'info');
+        showToast('请先停止并保存语音讲解，再提交本题结果。', 'info');
         return;
       }
 
@@ -1086,8 +1077,8 @@ export default function ReviewSessionPage() {
         </Pressable>
 
         <BrandHeader
-          title={'\u4e03\u5237\u9519\u9898\u672c'}
-          subtitle={'\u4eca\u65e5\u590d\u505a\u4f1a\u8bdd'}
+          title="七刷错题本"
+          subtitle="今日复做会话"
           style={styles.brandHeader}
           titleStyle={styles.brandHeaderTitle}
           subtitleStyle={styles.brandHeaderSubtitle}
@@ -1153,7 +1144,7 @@ export default function ReviewSessionPage() {
                 <View style={styles.sectionIconWrap}>
                   <MaterialIcons name="assignment-turned-in" size={20} color="#16A34A" />
                 </View>
-                <Text style={styles.progressHeader}>{'\u4eca\u65e5\u590d\u505a'}</Text>
+                <Text style={styles.progressHeader}>今日复做</Text>
               </View>
               <View style={styles.progressMainRow}>
                 <View style={styles.progressNumberRow}>
@@ -1162,12 +1153,12 @@ export default function ReviewSessionPage() {
                   <Text style={styles.progressNumberTotal}>{totalCount}</Text>
                 </View>
                 <View style={styles.reviewPill}>
-                  <Text style={styles.reviewPillText}>{`\u7b2c ${reviewRound} \u5237`}</Text>
+                  <Text style={styles.reviewPillText}>{`第 ${reviewRound} 刷`}</Text>
                 </View>
               </View>
               <View style={styles.progressDivider} />
               <Text style={styles.progressTitle} numberOfLines={2}>
-                {currentMeta?.title ?? currentQueueItem?.title ?? '\u6b63\u5728\u51c6\u5907\u9898\u76ee...'}
+                {currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...'}
               </Text>
               <Text style={styles.progressModule}>{currentMeta?.module ?? currentQueueItem?.module ?? ''}</Text>
             </CardContainer>
@@ -1214,11 +1205,11 @@ export default function ReviewSessionPage() {
                   </View>
                   <View style={styles.voiceHeaderTextWrap}>
                     <Text style={styles.voiceTitle}>
-                      {isVoiceRecording ? '\u6b63\u5728\u5f55\u97f3' : '\u8bed\u97f3\u8bb2\u89e3'}
+                      {isVoiceRecording ? '正在录音' : '语音讲解'}
                     </Text>
                     {!isVoiceRecording && !voiceNote ? (
                       <Text style={styles.voiceDescription}>
-                        {'\u8bb2\u4e00\u904d\u4f60\u7684\u601d\u8def\uff0c\u4e0b\u6b21\u66f4\u5bb9\u6613\u60f3\u8d77\u6765'}
+                        {'讲一遍你的思路，下次更容易想起来'}
                       </Text>
                     ) : null}
                   </View>
@@ -1228,7 +1219,7 @@ export default function ReviewSessionPage() {
                   <>
                     <Text style={styles.voiceTimerText}>{formatDurationMs(recordingElapsedMs)}</Text>
                     <Text style={styles.voiceHintText}>
-                      {'\u8bf4\u51fa\u5173\u952e\u6761\u4ef6\u3001\u89e3\u9898\u601d\u8def\u548c\u5bb9\u6613\u9519\u7684\u5730\u65b9'}
+                      {'说出关键条件、解题思路和容易错的地方'}
                     </Text>
                     <Pressable
                       disabled={isVoiceBusy}
@@ -1241,7 +1232,7 @@ export default function ReviewSessionPage() {
                         (pressed || isVoiceBusy) && styles.voiceButtonPressed,
                       ]}>
                       <Text style={styles.voiceMainButtonText}>
-                        {isVoiceBusy ? '\u4fdd\u5b58\u4e2d...' : '\u505c\u6b62\u5e76\u4fdd\u5b58'}
+                        {isVoiceBusy ? '保存中...' : '停止并保存'}
                       </Text>
                     </Pressable>
                   </>
@@ -1258,7 +1249,7 @@ export default function ReviewSessionPage() {
                       (pressed || isVoiceBusy) && styles.voiceButtonPressed,
                     ]}>
                     <Text style={styles.voiceMainButtonText}>
-                      {isVoiceBusy ? '\u51c6\u5907\u4e2d...' : '\u5f55\u5236\u8bb2\u89e3'}
+                      {isVoiceBusy ? '准备中...' : '录制讲解'}
                     </Text>
                   </Pressable>
                 ) : null}
@@ -1266,7 +1257,7 @@ export default function ReviewSessionPage() {
                 {!isVoiceRecording && voiceNote ? (
                   <>
                     <Text style={styles.voiceDurationText}>
-                      {`\u65f6\u957f ${formatDurationMs(voiceNote.durationMs)}`}
+                      {`时长 ${formatDurationMs(voiceNote.durationMs)}`}
                     </Text>
                     <View style={styles.voiceActionRow}>
                       <Pressable
@@ -1280,7 +1271,7 @@ export default function ReviewSessionPage() {
                           (pressed || isVoiceBusy) && styles.voiceButtonPressed,
                         ]}>
                         <Text style={styles.voiceActionButtonText}>
-                          {isVoicePlaying ? '\u505c\u6b62\u64ad\u653e' : '\u64ad\u653e'}
+                          {isVoicePlaying ? '停止播放' : '播放'}
                         </Text>
                       </Pressable>
                       <Pressable
@@ -1290,7 +1281,7 @@ export default function ReviewSessionPage() {
                           styles.voiceActionButton,
                           (pressed || isVoiceBusy) && styles.voiceButtonPressed,
                         ]}>
-                        <Text style={styles.voiceActionButtonText}>{'\u91cd\u5f55'}</Text>
+                        <Text style={styles.voiceActionButtonText}>重录</Text>
                       </Pressable>
                       <Pressable
                         disabled={isVoiceBusy}
@@ -1300,7 +1291,7 @@ export default function ReviewSessionPage() {
                           styles.voiceActionButtonDanger,
                           (pressed || isVoiceBusy) && styles.voiceButtonPressed,
                         ]}>
-                        <Text style={styles.voiceActionButtonDangerText}>{'\u5220\u9664'}</Text>
+                        <Text style={styles.voiceActionButtonDangerText}>删除</Text>
                       </Pressable>
                     </View>
                   </>
@@ -1324,7 +1315,7 @@ export default function ReviewSessionPage() {
       {showResultActions ? (
         <FloatingBottomCta
           bottom={actionBarBottomOffset}
-          hintText={'\u9009\u62e9\u7ed3\u679c\u540e\u4f1a\u81ea\u52a8\u8fdb\u5165\u4e0b\u4e00\u9898'}
+          hintText="选择结果后会自动进入下一题"
           onHeightChange={(nextHeight) => {
             setActionBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
           }}>
@@ -1346,7 +1337,7 @@ export default function ReviewSessionPage() {
                 <View style={styles.resultButtonContent}>
                   {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
                   <Text numberOfLines={1} style={styles.resultButtonText}>
-                    {isSubmitting ? '\u8bb0\u5f55\u4e2d...' : action.label}
+                    {isSubmitting ? '记录中...' : action.label}
                   </Text>
                 </View>
               </Pressable>
