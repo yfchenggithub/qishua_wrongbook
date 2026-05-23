@@ -17,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
+import { APP_NAME, APP_VERSION, DATA_MODE_LABEL } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
@@ -44,7 +45,6 @@ import {
 } from '@/src/utils/image/printEnhanceConfig';
 
 const PAGE_SCOPE = 'SettingsScreen';
-const VERSION_VALUE = '0.1.0';
 const TOAST_DURATION_DEFAULT = 1800;
 const TOAST_DURATION_LONG = 2800;
 const DEV_UNLOCK_TAP_TARGET = 7;
@@ -792,6 +792,10 @@ export default function SettingsScreen() {
       ],
     );
   }, [disableDeveloperMode]);
+
+  const handleOpenAboutSupport = useCallback(() => {
+    router.push('/about-support' as never);
+  }, [router]);
 
   const startBackupToFile = useCallback(async () => {
     if (isBackingUp) {
@@ -2455,30 +2459,41 @@ export default function SettingsScreen() {
           </View>
         </CardContainer>
 
-        <CardContainer style={styles.card} padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconGray]}>
-              <MaterialIcons color="#717982" name="info-outline" size={30} />
-            </View>
-            <View style={styles.cardMain}>
-              <View style={styles.titleRow}>
-                <Text style={styles.cardTitle}>关于七刷错题本</Text>
-                <MaterialIcons color="#808791" name="chevron-right" size={22} />
+        <Pressable
+          accessibilityLabel="关于与支持"
+          accessibilityRole="button"
+          onPress={handleOpenAboutSupport}
+          style={({ pressed }) => [
+            styles.aboutSupportCardPressable,
+            pressed ? styles.aboutSupportCardPressed : null,
+          ]}>
+          <CardContainer style={styles.card} padding={spacing.md}>
+            <View style={styles.cardRow}>
+              <View style={[styles.iconBadge, styles.iconGray]}>
+                <MaterialIcons color="#717982" name="info-outline" size={30} />
               </View>
-              <Pressable
-                accessibilityLabel="版本信息"
-                accessibilityRole="button"
-                delayLongPress={650}
-                hitSlop={10}
-                onLongPress={handleVersionLongPress}
-                onPress={handleVersionTap}
-                style={styles.versionPressable}>
-                <Text style={styles.metaText}>版本：{VERSION_VALUE}</Text>
-              </Pressable>
-              <Text style={styles.metaText}>数据模式：离线本地版</Text>
+              <View style={styles.cardMain}>
+                <View style={styles.titleRow}>
+                  <Text style={styles.cardTitle}>关于与支持</Text>
+                  <MaterialIcons color="#808791" name="chevron-right" size={22} />
+                </View>
+                <Pressable
+                  accessibilityLabel="版本信息"
+                  accessibilityRole="button"
+                  delayLongPress={650}
+                  hitSlop={10}
+                  onLongPress={handleVersionLongPress}
+                  onPress={handleVersionTap}
+                  style={styles.versionPressable}>
+                  <Text style={[styles.metaText, styles.aboutSupportPrimaryMeta]}>
+                    {APP_NAME} · {APP_VERSION}
+                  </Text>
+                </Pressable>
+                <Text style={styles.metaText}>{DATA_MODE_LABEL} · 数据仅保存在本机</Text>
+              </View>
             </View>
-          </View>
-        </CardContainer>
+          </CardContainer>
+        </Pressable>
 
         {isDevModeUnlocked ? (
           <CardContainer style={styles.devCard} padding={spacing.md}>
@@ -3147,6 +3162,16 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: '#8B5E16',
     fontWeight: '700',
+  },
+  aboutSupportCardPressable: {
+    borderRadius: radius.xl,
+  },
+  aboutSupportCardPressed: {
+    opacity: 0.92,
+  },
+  aboutSupportPrimaryMeta: {
+    color: colors.textPrimary,
+    fontWeight: '600',
   },
   versionPressable: {
     alignSelf: 'flex-start',
