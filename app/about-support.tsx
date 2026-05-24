@@ -1,7 +1,7 @@
-import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import * as Clipboard from "expo-clipboard";
-import { Stack } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import * as Clipboard from 'expo-clipboard';
+import { Stack, useRouter } from 'expo-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Image,
@@ -10,27 +10,28 @@ import {
   StyleSheet,
   Text,
   View,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CardContainer, ScreenContainer } from "@/src/components";
+import { CardContainer, ScreenContainer } from '@/src/components';
 import {
   APP_NAME,
   APP_VERSION,
   DATA_MODE_LABEL,
   OFFICIAL_ACCOUNT_SEARCH_TEXT,
   SUPPORT_EMAIL,
-} from "@/src/constants/app";
-import { colors, radius, spacing, typography } from "@/src/styles/tokens";
+} from '@/src/constants/app';
+import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const TOAST_DURATION_DEFAULT = 1800;
 const TOAST_VERTICAL_OFFSET = 18;
-const WX_QRCODE_IMAGE = require("../assets/images/wechat_qr_square.png");
+const WX_QRCODE_IMAGE = require('../assets/images/wechat_qr_square.png');
 
 export default function AboutSupportScreen() {
+  const router = useRouter();
   const insets = useSafeAreaInsets();
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
-  const [toastMessage, setToastMessage] = useState("");
+  const [toastMessage, setToastMessage] = useState('');
   const [toastVisible, setToastVisible] = useState(false);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
@@ -93,8 +94,8 @@ export default function AboutSupportScreen() {
 
   const copyText = useCallback(
     async (value: string, successMessage: string) => {
-      if (typeof Clipboard.setStringAsync !== "function") {
-        showToast("当前环境暂不支持复制");
+      if (typeof Clipboard.setStringAsync !== 'function') {
+        showToast('当前环境暂不支持复制');
         return;
       }
 
@@ -102,23 +103,19 @@ export default function AboutSupportScreen() {
         await Clipboard.setStringAsync(value);
         showToast(successMessage);
       } catch {
-        showToast("复制失败，请稍后重试");
+        showToast('复制失败，请稍后重试');
       }
     },
     [showToast],
   );
 
   const handleCopyOfficialSearchText = useCallback(() => {
-    void copyText(OFFICIAL_ACCOUNT_SEARCH_TEXT, "公众号搜索词已复制");
+    void copyText(OFFICIAL_ACCOUNT_SEARCH_TEXT, '公众号搜索词已复制');
   }, [copyText]);
 
   const handleCopySupportEmail = useCallback(() => {
-    void copyText(SUPPORT_EMAIL, "邮箱已复制");
+    void copyText(SUPPORT_EMAIL, '邮箱已复制');
   }, [copyText]);
-
-  const handleShowComingSoon = useCallback(() => {
-    showToast("即将上线");
-  }, [showToast]);
 
   useEffect(() => {
     return () => {
@@ -130,12 +127,12 @@ export default function AboutSupportScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: "关于与支持" }} />
+      <Stack.Screen options={{ title: '关于与支持' }} />
 
       <ScreenContainer
         scroll
         contentStyle={styles.content}
-        safeAreaEdges={["bottom"]}
+        safeAreaEdges={['bottom']}
       >
         <CardContainer style={styles.sectionCard} padding={spacing.lg}>
           <Text style={styles.sectionTitle}>产品信息</Text>
@@ -241,7 +238,7 @@ export default function AboutSupportScreen() {
           <View style={styles.legalList}>
             <Pressable
               accessibilityRole="button"
-              onPress={handleShowComingSoon}
+              onPress={() => router.push('/privacy-policy' as never)}
               style={({ pressed }) => [
                 styles.legalRow,
                 pressed ? styles.legalRowPressed : null,
@@ -253,7 +250,7 @@ export default function AboutSupportScreen() {
             <View style={styles.legalDivider} />
             <Pressable
               accessibilityRole="button"
-              onPress={handleShowComingSoon}
+              onPress={() => router.push('/user-agreement' as never)}
               style={({ pressed }) => [
                 styles.legalRow,
                 pressed ? styles.legalRowPressed : null,
@@ -336,9 +333,9 @@ const styles = StyleSheet.create({
   },
   sectionCard: {
     borderRadius: 22,
-    borderColor: "#E9EDF2",
+    borderColor: '#E9EDF2',
     backgroundColor: colors.surface,
-    shadowColor: "#0F172A",
+    shadowColor: '#0F172A',
     shadowOpacity: 0.06,
     shadowRadius: 14,
     shadowOffset: { width: 0, height: 8 },
@@ -346,67 +343,67 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     ...typography.sectionTitle,
-    color: "#111827",
+    color: '#111827',
     fontSize: 18,
     lineHeight: 25,
   },
   appName: {
     ...typography.body,
     marginTop: spacing.sm,
-    color: "#111827",
-    fontWeight: "700",
+    color: '#111827',
+    fontWeight: '700',
     fontSize: 18,
     lineHeight: 24,
   },
   infoTags: {
     marginTop: spacing.sm,
-    flexDirection: "row",
-    flexWrap: "wrap",
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
   },
   infoTag: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: "#E5E7EB",
+    borderColor: '#E5E7EB',
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    alignSelf: "flex-start",
+    alignSelf: 'flex-start',
   },
   infoTagText: {
     ...typography.caption,
-    color: "#4B5563",
+    color: '#4B5563',
     fontSize: 12,
     lineHeight: 16,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   descriptionText: {
     ...typography.bodySmall,
     marginTop: spacing.sm,
-    color: "#6B7280",
+    color: '#6B7280',
     lineHeight: 20,
   },
   officialPanel: {
     marginTop: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
     padding: spacing.md,
     borderRadius: 18,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: "#E5EAF0",
+    borderColor: '#E5EAF0',
     gap: spacing.md,
   },
   qrPreviewBox: {
     width: 96,
     height: 96,
     borderRadius: 18,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: "#E6EAF0",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
+    borderColor: '#E6EAF0',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
   },
   qrPreviewImage: {
     width: 88,
@@ -418,38 +415,38 @@ const styles = StyleSheet.create({
   },
   accountPanelTitle: {
     ...typography.body,
-    color: "#111827",
+    color: '#111827',
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   searchPill: {
-    alignSelf: "flex-start",
+    alignSelf: 'flex-start',
     marginTop: spacing.xs,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: "#DDE3EA",
+    borderColor: '#DDE3EA',
     borderRadius: 999,
     paddingHorizontal: 12,
     paddingVertical: 7,
   },
   searchPillText: {
     ...typography.bodySmall,
-    color: "#1F2937",
+    color: '#1F2937',
     fontSize: 13,
     lineHeight: 17,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   accountPanelDesc: {
     ...typography.caption,
     marginTop: spacing.sm,
-    color: "#6B7280",
+    color: '#6B7280',
     fontSize: 13,
     lineHeight: 18,
   },
   actionRow: {
     marginTop: spacing.md,
-    flexDirection: "row",
+    flexDirection: 'row',
     gap: spacing.sm,
   },
   primaryActionButton: {
@@ -457,177 +454,177 @@ const styles = StyleSheet.create({
     minHeight: 41,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: "#D7E7FF",
-    backgroundColor: "#EEF6FF",
+    borderColor: '#D7E7FF',
+    backgroundColor: '#EEF6FF',
     paddingHorizontal: spacing.md,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   secondaryActionButton: {
     flex: 1,
     minHeight: 41,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: "#DDE3EA",
-    backgroundColor: "#FFFFFF",
+    borderColor: '#DDE3EA',
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: spacing.md,
-    alignItems: "center",
-    justifyContent: "center",
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   primaryActionText: {
     ...typography.bodySmall,
-    color: "#2563EB",
+    color: '#2563EB',
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   secondaryActionText: {
     ...typography.bodySmall,
-    color: "#374151",
+    color: '#374151',
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   feedbackRow: {
     marginTop: spacing.md,
     minHeight: 52,
     borderRadius: 16,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: "#E5EAF0",
+    borderColor: '#E5EAF0',
     paddingHorizontal: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   feedbackRowPressed: {
-    backgroundColor: "#F1F5F9",
+    backgroundColor: '#F1F5F9',
   },
   feedbackIconBox: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: "#E5EAF0",
-    alignItems: "center",
-    justifyContent: "center",
+    borderColor: '#E5EAF0',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginRight: spacing.sm,
   },
   feedbackEmailText: {
     ...typography.body,
     flex: 1,
     minWidth: 0,
-    color: "#111827",
-    fontWeight: "600",
+    color: '#111827',
+    fontWeight: '600',
   },
   feedbackCopyText: {
     ...typography.bodySmall,
     marginLeft: spacing.sm,
-    color: "#2563EB",
+    color: '#2563EB',
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: '700',
   },
   legalList: {
     marginTop: spacing.md,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: "#E5EAF0",
-    overflow: "hidden",
-    backgroundColor: "#FFFFFF",
+    borderColor: '#E5EAF0',
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
   },
   legalRow: {
     minHeight: 52,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: '#FFFFFF',
     paddingHorizontal: spacing.md,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   legalRowPressed: {
-    backgroundColor: "#F8FAFC",
+    backgroundColor: '#F8FAFC',
   },
   legalText: {
     ...typography.body,
-    color: "#111827",
-    fontWeight: "600",
+    color: '#111827',
+    fontWeight: '600',
   },
   legalDivider: {
     height: 1,
-    backgroundColor: "#EEF2F6",
+    backgroundColor: '#EEF2F6',
   },
   previewLayer: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   previewBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(15, 23, 42, 0.72)",
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
   },
   previewBackdropPressed: {
     opacity: 0.96,
   },
   previewCard: {
-    width: "90%",
+    width: '90%',
     maxWidth: 460,
-    maxHeight: "88%",
+    maxHeight: '88%',
     borderRadius: 22,
-    backgroundColor: "#111827",
+    backgroundColor: '#111827',
     paddingTop: spacing.xxl,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.md,
-    alignItems: "center",
-    shadowColor: "#000000",
+    alignItems: 'center',
+    shadowColor: '#000000',
     shadowOpacity: 0.2,
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 12 },
     elevation: 8,
   },
   previewCloseButton: {
-    position: "absolute",
+    position: 'absolute',
     top: spacing.sm,
     right: spacing.sm,
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.16)",
-    alignItems: "center",
-    justifyContent: "center",
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   previewImage: {
-    width: "100%",
+    width: '100%',
     height: 360,
-    maxHeight: "78%",
+    maxHeight: '78%',
   },
   previewHintText: {
     ...typography.caption,
     marginTop: spacing.sm,
     fontSize: 13,
     lineHeight: 18,
-    color: "#CBD5E1",
-    textAlign: "center",
+    color: '#CBD5E1',
+    textAlign: 'center',
   },
   buttonPressed: {
     opacity: 0.86,
   },
   toastContainer: {
-    position: "absolute",
+    position: 'absolute',
     left: spacing.lg,
     right: spacing.lg,
-    alignItems: "center",
+    alignItems: 'center',
     zIndex: 10,
   },
   toastBubble: {
-    maxWidth: "100%",
+    maxWidth: '100%',
     borderRadius: radius.pill,
-    backgroundColor: "rgba(24, 27, 33, 0.94)",
+    backgroundColor: 'rgba(24, 27, 33, 0.94)',
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.2)",
+    borderColor: 'rgba(255, 255, 255, 0.2)',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
   toastText: {
     ...typography.bodySmall,
     color: colors.white,
-    fontWeight: "700",
-    textAlign: "center",
+    fontWeight: '700',
+    textAlign: 'center',
   },
 });
