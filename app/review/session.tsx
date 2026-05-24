@@ -6,6 +6,7 @@ import {
   Alert,
   Animated,
   BackHandler,
+  type GestureResponderEvent,
   Image,
   type LayoutChangeEvent,
   Pressable,
@@ -44,6 +45,12 @@ const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
+const SWIPE_HINT_MESSAGE = '点击「不会 / 模糊 / 会了」后进入下一题';
+const SWIPE_HINT_DURATION_MS = 1500;
+const SWIPE_HINT_THROTTLE_MS = 1500;
+const SWIPE_VERTICAL_DISTANCE_THRESHOLD = 40;
+const SWIPE_VERTICAL_DOMINANCE_RATIO = 1.2;
+const BUTTON_HINT_LIFT_DISTANCE = 4;
 
 type ToastType = 'success' | 'info' | 'error';
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -362,6 +369,8 @@ export default function ReviewSessionPage() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
+  const [swipeHintVisible, setSwipeHintVisible] = useState(false);
+  const [lastSwipeHintTime, setLastSwipeHintTime] = useState(0);
   const [voiceNote, setVoiceNote] = useState<VoiceNoteEntity | null>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
@@ -374,6 +383,11 @@ export default function ReviewSessionPage() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const swipeHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSwipeHintTimeRef = useRef(0);
+  const buttonsHintAnim = useRef(new Animated.Value(0)).current;
+  const touchStartPointRef = useRef<{ x: number; y: number } | null>(null);
+  const touchMovedWithScrollRef = useRef(false);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceReplacePendingUriRef = useRef<string | null>(null);
@@ -441,6 +455,114 @@ export default function ReviewSessionPage() {
     },
     [hideToast, toastOpacity, toastTranslateY],
   );
+
+  const triggerButtonsHintAnimation = useCallback(() => {
+    buttonsHintAnim.stopAnimation();
+    buttonsHintAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(buttonsHintAnim, {
+        toValue: 1,
+        duration: 130,
+        useNativeDriver: true,
+      }),
+      Animated.spring(buttonsHintAnim, {
+        toValue: 0,
+        speed: 22,
+        bounciness: 3,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [buttonsHintAnim]);
+
+  const showSwipeHint = useCallback(() => {
+    if (
+      sessionState !== 'ready' ||
+      isCompleted ||
+      isLoadingCurrent ||
+      !!currentErrorMessage ||
+      isSubmitting ||
+      previewImage !== null
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    const lastShownAt = Math.max(lastSwipeHintTimeRef.current, lastSwipeHintTime);
+    if (now - lastShownAt < SWIPE_HINT_THROTTLE_MS) {
+      return;
+    }
+
+    lastSwipeHintTimeRef.current = now;
+    setLastSwipeHintTime(now);
+    setSwipeHintVisible(true);
+    triggerButtonsHintAnimation();
+    showToast(SWIPE_HINT_MESSAGE, 'info', SWIPE_HINT_DURATION_MS);
+
+    if (swipeHintTimerRef.current) {
+      clearTimeout(swipeHintTimerRef.current);
+      swipeHintTimerRef.current = null;
+    }
+
+    swipeHintTimerRef.current = setTimeout(() => {
+      setSwipeHintVisible(false);
+      swipeHintTimerRef.current = null;
+    }, SWIPE_HINT_DURATION_MS);
+  }, [
+    currentErrorMessage,
+    isCompleted,
+    isLoadingCurrent,
+    isSubmitting,
+    lastSwipeHintTime,
+    previewImage,
+    sessionState,
+    showToast,
+    triggerButtonsHintAnimation,
+  ]);
+
+  const handleTouchStart = useCallback((event: GestureResponderEvent) => {
+    touchMovedWithScrollRef.current = false;
+    touchStartPointRef.current = {
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+    };
+  }, []);
+
+  const handleTouchEnd = useCallback(
+    (event: GestureResponderEvent) => {
+      const startPoint = touchStartPointRef.current;
+      touchStartPointRef.current = null;
+
+      if (!startPoint) {
+        touchMovedWithScrollRef.current = false;
+        return;
+      }
+
+      if (touchMovedWithScrollRef.current) {
+        touchMovedWithScrollRef.current = false;
+        return;
+      }
+
+      const dx = event.nativeEvent.pageX - startPoint.x;
+      const dy = event.nativeEvent.pageY - startPoint.y;
+      const absDx = Math.abs(dx);
+      const absDy = Math.abs(dy);
+
+      if (absDy < SWIPE_VERTICAL_DISTANCE_THRESHOLD) {
+        return;
+      }
+
+      if (absDy <= absDx * SWIPE_VERTICAL_DOMINANCE_RATIO) {
+        return;
+      }
+
+      showSwipeHint();
+    },
+    [showSwipeHint],
+  );
+
+  const handleScroll = useCallback(() => {
+    touchMovedWithScrollRef.current = true;
+  }, []);
 
   const clearVoicePlaybackResetTimer = useCallback(() => {
     if (voicePlaybackResetTimerRef.current) {
@@ -867,6 +989,10 @@ export default function ReviewSessionPage() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      if (swipeHintTimerRef.current) {
+        clearTimeout(swipeHintTimerRef.current);
+        swipeHintTimerRef.current = null;
+      }
       clearVoicePlaybackResetTimer();
       void VoiceNoteService.stopPlaying();
       void VoiceNoteService.stopAndDiscardRecording();
@@ -1071,7 +1197,10 @@ export default function ReviewSessionPage() {
       <ScreenContainer
         scroll
         style={styles.screenSafeArea}
-        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}>
+        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
+        onScroll={handleScroll}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}>
         <Pressable style={styles.exitButton} onPress={handleRequestExit}>
           <Text style={styles.exitButtonText}>退出今日复做</Text>
         </Pressable>
@@ -1309,34 +1438,50 @@ export default function ReviewSessionPage() {
       {showResultActions ? (
         <FloatingBottomCta
           bottom={actionBarBottomOffset}
+          hintActive={swipeHintVisible}
           hintText="选择结果后会自动进入下一题"
           onHeightChange={(nextHeight) => {
             setActionBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
           }}>
-          <View style={styles.actionRow}>
-            {REVIEW_ACTIONS.map((action) => (
-              <Pressable
-                key={action.value}
-                onPress={() => void handleSelectResult(action.value, action.statsKey)}
-                disabled={isSubmitting}
-                style={[
-                  styles.resultButton,
-                  action.tone === 'known'
-                    ? styles.resultButtonKnown
-                    : action.tone === 'fuzzy'
-                      ? styles.resultButtonFuzzy
-                      : styles.resultButtonUnknown,
-                  isSubmitting ? styles.disabledControl : null,
-                ]}>
-                <View style={styles.resultButtonContent}>
-                  {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
-                  <Text numberOfLines={1} style={styles.resultButtonText}>
-                    {isSubmitting ? '记录中...' : action.label}
-                  </Text>
-                </View>
-              </Pressable>
-            ))}
-          </View>
+          <Animated.View
+            style={[
+              styles.actionRowAnimated,
+              {
+                transform: [
+                  {
+                    translateY: buttonsHintAnim.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, -BUTTON_HINT_LIFT_DISTANCE],
+                    }),
+                  },
+                ],
+              },
+            ]}>
+            <View style={styles.actionRow}>
+              {REVIEW_ACTIONS.map((action) => (
+                <Pressable
+                  key={action.value}
+                  onPress={() => void handleSelectResult(action.value, action.statsKey)}
+                  disabled={isSubmitting}
+                  style={[
+                    styles.resultButton,
+                    action.tone === 'known'
+                      ? styles.resultButtonKnown
+                      : action.tone === 'fuzzy'
+                        ? styles.resultButtonFuzzy
+                        : styles.resultButtonUnknown,
+                    isSubmitting ? styles.disabledControl : null,
+                  ]}>
+                  <View style={styles.resultButtonContent}>
+                    {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
+                    <Text numberOfLines={1} style={styles.resultButtonText}>
+                      {isSubmitting ? '记录中...' : action.label}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          </Animated.View>
         </FloatingBottomCta>
       ) : null}
 
@@ -1696,6 +1841,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
+  },
+  actionRowAnimated: {
+    width: '100%',
   },
   resultButton: {
     flex: 1,
