@@ -1,50 +1,120 @@
-# Welcome to your Expo app 👋
+# 七刷错题本
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+离线高中数学错题记录 App（React Native + Expo + TypeScript + Expo Router）。
 
-## Get started
+## 当前状态
 
-1. Install dependencies
+- 当前已发布首版：`v1.0.0`
+- 发布范围：MVP 离线闭环
+- 运行重点：Android 真机/模拟器优先，推荐使用 Dev Client，不依赖 Expo Go
+- 版本记录：见 `CHANGELOG.md`
 
-   ```bash
-   npm install
-   ```
+## 安装 APK / 内测包（非开发验收）
 
-2. Start the app
+适用对象：产品、运营、测试同学，不需要本地 Node/Android 开发环境。
 
-   ```bash
-   npx expo start
-   ```
+### 方式 A：安装 APK 文件（Android）
 
-In the output, you'll find options to open the app in a
+1. 向发布同学获取本版本 APK 文件（`v1.0.0`）。
+![alt text](image.png)
+2. 在 Android 设备打开 APK 文件时，按系统提示允许“安装未知应用”。
+3. 完成安装后，打开“七刷错题本”。
+4. 进入应用后在“设置/关于”页确认版本号为 `1.0.0`。
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+### 方式 B：通过 EAS 内测包链接安装（Android）
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+1. 向发布同学获取 EAS build 链接或二维码（internal distribution）。
+2. 在 Android 设备打开链接，下载并安装对应 APK。
+3. 首次安装如被系统拦截，按提示允许当前来源安装应用。
+4. 安装后打开 App，确认可正常进入首页并完成一次基础操作（如新增错题）。
 
-## Get a fresh project
+### 验收入口建议
 
-When you're ready, run:
+- 快速回归：`docs/MANUAL_TEST_CHECKLIST.md`
+- 全量验收：`docs/testing.md`
+
+## 首版（v1.0.0）能力
+
+- 录入错题（题目、答案、标签等基础信息）
+- 拍摄/选择题目图片
+- 拍摄/选择答案图片
+- 本地离线保存（SQLite + 本地文件）
+- 错题列表浏览
+- 错题详情查看
+- 7 次重做进度与“已掌握”标记
+
+## 首版明确不做
+
+- 登录
+- 云同步
+- OCR
+- AI 批改
+- 支付/会员
+- 社区
+- 复杂统计图
+- 服务端接口
+- iOS 本地调试（首版开发重点非 iOS）
+
+## 技术栈
+
+- React Native
+- Expo
+- TypeScript
+- Expo Router
+- expo-sqlite
+
+## 目录约定
+
+- `app/`：Expo Router 页面
+- `src/components/`：可复用组件
+- `src/services/`：业务服务
+- `src/db/`：数据库初始化和 schema
+- `src/repositories/`：数据访问层
+- `src/models/`：TypeScript 数据模型
+- `src/constants/`：常量
+- `docs/`：产品、架构、数据结构、测试文档
+
+## 快速开始
+
+1. 安装依赖
 
 ```bash
-npm run reset-project
+npm install
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+2. 启动开发服务
 
-## Learn more
+```bash
+npm run start
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+3. 启动 Android（推荐）
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
+```bash
+npm run android
+```
 
-## Join the community
+4. 启动 Dev Client（推荐）
 
-Join our community of developers creating universal apps.
+```bash
+npm run dev-client
+```
 
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+## 常用命令
+
+```bash
+npm run check:deps      # 检查 Expo 依赖匹配
+npm run typecheck       # TypeScript 类型检查
+npm run lint            # 代码规范检查
+npm run preflight       # 编码/类型/lint 一键检查
+```
+
+## 相关文档
+
+- 版本记录：`CHANGELOG.md`
+- 产品文档：`docs/product.md`
+- 架构说明：`docs/architecture.md`
+- 数据约定：`docs/data_contract.md`
+- 测试清单：`docs/testing.md`
+- 手工回归清单：`docs/MANUAL_TEST_CHECKLIST.md`
+- 开发日志：`docs/dev_log.md`
