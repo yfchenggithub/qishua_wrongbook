@@ -106,13 +106,14 @@ export async function submitTodayReviewResult(input: {
   mistakeId: string;
   reviewIndex: number;
   result: ReviewResult;
+  solutionImageUri?: string | null;
   voiceNote?: ReviewRecordVoiceNote | null;
 }) {
   return CompleteReviewService.completeReview({
     mistakeId: input.mistakeId,
     reviewIndex: input.reviewIndex,
     result: input.result,
-    solutionImageUri: null,
+    solutionImageUri: input.solutionImageUri ?? null,
     voiceNote: input.voiceNote ?? null,
     cleanupImageOnFailure: false,
   });

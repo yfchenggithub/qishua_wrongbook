@@ -26,8 +26,10 @@ import {
   ScreenContainer,
 } from '@/src/components';
 import type { DetailImageSlot } from '@/src/models/MistakeDetailViewModel';
+import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import type { ReviewSessionQueueItem } from '@/src/services/ReviewSessionService';
 import * as ReviewSessionService from '@/src/services/ReviewSessionService';
@@ -127,8 +129,23 @@ function toShortErrorMessage(input?: string): string {
   return `${normalized.slice(0, 60)}...`;
 }
 
+function isCancelLikeMessage(input?: string): boolean {
+  const normalized = typeof input === 'string' ? input.trim().toLowerCase() : '';
+  return normalized.includes('cancel') || normalized.includes('取消');
+}
+
 function isPositiveFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+function formatFileSize(fileSize: number): string {
+  if (fileSize < 1024) {
+    return `${fileSize} B`;
+  }
+  if (fileSize < 1024 * 1024) {
+    return `${Math.round(fileSize / 1024)} KB`;
+  }
+  return `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function getReviewActionSymbol(tone: 'known' | 'fuzzy' | 'unknown'): string {
@@ -344,6 +361,221 @@ function QuestionImageCard({
   );
 }
 
+function ReviewSolutionImageCard({
+  image,
+  isBusy = false,
+  onTakePhoto,
+  onPickImage,
+  onDelete,
+  onPreview,
+}: {
+  image?: LocalImage | null;
+  isBusy?: boolean;
+  onTakePhoto: () => void;
+  onPickImage: () => void;
+  onDelete: () => void;
+  onPreview: (uri: string) => void;
+}) {
+  const [imageFailed, setImageFailed] = useState(false);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  const [measuredDimensions, setMeasuredDimensions] = useState<QuestionImageSizeState>('unresolved');
+
+  const normalizedUri = useMemo(() => {
+    const rawUri = typeof image?.uri === 'string' ? image.uri.trim() : '';
+    return rawUri.length > 0 ? rawUri : null;
+  }, [image?.uri]);
+
+  const providedDimensions = useMemo(() => {
+    if (isPositiveFinite(image?.width) && isPositiveFinite(image?.height)) {
+      return {
+        width: image.width,
+        height: image.height,
+      };
+    }
+    return null;
+  }, [image?.height, image?.width]);
+
+  const activeDimensions = useMemo(() => {
+    if (providedDimensions) {
+      return providedDimensions;
+    }
+    if (measuredDimensions && measuredDimensions !== 'unresolved') {
+      return measuredDimensions;
+    }
+    return null;
+  }, [measuredDimensions, providedDimensions]);
+
+  useEffect(() => {
+    setImageFailed(false);
+    setMeasuredDimensions('unresolved');
+  }, [normalizedUri]);
+
+  useEffect(() => {
+    if (!normalizedUri || providedDimensions || measuredDimensions !== 'unresolved') {
+      return;
+    }
+
+    let cancelled = false;
+    Image.getSize(
+      normalizedUri,
+      (nextWidth, nextHeight) => {
+        if (cancelled) {
+          return;
+        }
+        if (!isPositiveFinite(nextWidth) || !isPositiveFinite(nextHeight)) {
+          setMeasuredDimensions(null);
+          return;
+        }
+        setMeasuredDimensions({ width: nextWidth, height: nextHeight });
+      },
+      () => {
+        if (cancelled) {
+          return;
+        }
+        setMeasuredDimensions(null);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [measuredDimensions, normalizedUri, providedDimensions]);
+
+  const computedPreviewHeight = useMemo(
+    () =>
+      calculateImagePreviewHeight({
+        containerWidth: previewWidth,
+        imageWidth: activeDimensions?.width,
+        imageHeight: activeDimensions?.height,
+        minHeight: QUESTION_PREVIEW_MIN_HEIGHT,
+        maxHeight: QUESTION_PREVIEW_MAX_HEIGHT,
+        fallbackHeight: QUESTION_PREVIEW_FALLBACK_HEIGHT,
+      }),
+    [activeDimensions?.height, activeDimensions?.width, previewWidth],
+  );
+
+  const handleImageLayout = useCallback((event: LayoutChangeEvent) => {
+    const nextWidth = event.nativeEvent.layout.width;
+    if (!isPositiveFinite(nextWidth)) {
+      return;
+    }
+
+    setPreviewWidth((current) => {
+      if (Math.abs(current - nextWidth) < 0.5) {
+        return current;
+      }
+      return nextWidth;
+    });
+  }, []);
+
+  const hasImage = !!normalizedUri;
+  const canShowImage = hasImage && !imageFailed;
+
+  return (
+    <CardContainer style={styles.solutionCard} padding={spacing.lg}>
+      <View style={styles.sectionHeaderRow}>
+        <View style={styles.solutionIconWrap}>
+          <MaterialIcons name="edit-note" size={21} color="#2563EB" />
+        </View>
+        <View style={styles.solutionHeaderTextWrap}>
+          <Text style={styles.solutionTitle}>我的做法（可选）</Text>
+          <Text style={styles.solutionDescription}>需要时拍，方便复盘错误过程</Text>
+        </View>
+      </View>
+
+      <View
+        onLayout={handleImageLayout}
+        style={[
+          styles.solutionImageWrap,
+          hasImage ? { height: computedPreviewHeight } : styles.solutionImageWrapEmpty,
+          !hasImage ? { height: QUESTION_PREVIEW_EMPTY_HEIGHT } : null,
+        ]}>
+        {canShowImage ? (
+          <View style={styles.questionImageFrame}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="我的做法图片，点击查看大图"
+              onPress={() => {
+                onPreview(normalizedUri!);
+              }}
+              style={({ pressed }) => [styles.questionImagePressable, pressed && styles.questionImagePressablePressed]}>
+              <Image
+                source={{ uri: normalizedUri! }}
+                style={styles.questionImage}
+                resizeMode="contain"
+                onError={() => setImageFailed(true)}
+              />
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="查看我的做法大图"
+              onPress={() => {
+                onPreview(normalizedUri!);
+              }}
+              style={styles.questionPreviewButton}>
+              <Text style={styles.questionPreviewButtonText}>查看大图</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="删除我的做法图片"
+              disabled={isBusy}
+              onPress={onDelete}
+              style={({ pressed }) => [
+                styles.solutionDeleteButton,
+                pressed && !isBusy && styles.solutionDeleteButtonPressed,
+                isBusy && styles.disabledControl,
+              ]}>
+              <MaterialIcons name="close" size={18} color="#475569" />
+            </Pressable>
+          </View>
+        ) : null}
+
+        {!hasImage ? (
+          <View style={styles.solutionPlaceholder}>
+            <MaterialIcons name="photo-camera" size={28} color="#64748B" />
+            <Text style={styles.solutionPlaceholderText}>尚未选择图片</Text>
+          </View>
+        ) : null}
+        {hasImage && imageFailed ? (
+          <Text style={styles.questionErrorText}>我的做法图片加载失败</Text>
+        ) : null}
+      </View>
+
+      <View style={styles.solutionActionRow}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="拍照添加我的做法"
+          disabled={isBusy}
+          onPress={onTakePhoto}
+          style={({ pressed }) => [
+            styles.solutionActionButton,
+            styles.solutionActionButtonPrimary,
+            pressed && !isBusy && styles.solutionActionButtonPressed,
+            isBusy && styles.disabledControl,
+          ]}>
+          <Text style={styles.solutionActionButtonPrimaryText}>{isBusy ? '处理中...' : '拍照'}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="从相册选择我的做法"
+          disabled={isBusy}
+          onPress={onPickImage}
+          style={({ pressed }) => [
+            styles.solutionActionButton,
+            pressed && !isBusy && styles.solutionActionButtonPressed,
+            isBusy && styles.disabledControl,
+          ]}>
+          <Text style={styles.solutionActionButtonText}>{isBusy ? '处理中...' : '从相册选择'}</Text>
+        </Pressable>
+      </View>
+
+      {hasImage && typeof image?.fileSize === 'number' ? (
+        <Text style={styles.solutionFileSizeText}>大小：{formatFileSize(image.fileSize)}</Text>
+      ) : null}
+    </CardContainer>
+  );
+}
+
 export default function ReviewSessionPage() {
   const router = useRouter();
   const navigation = useNavigation();
@@ -376,6 +608,8 @@ export default function ReviewSessionPage() {
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
+  const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
+  const [isReviewSolutionImageBusy, setIsReviewSolutionImageBusy] = useState(false);
   const [actionBarHeight, setActionBarHeight] = useState(0);
 
   const queueRequestIdRef = useRef(0);
@@ -846,6 +1080,100 @@ export default function ReviewSessionPage() {
     ]);
   }, [deleteCurrentVoiceNote, isVoiceBusy, isVoiceRecording, voiceNote]);
 
+  const cleanupReviewSolutionImage = useCallback(async (image: LocalImage | null) => {
+    const imageUri = typeof image?.uri === 'string' ? image.uri.trim() : '';
+    if (!imageUri) {
+      return;
+    }
+    await ImageService.deleteLocalImage(imageUri);
+  }, []);
+
+  const saveReviewSolutionImage = useCallback(
+    async (source: 'camera' | 'album') => {
+      if (
+        !currentQueueItem ||
+        isReviewSolutionImageBusy ||
+        isSubmitting ||
+        isLoadingCurrent ||
+        !!currentErrorMessage ||
+        isVoiceRecording ||
+        isVoiceBusy
+      ) {
+        return;
+      }
+
+      setIsReviewSolutionImageBusy(true);
+      try {
+        const saveResult =
+          source === 'camera'
+            ? await ImageService.takePhotoAndSave({
+                mistakeId: currentQueueItem.id,
+                type: 'review_solution',
+              })
+            : await ImageService.pickImageAndSave({
+                mistakeId: currentQueueItem.id,
+                type: 'review_solution',
+              });
+
+        if (!saveResult.ok || !saveResult.image) {
+          if (isCancelLikeMessage(saveResult.errorMessage)) {
+            return;
+          }
+
+          showToast(toShortErrorMessage(saveResult.errorMessage ?? '图片保存失败，请重试。'), 'error', TOAST_DURATION_LONG);
+          return;
+        }
+
+        const previousImage = reviewSolutionImage;
+        setReviewSolutionImage(saveResult.image);
+        if (previousImage && previousImage.uri !== saveResult.image.uri) {
+          void cleanupReviewSolutionImage(previousImage);
+        }
+        showToast('我的做法已添加', 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to save review solution image.', {
+          mistakeId: currentQueueItem.id,
+          source,
+          error,
+        });
+        showToast('图片保存失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+      } finally {
+        setIsReviewSolutionImageBusy(false);
+      }
+    },
+    [
+      cleanupReviewSolutionImage,
+      currentErrorMessage,
+      currentQueueItem,
+      isLoadingCurrent,
+      isReviewSolutionImageBusy,
+      isSubmitting,
+      isVoiceBusy,
+      isVoiceRecording,
+      reviewSolutionImage,
+      showToast,
+    ],
+  );
+
+  const deleteReviewSolutionImage = useCallback(async () => {
+    if (!reviewSolutionImage || isReviewSolutionImageBusy || isSubmitting) {
+      return;
+    }
+
+    const imageToDelete = reviewSolutionImage;
+    setIsReviewSolutionImageBusy(true);
+    setReviewSolutionImage(null);
+    await cleanupReviewSolutionImage(imageToDelete);
+    setIsReviewSolutionImageBusy(false);
+    showToast('我的做法图片已删除', 'info');
+  }, [
+    cleanupReviewSolutionImage,
+    isReviewSolutionImageBusy,
+    isSubmitting,
+    reviewSolutionImage,
+    showToast,
+  ]);
+
   const navigateHome = useCallback(() => {
     router.replace('/(tabs)' as never);
   }, [router]);
@@ -858,6 +1186,17 @@ export default function ReviewSessionPage() {
     setPreviewImage({
       uri: normalizedUri,
       title: '题目图片',
+    });
+  }, []);
+
+  const handleOpenReviewSolutionPreview = useCallback((uri: string) => {
+    const normalizedUri = uri.trim();
+    if (!normalizedUri) {
+      return;
+    }
+    setPreviewImage({
+      uri: normalizedUri,
+      title: '我的做法',
     });
   }, []);
 
@@ -949,6 +1288,8 @@ export default function ReviewSessionPage() {
     setIsVoiceRecording(false);
     setRecordingElapsedMs(0);
     setIsVoicePlaying(false);
+    setReviewSolutionImage(null);
+    setIsReviewSolutionImageBusy(false);
     voiceRecordingStartedAtRef.current = null;
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
@@ -1033,6 +1374,8 @@ export default function ReviewSessionPage() {
       setIsVoiceRecording(false);
       setRecordingElapsedMs(0);
       setIsVoicePlaying(false);
+      setReviewSolutionImage(null);
+      setIsReviewSolutionImageBusy(false);
       voiceRecordingStartedAtRef.current = null;
       voiceReplacePendingUriRef.current = null;
       voiceStopInProgressRef.current = false;
@@ -1045,6 +1388,8 @@ export default function ReviewSessionPage() {
     setIsVoiceRecording(false);
     setRecordingElapsedMs(0);
     setIsVoicePlaying(false);
+    setReviewSolutionImage(null);
+    setIsReviewSolutionImageBusy(false);
     voiceRecordingStartedAtRef.current = null;
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
@@ -1112,7 +1457,15 @@ export default function ReviewSessionPage() {
 
   const handleSelectResult = useCallback(
     async (result: ReviewResult, statsKey: SessionResultKey) => {
-      if (!currentQueueItem || !currentMeta || isLoadingCurrent || isSubmitting || isCompleted || isVoiceBusy) {
+      if (
+        !currentQueueItem ||
+        !currentMeta ||
+        isLoadingCurrent ||
+        isSubmitting ||
+        isCompleted ||
+        isVoiceBusy ||
+        isReviewSolutionImageBusy
+      ) {
         return;
       }
 
@@ -1131,6 +1484,7 @@ export default function ReviewSessionPage() {
           mistakeId: currentQueueItem.id,
           reviewIndex: currentMeta.nextReviewIndex,
           result,
+          solutionImageUri: reviewSolutionImage?.uri ?? null,
           voiceNote: toReviewRecordVoiceNote(voiceNote),
         });
 
@@ -1147,6 +1501,7 @@ export default function ReviewSessionPage() {
           showToast(isLast ? '已记录，今日复做完成' : '已记录，进入下一题', 'success');
         }
         setCurrentIndex((prev) => prev + 1);
+        setReviewSolutionImage(null);
       } catch (error) {
         Logger.error(PAGE_SCOPE, 'Failed to submit session review result.', {
           mistakeId: currentQueueItem.id,
@@ -1165,10 +1520,12 @@ export default function ReviewSessionPage() {
       incrementStats,
       isCompleted,
       isLoadingCurrent,
+      isReviewSolutionImageBusy,
       isSubmitting,
       isVoicePlaying,
       isVoiceBusy,
       isVoiceRecording,
+      reviewSolutionImage?.uri,
       showToast,
       stopVoicePlayback,
       totalCount,
@@ -1321,6 +1678,23 @@ export default function ReviewSessionPage() {
             ) : null}
 
             {!isLoadingCurrent && !currentErrorMessage ? (
+              <ReviewSolutionImageCard
+                image={reviewSolutionImage}
+                isBusy={isReviewSolutionImageBusy || isSubmitting || isVoiceRecording || isVoiceBusy}
+                onTakePhoto={() => {
+                  void saveReviewSolutionImage('camera');
+                }}
+                onPickImage={() => {
+                  void saveReviewSolutionImage('album');
+                }}
+                onDelete={() => {
+                  void deleteReviewSolutionImage();
+                }}
+                onPreview={handleOpenReviewSolutionPreview}
+              />
+            ) : null}
+
+            {!isLoadingCurrent && !currentErrorMessage ? (
               <CardContainer style={styles.voiceCard} padding={spacing.lg}>
                 <View style={styles.voiceHeaderRow}>
                   <View style={styles.voiceIconWrap}>
@@ -1462,7 +1836,7 @@ export default function ReviewSessionPage() {
                 <Pressable
                   key={action.value}
                   onPress={() => void handleSelectResult(action.value, action.statsKey)}
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isReviewSolutionImageBusy}
                   style={[
                     styles.resultButton,
                     action.tone === 'known'
@@ -1470,12 +1844,14 @@ export default function ReviewSessionPage() {
                       : action.tone === 'fuzzy'
                         ? styles.resultButtonFuzzy
                         : styles.resultButtonUnknown,
-                    isSubmitting ? styles.disabledControl : null,
+                    (isSubmitting || isReviewSolutionImageBusy) ? styles.disabledControl : null,
                   ]}>
                   <View style={styles.resultButtonContent}>
-                    {isSubmitting ? null : <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>}
+                    {isSubmitting || isReviewSolutionImageBusy ? null : (
+                      <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>
+                    )}
                     <Text numberOfLines={1} style={styles.resultButtonText}>
-                      {isSubmitting ? '记录中...' : action.label}
+                      {isSubmitting ? '记录中...' : isReviewSolutionImageBusy ? '图片中...' : action.label}
                     </Text>
                   </View>
                 </Pressable>
@@ -1723,6 +2099,116 @@ const styles = StyleSheet.create({
     color: '#DC2626',
     textAlign: 'center',
     fontWeight: '600',
+  },
+  solutionCard: {
+    borderRadius: radius.xl,
+    gap: spacing.sm,
+  },
+  solutionIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#DBEAFE',
+  },
+  solutionHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  solutionTitle: {
+    ...typography.sectionTitle,
+    fontSize: 21,
+    lineHeight: 28,
+    color: '#0F172A',
+    fontWeight: '800',
+  },
+  solutionDescription: {
+    ...typography.bodySmall,
+    color: '#64748B',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+  solutionImageWrap: {
+    width: '100%',
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#EEF2F7',
+    padding: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  solutionImageWrapEmpty: {
+    borderStyle: 'dashed',
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+  },
+  solutionPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  solutionPlaceholderText: {
+    ...typography.bodySmall,
+    color: '#64748B',
+    fontWeight: '700',
+  },
+  solutionActionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  solutionActionButton: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  solutionActionButtonPrimary: {
+    borderColor: '#BBF7D0',
+    backgroundColor: '#F0FDF4',
+  },
+  solutionActionButtonPressed: {
+    opacity: 0.78,
+  },
+  solutionActionButtonText: {
+    ...typography.bodySmall,
+    color: '#1F2937',
+    fontWeight: '800',
+  },
+  solutionActionButtonPrimaryText: {
+    ...typography.bodySmall,
+    color: colors.success,
+    fontWeight: '800',
+  },
+  solutionDeleteButton: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
+    width: 30,
+    height: 30,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: 'rgba(248, 250, 252, 0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  solutionDeleteButtonPressed: {
+    opacity: 0.82,
+  },
+  solutionFileSizeText: {
+    ...typography.caption,
+    color: '#64748B',
+    fontWeight: '700',
   },
   voiceCard: {
     borderRadius: radius.xl,
