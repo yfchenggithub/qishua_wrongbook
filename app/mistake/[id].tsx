@@ -1750,9 +1750,11 @@ export default function MistakeDetailScreen() {
   const {
     orderedSlots,
     takePhotoType,
+    pickImageType,
     deleteType,
     isTypeBusy,
     takePhotoForType,
+    pickImageForType,
     deleteImageForType,
   } = useMistakeDetailImages({
     mistakeId: state.kind === 'success' ? state.detail.id : null,
@@ -1779,6 +1781,7 @@ export default function MistakeDetailScreen() {
     || isRefreshing
     || isSavingTitle
     || takePhotoType !== null
+    || pickImageType !== null
     || deleteType !== null
     || activeReviewRecordId !== null
     || activeVoiceRecordingRecordId !== null
@@ -2497,6 +2500,7 @@ export default function MistakeDetailScreen() {
                   disabled={
                     isRefreshing
                     || takePhotoType !== null
+                    || pickImageType !== null
                     || deleteType !== null
                     || activeReviewRecordId !== null
                     || activeVoiceRecordingRecordId !== null
@@ -2506,6 +2510,7 @@ export default function MistakeDetailScreen() {
                     styles.refreshButton,
                     (isRefreshing
                       || takePhotoType !== null
+                      || pickImageType !== null
                       || deleteType !== null
                       || activeReviewRecordId !== null
                       || activeVoiceRecordingRecordId !== null
@@ -2538,9 +2543,13 @@ export default function MistakeDetailScreen() {
                       loadErrorText={slotType === 'question' ? '题目图片加载失败' : '图片加载失败'}
                       isBusy={isTypeBusy(slotType)}
                       isTakePhotoLoading={takePhotoType === slotType}
+                      isPickImageLoading={pickImageType === slotType}
                       isDeleteLoading={deleteType === slotType}
                       onTakePhoto={() => {
                         void takePhotoForType(slotType);
+                      }}
+                      onPickImage={() => {
+                        void pickImageForType(slotType);
                       }}
                       onEdit={() => handlePressEdit(slot)}
                       onDelete={() => handlePressDelete(slotType)}

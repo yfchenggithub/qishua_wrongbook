@@ -40,8 +40,10 @@ export interface MistakeImageSectionProps {
   imageHeight?: number | null;
   isBusy?: boolean;
   isTakePhotoLoading?: boolean;
+  isPickImageLoading?: boolean;
   isDeleteLoading?: boolean;
   onTakePhoto: () => void;
+  onPickImage: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onPreview: () => void;
@@ -145,8 +147,10 @@ export function MistakeImageSection({
   imageHeight,
   isBusy = false,
   isTakePhotoLoading = false,
+  isPickImageLoading = false,
   isDeleteLoading = false,
   onTakePhoto,
+  onPickImage,
   onEdit,
   onDelete,
   onPreview,
@@ -280,6 +284,16 @@ export function MistakeImageSection({
             disabled={isBusy}
             style={[styles.pillButton, isBusy && styles.pillButtonDisabled]}>
             <Text style={styles.pillButtonText}>{isTakePhotoLoading ? '处理中' : '拍照'}</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              Logger.info(COMPONENT_SCOPE, 'Tap pick image button.', { title });
+              onPickImage();
+            }}
+            disabled={isBusy}
+            style={[styles.pillButton, isBusy && styles.pillButtonDisabled]}>
+            <Text style={styles.pillButtonText}>{isPickImageLoading ? '处理中' : '相册'}</Text>
           </Pressable>
 
           <Pressable

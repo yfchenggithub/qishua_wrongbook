@@ -18,9 +18,11 @@ type UseMistakeDetailImagesParams = {
 type UseMistakeDetailImagesResult = {
   orderedSlots: DetailImageSlot[];
   takePhotoType: ManagedDetailImageType | null;
+  pickImageType: ManagedDetailImageType | null;
   deleteType: ManagedDetailImageType | null;
   isTypeBusy: (type: ManagedDetailImageType) => boolean;
   takePhotoForType: (type: ManagedDetailImageType) => Promise<void>;
+  pickImageForType: (type: ManagedDetailImageType) => Promise<void>;
   deleteImageForType: (type: ManagedDetailImageType) => Promise<boolean>;
 };
 
@@ -59,6 +61,7 @@ export function useMistakeDetailImages({
   showToast,
 }: UseMistakeDetailImagesParams): UseMistakeDetailImagesResult {
   const [takePhotoType, setTakePhotoType] = useState<ManagedDetailImageType | null>(null);
+  const [pickImageType, setPickImageType] = useState<ManagedDetailImageType | null>(null);
   const [deleteType, setDeleteType] = useState<ManagedDetailImageType | null>(null);
   const isMountedRef = useRef(true);
 
@@ -104,8 +107,9 @@ export function useMistakeDetailImages({
   }, [mistakeId, orderedSlots]);
 
   const isTypeBusy = useCallback(
-    (type: ManagedDetailImageType) => takePhotoType === type || deleteType === type,
-    [deleteType, takePhotoType],
+    (type: ManagedDetailImageType) =>
+      takePhotoType === type || pickImageType === type || deleteType === type,
+    [deleteType, pickImageType, takePhotoType],
   );
 
   const takePhotoForType = useCallback(
@@ -113,7 +117,7 @@ export function useMistakeDetailImages({
       if (!mistakeId) {
         return;
       }
-      if (takePhotoType !== null || deleteType !== null) {
+      if (takePhotoType !== null || pickImageType !== null || deleteType !== null) {
         return;
       }
 
@@ -189,7 +193,91 @@ export function useMistakeDetailImages({
         }
       }
     },
-    [deleteType, mistakeId, refreshDetail, showToast, takePhotoType],
+    [deleteType, mistakeId, pickImageType, refreshDetail, showToast, takePhotoType],
+  );
+
+  const pickImageForType = useCallback(
+    async (type: ManagedDetailImageType) => {
+      if (!mistakeId) {
+        return;
+      }
+      if (takePhotoType !== null || pickImageType !== null || deleteType !== null) {
+        return;
+      }
+
+      Logger.info(HOOK_SCOPE, 'Pick image clicked.', {
+        mistakeId,
+        imageType: type,
+      });
+      setPickImageType(type);
+
+      try {
+        const saveResult = await ImageService.pickImageAndSave({
+          mistakeId,
+          type,
+        });
+        const imageUri = saveResult.image?.uri?.trim();
+
+        if (!saveResult.ok || !imageUri) {
+          if (isCancelLikeMessage(saveResult.errorMessage)) {
+            Logger.info(HOOK_SCOPE, 'Pick image canceled by user.', {
+              mistakeId,
+              imageType: type,
+            });
+            return;
+          }
+
+          Logger.warn(HOOK_SCOPE, 'Pick image failed before database update.', {
+            mistakeId,
+            imageType: type,
+            errorMessage: saveResult.errorMessage ?? null,
+          });
+          showToast('图片保存失败，已保留原图', 'error');
+          return;
+        }
+
+        Logger.info(HOOK_SCOPE, 'Image picked and saved to local storage.', {
+          mistakeId,
+          imageType: type,
+          imageUriShort: toShortUri(imageUri),
+        });
+
+        const persistResult = await MistakeDetailService.upsertMistakeDetailImage({
+          mistakeId,
+          imageType: type,
+          imageUri,
+        });
+        if (!persistResult.ok) {
+          Logger.error(HOOK_SCOPE, 'Database update failed after picking image.', {
+            mistakeId,
+            imageType: type,
+            errorMessage: persistResult.errorMessage ?? null,
+          });
+          showToast('图片保存失败，已保留原图', 'error');
+          return;
+        }
+
+        Logger.info(HOOK_SCOPE, 'Database updated after picking image.', {
+          mistakeId,
+          imageType: type,
+          imageId: persistResult.imageId ?? null,
+        });
+
+        await refreshDetail();
+      } catch (error) {
+        Logger.error(HOOK_SCOPE, 'pickImageForType failed unexpectedly.', {
+          mistakeId,
+          imageType: type,
+          error,
+        });
+        showToast('图片保存失败，已保留原图', 'error');
+      } finally {
+        if (isMountedRef.current) {
+          setPickImageType(null);
+        }
+      }
+    },
+    [deleteType, mistakeId, pickImageType, refreshDetail, showToast, takePhotoType],
   );
 
   const deleteImageForType = useCallback(
@@ -197,7 +285,7 @@ export function useMistakeDetailImages({
       if (!mistakeId) {
         return false;
       }
-      if (takePhotoType !== null || deleteType !== null) {
+      if (takePhotoType !== null || pickImageType !== null || deleteType !== null) {
         return false;
       }
 
@@ -237,15 +325,17 @@ export function useMistakeDetailImages({
         }
       }
     },
-    [deleteType, mistakeId, refreshDetail, showToast, takePhotoType],
+    [deleteType, mistakeId, pickImageType, refreshDetail, showToast, takePhotoType],
   );
 
   return {
     orderedSlots,
     takePhotoType,
+    pickImageType,
     deleteType,
     isTypeBusy,
     takePhotoForType,
+    pickImageForType,
     deleteImageForType,
   };
 }
