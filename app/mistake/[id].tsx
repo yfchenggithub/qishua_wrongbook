@@ -407,6 +407,32 @@ function getToastBackgroundColor(type: ToastType): string {
   return 'rgba(38, 44, 53, 0.95)';
 }
 
+function buildSwitchToastMessage(
+  switchFrom: Exclude<DetailSwitchFrom, null>,
+  currentIndex: number,
+  total: number,
+): string {
+  const safeTotal = Math.max(1, Math.floor(total));
+  const safeCurrentIndex =
+    Number.isFinite(currentIndex) && currentIndex >= 0
+      ? Math.min(safeTotal - 1, Math.floor(currentIndex))
+      : 0;
+  const displayIndex = safeCurrentIndex + 1;
+  const positionText = `${displayIndex}/${safeTotal}`;
+
+  if (switchFrom === 'bottom') {
+    if (safeTotal > 1 && safeCurrentIndex === 0) {
+      return `已回到第一题 · ${positionText}`;
+    }
+    return `已切到下一题 · ${positionText}`;
+  }
+
+  if (safeTotal > 1 && safeCurrentIndex === safeTotal - 1) {
+    return `已到最后一题 · ${positionText}`;
+  }
+  return `已切到上一题 · ${positionText}`;
+}
+
 function normalizeErrorMessage(message?: string): string {
   if (typeof message !== 'string') {
     return '';
@@ -731,6 +757,7 @@ export default function MistakeDetailScreen() {
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const allowNextLeaveRef = useRef(false);
+  const switchToastKeyRef = useRef<string | null>(null);
   const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
 
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
@@ -1779,6 +1806,42 @@ export default function MistakeDetailScreen() {
     }
     return '当前暂无可切换题目';
   }, [browseContext.ids.length, browseContext.mode, browseCurrentIndex, state]);
+
+  useEffect(() => {
+    if (!routeSwitchFrom || state.kind !== 'success') {
+      return;
+    }
+
+    const total = browseContext.ids.length;
+    if (total <= 1 || browseCurrentIndex < 0) {
+      return;
+    }
+
+    const toastKey = [
+      state.detail.id,
+      routeSwitchFrom,
+      browseContext.mode,
+      browseCurrentIndex,
+      total,
+    ].join(':');
+    if (switchToastKeyRef.current === toastKey) {
+      return;
+    }
+
+    switchToastKeyRef.current = toastKey;
+    showToast(
+      buildSwitchToastMessage(routeSwitchFrom, browseCurrentIndex, total),
+      'info',
+      TOAST_DURATION_SHORT,
+    );
+  }, [
+    browseContext.ids.length,
+    browseContext.mode,
+    browseCurrentIndex,
+    routeSwitchFrom,
+    showToast,
+    state,
+  ]);
 
   const navigateRelativeMistake = useCallback(
     (direction: 'next' | 'prev', trigger: 'scroll_top' | 'scroll_bottom') => {
