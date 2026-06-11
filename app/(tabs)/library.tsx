@@ -3,6 +3,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Image,
   Pressable,
@@ -23,6 +24,7 @@ import {
 import type { MistakeListFilter, MistakeListItem } from '@/src/models/MistakeListItem';
 import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
 import { Logger } from '@/src/services/Logger';
+import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
@@ -65,12 +67,17 @@ function ThumbnailPlaceholder() {
 
 function MistakeLibraryCard({
   item,
+  isDeleting = false,
   onPress,
+  onLongPress,
 }: {
   item: MistakeListItem;
+  isDeleting?: boolean;
   onPress: () => void;
+  onLongPress: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
+  const didLongPressRef = useRef(false);
 
   useEffect(() => {
     setImageFailed(false);
@@ -102,7 +109,20 @@ function MistakeLibraryCard({
   }, [nextReviewInfo.absoluteDate, nextReviewInfo.displayText, nextReviewInfo.label]);
 
   return (
-    <Pressable onPress={onPress} style={styles.cardPressable}>
+    <Pressable
+      disabled={isDeleting}
+      onLongPress={() => {
+        didLongPressRef.current = true;
+        onLongPress();
+      }}
+      onPress={() => {
+        if (didLongPressRef.current) {
+          didLongPressRef.current = false;
+          return;
+        }
+        onPress();
+      }}
+      style={[styles.cardPressable, isDeleting && styles.cardPressableDisabled]}>
       <CardContainer padding={14} style={styles.card}>
         <View style={styles.cardRow}>
           {showImage ? (
@@ -190,6 +210,12 @@ function MistakeLibraryCard({
             </View>
           </View>
         </View>
+        {isDeleting ? (
+          <View pointerEvents="none" style={styles.cardDeletingMask}>
+            <ActivityIndicator size="small" color={colors.danger} />
+            <Text style={styles.cardDeletingText}>删除中...</Text>
+          </View>
+        ) : null}
       </CardContainer>
     </Pressable>
   );
@@ -203,6 +229,7 @@ export default function LibraryScreen() {
   const [items, setItems] = useState<MistakeListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [deletingMistakeId, setDeletingMistakeId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const hasLoadedRef = useRef(false);
@@ -303,6 +330,10 @@ export default function LibraryScreen() {
 
   const handleOpenDetail = useCallback(
     (id: string) => {
+      if (deletingMistakeId !== null) {
+        return;
+      }
+
       const routeId = normalizeMistakeId(id);
       if (!routeId) {
         Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
@@ -310,7 +341,67 @@ export default function LibraryScreen() {
       }
       router.push(`/mistake/${routeId}` as never);
     },
-    [router]
+    [deletingMistakeId, router]
+  );
+
+  const handleLongPressDelete = useCallback(
+    (item: MistakeListItem) => {
+      if (deletingMistakeId !== null || isLoading || isRefreshing) {
+        return;
+      }
+
+      const mistakeId = normalizeMistakeId(item.id);
+      if (!mistakeId) {
+        Logger.warn(PAGE_SCOPE, 'Skip deleting because mistake id is empty.', { id: item.id });
+        return;
+      }
+
+      const title = item.title.trim();
+      const titlePreview = title.length > 18 ? `${title.slice(0, 18)}...` : title;
+
+      Alert.alert(
+        '删除这道错题？',
+        `将删除「${titlePreview}」及其复做记录、图片和语音讲解，删除后无法恢复。`,
+        [
+          {
+            text: '取消',
+            style: 'cancel',
+          },
+          {
+            text: '确认删除',
+            style: 'destructive',
+            onPress: () => {
+              void (async () => {
+                setDeletingMistakeId(mistakeId);
+                try {
+                  const result = await MistakeDetailService.deleteMistake(mistakeId);
+                  if (!result.ok) {
+                    Alert.alert('删除失败', result.errorMessage ?? '删除错题失败，请稍后重试。');
+                    return;
+                  }
+
+                  setItems((currentItems) =>
+                    currentItems.filter((currentItem) => currentItem.id !== mistakeId),
+                  );
+                } catch (error) {
+                  Logger.error(PAGE_SCOPE, 'Failed to delete mistake from library.', {
+                    mistakeId,
+                    error,
+                  });
+                  Alert.alert(
+                    '删除失败',
+                    error instanceof Error ? error.message : '删除错题失败，请稍后重试。',
+                  );
+                } finally {
+                  setDeletingMistakeId(null);
+                }
+              })();
+            },
+          },
+        ],
+      );
+    },
+    [deletingMistakeId, isLoading, isRefreshing],
   );
 
   const emptyConfig = useMemo(() => {
@@ -380,7 +471,12 @@ export default function LibraryScreen() {
         data={items}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <MistakeLibraryCard item={item} onPress={() => handleOpenDetail(item.id)} />
+          <MistakeLibraryCard
+            item={item}
+            isDeleting={deletingMistakeId === item.id}
+            onPress={() => handleOpenDetail(item.id)}
+            onLongPress={() => handleLongPressDelete(item)}
+          />
         )}
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
         showsVerticalScrollIndicator={false}
@@ -544,8 +640,13 @@ const styles = StyleSheet.create({
     marginHorizontal: 14,
     borderRadius: radius.xl,
   },
+  cardPressableDisabled: {
+    opacity: 0.76,
+  },
   card: {
     borderRadius: 26,
+    position: 'relative',
+    overflow: 'hidden',
   },
   cardRow: {
     flexDirection: 'row',
@@ -556,6 +657,23 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     gap: 6,
+  },
+  cardDeletingMask: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    backgroundColor: 'rgba(255, 255, 255, 0.86)',
+  },
+  cardDeletingText: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '800',
   },
   cardTopLine: {
     flexDirection: 'row',

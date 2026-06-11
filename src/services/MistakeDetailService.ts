@@ -10,11 +10,13 @@ import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
-import { getImageInfo } from '@/src/services/ImageStorageService';
+import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
+import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { formatDateShort, getLocalDayRange } from '@/src/utils/date';
 
 const SERVICE_SCOPE = 'MistakeDetailService';
 const FALLBACK_ERROR_MESSAGE = '读取错题详情失败，请稍后重试。';
+const DELETE_MISTAKE_ERROR_MESSAGE = '删除错题失败，请稍后重试。';
 const MODULE_NAVIGATION_LIMIT = 500;
 
 export type ManagedDetailImageType = Exclude<DetailImageSlot['type'], 'review_solution'>;
@@ -88,19 +90,28 @@ export type UpdateMistakeTitleResult = {
   errorMessage?: string;
 };
 
+export type DeleteMistakeResult = {
+  ok: boolean;
+  deleted?: boolean;
+  imageFolderDeleted?: boolean;
+  deletedVoiceNoteCount?: number;
+  failedVoiceNoteCount?: number;
+  errorMessage?: string;
+};
+
 type SlotSeed = {
   type: DetailImageSlot['type'];
   title: string;
   emptyText: string;
 };
 
-function toErrorMessage(error: unknown): string {
+function toErrorMessage(error: unknown, fallback = FALLBACK_ERROR_MESSAGE): string {
   if (error instanceof Error) {
     const trimmed = error.message.trim();
-    return trimmed.length > 0 ? trimmed : FALLBACK_ERROR_MESSAGE;
+    return trimmed.length > 0 ? trimmed : fallback;
   }
   const text = String(error ?? '').trim();
-  return text.length > 0 ? text : FALLBACK_ERROR_MESSAGE;
+  return text.length > 0 ? text : fallback;
 }
 
 function normalizeMistakeId(id: string): string {
@@ -609,6 +620,81 @@ export async function deleteMistakeDetailImage(
     return {
       ok: false,
       errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function deleteMistake(mistakeIdInput: string): Promise<DeleteMistakeResult> {
+  const mistakeId = normalizeMistakeId(mistakeIdInput);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  try {
+    const reviewRecords = await ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId);
+    const voiceNoteUris = Array.from(
+      new Set(
+        reviewRecords
+          .map((record) => normalizeOptionalText(record.voice_note?.fileUri))
+          .filter((uri): uri is string => typeof uri === 'string'),
+      ),
+    );
+
+    const deleted = await MistakeRepository.deleteMistake(mistakeId);
+    if (!deleted) {
+      return {
+        ok: false,
+        deleted: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    const imageFolderDeleted = await deleteMistakeImageFolder(mistakeId);
+    let deletedVoiceNoteCount = 0;
+    let failedVoiceNoteCount = 0;
+
+    for (const voiceNoteUri of voiceNoteUris) {
+      const deleteVoiceResult = await VoiceNoteService.deleteVoiceNote(voiceNoteUri);
+      if (deleteVoiceResult.ok) {
+        if (deleteVoiceResult.deleted) {
+          deletedVoiceNoteCount += 1;
+        }
+        continue;
+      }
+
+      failedVoiceNoteCount += 1;
+      Logger.warn(SERVICE_SCOPE, 'Failed to delete voice note while deleting mistake.', {
+        mistakeId,
+        voiceNoteUriShort: toShortUri(voiceNoteUri),
+        errorMessage: deleteVoiceResult.errorMessage ?? null,
+      });
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Deleted mistake successfully.', {
+      mistakeId,
+      imageFolderDeleted,
+      deletedVoiceNoteCount,
+      failedVoiceNoteCount,
+    });
+
+    return {
+      ok: true,
+      deleted: true,
+      imageFolderDeleted,
+      deletedVoiceNoteCount,
+      failedVoiceNoteCount,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'deleteMistake failed.', {
+      mistakeId,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error, DELETE_MISTAKE_ERROR_MESSAGE),
     };
   }
 }

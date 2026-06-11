@@ -699,6 +699,7 @@ export default function MistakeDetailScreen() {
   const [isTitleEditing, setIsTitleEditing] = useState(false);
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [isDeletingMistake, setIsDeletingMistake] = useState(false);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
   const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
   const [isVoicePlaybackBusy, setIsVoicePlaybackBusy] = useState(false);
@@ -1746,6 +1747,16 @@ export default function MistakeDetailScreen() {
     });
   }, [state]);
 
+  const isDeleteMistakeDisabled =
+    isDeletingMistake
+    || isRefreshing
+    || isSavingTitle
+    || takePhotoType !== null
+    || deleteType !== null
+    || activeReviewRecordId !== null
+    || activeVoiceRecordingRecordId !== null
+    || isVoiceRecordingBusy;
+
   const browseCurrentIndex = useMemo(() => {
     if (state.kind !== 'success') {
       return -1;
@@ -2024,6 +2035,79 @@ export default function MistakeDetailScreen() {
     }
   }, []);
 
+  const handlePressDeleteMistake = useCallback(() => {
+    if (state.kind !== 'success' || isDeletingMistake) {
+      return;
+    }
+
+    if (isDeleteMistakeDisabled) {
+      if (activeVoiceRecordingRecordId !== null) {
+        showToast('正在录音，请先结束或放弃录音后再删除。', 'info');
+        return;
+      }
+      showToast('当前正在处理，请稍后再删除。', 'info');
+      return;
+    }
+
+    const mistakeId = state.detail.id;
+    const title = state.detail.title.trim();
+    const titlePreview = title.length > 18 ? `${title.slice(0, 18)}...` : title;
+
+    Alert.alert(
+      '删除这道错题？',
+      `将删除「${titlePreview}」及其复做记录、图片和语音讲解，删除后无法恢复。`,
+      [
+        {
+          text: '取消',
+          style: 'cancel',
+        },
+        {
+          text: '确认删除',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              let shouldResetDeleting = true;
+              setIsDeletingMistake(true);
+              try {
+                await stopVoicePlayback(false);
+                const result = await MistakeDetailService.deleteMistake(mistakeId);
+                if (!result.ok) {
+                  showToast(result.errorMessage ?? '删除错题失败，请重试。', 'error', TOAST_DURATION_LONG);
+                  return;
+                }
+
+                shouldResetDeleting = false;
+                allowNextLeaveRef.current = true;
+                router.replace('/(tabs)/library' as never);
+              } catch (error) {
+                Logger.error(PAGE_SCOPE, 'Unexpected error while deleting mistake.', {
+                  mistakeId,
+                  error,
+                });
+                showToast(
+                  error instanceof Error ? error.message : '删除错题失败，请重试。',
+                  'error',
+                  TOAST_DURATION_LONG,
+                );
+              } finally {
+                if (shouldResetDeleting) {
+                  setIsDeletingMistake(false);
+                }
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, [
+    activeVoiceRecordingRecordId,
+    isDeleteMistakeDisabled,
+    isDeletingMistake,
+    router,
+    showToast,
+    state,
+    stopVoicePlayback,
+  ]);
 
   const handlePressDelete = useCallback(
     (type: ManagedDetailType) => {
@@ -2235,8 +2319,29 @@ export default function MistakeDetailScreen() {
         {state.kind === 'success' ? (
           <>
             <CardContainer style={styles.summaryCard} padding={spacing.xl}>
-              <View style={styles.summaryMetaRow}>
-                <Text style={styles.summaryMeta}>{state.detail.module}</Text>
+              <View style={styles.summaryHeaderRow}>
+                <View style={styles.summaryMetaRow}>
+                  <Text style={styles.summaryMeta}>{state.detail.module}</Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="删除错题"
+                  disabled={isDeleteMistakeDisabled}
+                  onPress={handlePressDeleteMistake}
+                  style={({ pressed }) => [
+                    styles.deleteMistakeButton,
+                    pressed && !isDeleteMistakeDisabled && styles.deleteMistakeButtonPressed,
+                    isDeleteMistakeDisabled && styles.deleteMistakeButtonDisabled,
+                  ]}>
+                  {isDeletingMistake ? (
+                    <ActivityIndicator size="small" color={colors.danger} />
+                  ) : (
+                    <MaterialIcons name="delete-outline" size={17} color={colors.danger} />
+                  )}
+                  <Text style={styles.deleteMistakeButtonText}>
+                    {isDeletingMistake ? '删除中...' : '删除'}
+                  </Text>
+                </Pressable>
               </View>
               <View style={styles.summaryTitleRow}>
                 {isTitleEditing ? (
@@ -2551,6 +2656,12 @@ const styles = StyleSheet.create({
   summaryCard: {
     borderRadius: radius.xl,
   },
+  summaryHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
   summaryMetaRow: {
     alignSelf: 'flex-start',
     borderRadius: radius.md,
@@ -2562,6 +2673,31 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: '#4E5A52',
     fontWeight: '700',
+  },
+  deleteMistakeButton: {
+    minWidth: 78,
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#F3C8C8',
+    backgroundColor: '#FFF1F1',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  deleteMistakeButtonPressed: {
+    opacity: 0.82,
+  },
+  deleteMistakeButtonDisabled: {
+    opacity: 0.56,
+  },
+  deleteMistakeButtonText: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '800',
   },
   summaryTitle: {
     ...typography.titleMedium,
@@ -2920,6 +3056,3 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
-
-
-
