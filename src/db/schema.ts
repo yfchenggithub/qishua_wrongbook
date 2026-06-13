@@ -57,6 +57,18 @@ CREATE TABLE IF NOT EXISTS module_question_counters (
 );
 `;
 
+export const CREATE_CUSTOM_MODULES_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS custom_modules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  icon TEXT NOT NULL DEFAULT 'label',
+  color TEXT NOT NULL DEFAULT '#2EBB61',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const CREATE_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
 CREATE INDEX IF NOT EXISTS idx_mistakes_next_review_at ON mistakes(next_review_at);
@@ -70,6 +82,7 @@ CREATE INDEX IF NOT EXISTS idx_mistake_images_mistake_id ON mistake_images(mista
 CREATE INDEX IF NOT EXISTS idx_mistake_images_mistake_type ON mistake_images(mistake_id, type);
 CREATE INDEX IF NOT EXISTS idx_mistake_images_review_record_id ON mistake_images(review_record_id);
 CREATE INDEX IF NOT EXISTS idx_mistake_images_cover ON mistake_images(mistake_id, type, sort_order);
+CREATE INDEX IF NOT EXISTS idx_custom_modules_sort_order ON custom_modules(sort_order, created_at);
 `;
 
 export const CREATE_SCHEMA_SQL = `
@@ -77,5 +90,6 @@ ${CREATE_MISTAKES_TABLE_SQL}
 ${CREATE_REVIEW_RECORDS_TABLE_SQL}
 ${CREATE_MISTAKE_IMAGES_TABLE_SQL}
 ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
+${CREATE_CUSTOM_MODULES_TABLE_SQL}
 ${CREATE_INDEXES_SQL}
 `;

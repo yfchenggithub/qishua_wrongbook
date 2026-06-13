@@ -1,9 +1,11 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Animated, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
   BrandHeader,
   CardContainer,
+  CustomModuleManagerModal,
   FloatingBottomCta,
   ImagePreviewModal,
   PrimaryButton,
@@ -17,12 +19,14 @@ import {
   MODULE_OPTIONS,
 } from '@/src/constants/mistakeOptions';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
+import type { CustomModule } from '@/src/models/CustomModule';
 import type { LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import {
   createEmptyAddMistakeDraft,
   validateAddMistakeDraft,
 } from '@/src/services/AddMistakeValidationService';
 import { createMistakeFromDraft } from '@/src/services/CreateMistakeService';
+import { CustomModuleService } from '@/src/services/CustomModuleService';
 import {
   deleteLocalImage,
   pickImageAndSave,
@@ -31,7 +35,7 @@ import {
 } from '@/src/services/ImageService';
 import { setAddScreenHasUnsavedPhotos } from '@/src/services/LeaveGuardService';
 import { Logger } from '@/src/services/Logger';
-import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
+import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 import { createMistakeId } from '@/src/utils/id';
 import { useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -508,6 +512,10 @@ export default function AddScreen() {
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showOptionalInfo, setShowOptionalInfo] = useState(false);
+  const [customModules, setCustomModules] = useState<CustomModule[]>([]);
+  const [customModuleModalVisible, setCustomModuleModalVisible] = useState(false);
+  const [customModuleBusy, setCustomModuleBusy] = useState(false);
+  const [customModuleMessage, setCustomModuleMessage] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string>('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -527,6 +535,15 @@ export default function AddScreen() {
   const effectiveSaveBarHeight = saveBarHeight > 0 ? saveBarHeight : fallbackSaveBarHeight;
   const contentBottomPadding = saveBarBottomOffset + effectiveSaveBarHeight + spacing.lg;
   const toastBottomOffset = saveBarBottomOffset + effectiveSaveBarHeight + spacing.sm;
+  const moduleOptions = [
+    ...MODULE_OPTIONS,
+    ...customModules
+      .filter((moduleItem) => !MODULE_OPTIONS.some((item) => item.value === moduleItem.name))
+      .map((moduleItem) => ({
+        value: moduleItem.name,
+        label: moduleItem.name,
+      })),
+  ];
 
   const saveHintTextV2 = isSaving
     ? '正在保存...'
@@ -648,12 +665,160 @@ export default function AddScreen() {
     }, duration);
   }
 
+  async function handleCreateCustomModule(moduleName: string): Promise<boolean> {
+    if (customModuleBusy) {
+      return false;
+    }
+
+    setCustomModuleBusy(true);
+    setCustomModuleMessage(null);
+    try {
+      const result = await CustomModuleService.createCustomModule(moduleName);
+      if (!result.ok) {
+        const message = result.errorMessage ?? '创建自定义模块失败';
+        setCustomModuleMessage(message);
+        showToast(message, 'warning', TOAST_DURATION_LONG);
+        return false;
+      }
+
+      if (result.modules) {
+        setCustomModules(result.modules);
+      }
+      if (result.module) {
+        updateDraft('module', result.module.name);
+      }
+      showToast('已添加自定义模块', 'success');
+      return true;
+    } finally {
+      setCustomModuleBusy(false);
+    }
+  }
+
+  async function handleUpdateCustomModule(moduleId: string, moduleName: string): Promise<boolean> {
+    if (customModuleBusy) {
+      return false;
+    }
+
+    const previousModule = customModules.find((item) => item.id === moduleId);
+    setCustomModuleBusy(true);
+    setCustomModuleMessage(null);
+    try {
+      const result = await CustomModuleService.updateCustomModuleName(moduleId, moduleName);
+      if (!result.ok) {
+        const message = result.errorMessage ?? '编辑自定义模块失败';
+        setCustomModuleMessage(message);
+        showToast(message, 'warning', TOAST_DURATION_LONG);
+        return false;
+      }
+
+      if (result.modules) {
+        setCustomModules(result.modules);
+      }
+      if (previousModule && draft.module === previousModule.name && result.module) {
+        updateDraft('module', result.module.name);
+      }
+      showToast('自定义模块已更新', 'success');
+      return true;
+    } finally {
+      setCustomModuleBusy(false);
+    }
+  }
+
+  function handleDeleteCustomModule(moduleItem: CustomModule) {
+    if (customModuleBusy) {
+      return;
+    }
+
+    Alert.alert('删除模块', `确认删除“${moduleItem.name}”？已保存错题不会被删除。`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setCustomModuleBusy(true);
+            setCustomModuleMessage(null);
+            try {
+              const result = await CustomModuleService.deleteCustomModule(moduleItem.id);
+              if (!result.ok) {
+                const message = result.errorMessage ?? '删除自定义模块失败';
+                setCustomModuleMessage(message);
+                showToast(message, 'error', TOAST_DURATION_LONG);
+                return;
+              }
+
+              if (result.modules) {
+                setCustomModules(result.modules);
+              }
+              if (draft.module === moduleItem.name) {
+                updateDraft('module', null);
+              }
+              showToast('自定义模块已删除', 'info');
+            } finally {
+              setCustomModuleBusy(false);
+            }
+          })();
+        },
+      },
+    ]);
+  }
+
+  function handleMoveCustomModule(moduleId: string, direction: 'up' | 'down') {
+    if (customModuleBusy) {
+      return;
+    }
+
+    void (async () => {
+      setCustomModuleBusy(true);
+      setCustomModuleMessage(null);
+      try {
+        const result = await CustomModuleService.moveCustomModule(moduleId, direction);
+        if (!result.ok) {
+          const message = result.errorMessage ?? '调整模块排序失败';
+          setCustomModuleMessage(message);
+          showToast(message, 'warning', TOAST_DURATION_LONG);
+          return;
+        }
+        if (result.modules) {
+          setCustomModules(result.modules);
+        }
+      } finally {
+        setCustomModuleBusy(false);
+      }
+    })();
+  }
+
+  async function handleUseCustomModuleTemplate(moduleName: string): Promise<boolean> {
+    return handleCreateCustomModule(moduleName);
+  }
+
   useEffect(() => {
     return () => {
       if (toastTimerRef.current) {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    CustomModuleService.listCustomModules()
+      .then((modules) => {
+        if (isMounted) {
+          setCustomModules(modules);
+        }
+      })
+      .catch((error) => {
+        Logger.error(PAGE_SCOPE, 'Failed to load custom modules.', { error });
+        if (isMounted) {
+          setCustomModuleMessage('自定义模块加载失败');
+        }
+      });
+
+    return () => {
+      isMounted = false;
     };
   }, []);
 
@@ -1094,20 +1259,6 @@ export default function AddScreen() {
       }
 
       if (successCount > 0) {
-        const partialMessage = `Saved ${successCount}, failed ${failedCount}. Please retry failed items.`;
-        setPhotoQueue(failedPhotos);
-        syncDraftQuestionImage(failedPhotos);
-        if (previewPhoto && !failedPhotos.some((item) => item.id === previewPhoto.id)) {
-          setPreviewPhoto(null);
-        }
-        if (lastTapInfo && !failedPhotos.some((item) => item.id === lastTapInfo.id)) {
-          setLastTapInfo(null);
-        }
-        setSaveErrorMessage(partialMessage);
-        showToast(`Saved ${successCount}, failed ${failedCount}. Please retry.`, 'warning', TOAST_DURATION_LONG);
-        return true;
-      }
-        /*
         const partialMessage = `成功 ${successCount} 道，失败 ${failedCount} 道`;
         setPhotoQueue(failedPhotos);
         syncDraftQuestionImage(failedPhotos);
@@ -1120,22 +1271,12 @@ export default function AddScreen() {
         setSaveErrorMessage(partialMessage);
         showToast(`已保存 ${successCount} 道，${failedCount} 道失败，请检查后重试`, 'warning', TOAST_DURATION_LONG);
         return true;
-        showToast(`已保存 ${successCount} 道，${failedCount} 道失败，请检查后重试`, 'warning', TOAST_DURATION_LONG);
-        return true;
       }
 
       const firstError = failedMessages[0] ?? '保存失败，请重试';
-      */
-      const firstError = failedMessages[0] ?? 'Save failed. Please retry.';
       setSaveErrorMessage(firstError);
-      showToast(`Save failed: ${firstError}`, 'error', TOAST_DURATION_LONG);
-      return true;
-      /*
       showToast(`保存失败：${firstError}`, 'error', TOAST_DURATION_LONG);
       return true;
-      showToast(`保存失败：${firstError}`, 'error', TOAST_DURATION_LONG);
-      return true;
-      */
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Unexpected error while batch saving draft.', {
         draftId: draft.draftId,
@@ -1143,17 +1284,8 @@ export default function AddScreen() {
       });
       const message = error instanceof Error ? error.message : String(error);
       setSaveErrorMessage(message);
-      showToast(`Save failed: ${message}`, 'error', TOAST_DURATION_LONG);
-      return true;
-      /*
-      if (Date.now() >= 0) {
-        return true;
-      }
       showToast(`保存失败：${message}`, 'error', TOAST_DURATION_LONG);
       return true;
-      showToast(`保存失败：${message}`, 'error', TOAST_DURATION_LONG);
-      return true;
-      */
     } finally {
       setIsSaving(false);
     }
@@ -1248,7 +1380,7 @@ export default function AddScreen() {
       <View style={styles.sectionBlock}>
         <SectionTitle title="选择模块" />
         <View style={styles.tagsRow}>
-          {MODULE_OPTIONS.map((item) => (
+          {moduleOptions.map((item) => (
             <TagChip
               key={item.value}
               label={item.label}
@@ -1257,6 +1389,26 @@ export default function AddScreen() {
             />
           ))}
         </View>
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => {
+            setCustomModuleMessage(null);
+            setCustomModuleModalVisible(true);
+          }}
+          style={({ pressed }) => [
+            styles.customModuleEntry,
+            pressed ? styles.customModuleEntryPressed : null,
+          ]}>
+          <MaterialIcons name="add" size={19} color={colors.textSecondary} />
+          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.customModuleEntryText}>
+            自定义模块
+          </Text>
+          <View style={styles.customModuleNewBadge}>
+            <Text maxFontSizeMultiplier={1.1} style={styles.customModuleNewBadgeText}>
+              New
+            </Text>
+          </View>
+        </Pressable>
       </View>
 
       {validationErrors.length > 0 ? (
@@ -1392,6 +1544,20 @@ export default function AddScreen() {
         interactionMode="zoomable"
         logSource="add_screen"
         onClose={handleClosePreview}
+      />
+      <CustomModuleManagerModal
+        visible={customModuleModalVisible}
+        customModules={customModules}
+        selectedModule={draft.module}
+        busy={customModuleBusy}
+        message={customModuleMessage}
+        onClose={() => setCustomModuleModalVisible(false)}
+        onSelectModule={(moduleName) => updateDraft('module', moduleName)}
+        onCreateModule={handleCreateCustomModule}
+        onUpdateModule={handleUpdateCustomModule}
+        onDeleteModule={handleDeleteCustomModule}
+        onMoveModule={handleMoveCustomModule}
+        onUseTemplate={handleUseCustomModuleTemplate}
       />
       </ScreenContainer>
 
@@ -1691,6 +1857,40 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.xs,
+  },
+  customModuleEntry: {
+    minHeight: 36,
+    alignSelf: 'stretch',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  customModuleEntryPressed: {
+    opacity: 0.84,
+  },
+  customModuleEntryText: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  customModuleNewBadge: {
+    borderRadius: radius.pill,
+    backgroundColor: colors.successBg,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 1,
+  },
+  customModuleNewBadgeText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '800',
   },
   inputCard: {
     borderRadius: radius.xl,

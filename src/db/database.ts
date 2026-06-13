@@ -5,7 +5,13 @@ import { CREATE_SCHEMA_SQL } from '@/src/db/schema';
 import { Logger } from '@/src/services/Logger';
 
 const DB_SCOPE = 'DatabaseService';
-const REQUIRED_TABLES = ['mistakes', 'mistake_images', 'review_records', 'module_question_counters'] as const;
+const REQUIRED_TABLES = [
+  'mistakes',
+  'mistake_images',
+  'review_records',
+  'module_question_counters',
+  'custom_modules',
+] as const;
 
 type UserVersionRow = {
   user_version: number;
@@ -67,6 +73,7 @@ DROP TABLE IF EXISTS mistake_images;
 DROP TABLE IF EXISTS review_records;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
+DROP TABLE IF EXISTS custom_modules;
 PRAGMA foreign_keys = ON;
 `);
   await applyBaseSchema(db);
@@ -222,6 +229,7 @@ DROP TABLE IF EXISTS review_records;
 DROP TABLE IF EXISTS mistake_images;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
+DROP TABLE IF EXISTS custom_modules;
 PRAGMA user_version = 0;
 PRAGMA foreign_keys = ON;
 `);
@@ -240,7 +248,7 @@ export async function checkDatabaseHealth(): Promise<DatabaseHealthReport> {
     const version = await readUserVersion(db);
 
     const tableRows = await db.getAllAsync<TableRow>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'module_question_counters')`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'module_question_counters', 'custom_modules')`,
     );
     const tables = tableRows.map((row) => row.name);
 

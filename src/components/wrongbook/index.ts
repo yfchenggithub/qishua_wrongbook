@@ -1,4 +1,5 @@
 export * from './BrandHeader';
+export * from './CustomModuleManagerModal';
 export * from './DetailImageCard';
 export * from './ImagePreviewModal';
 export * from './MistakeImageBrowser';
