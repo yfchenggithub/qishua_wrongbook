@@ -31,6 +31,7 @@ import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
+import * as ReviewDraftImageEditService from '@/src/services/ReviewDraftImageEditService';
 import type { ReviewSessionQueueItem } from '@/src/services/ReviewSessionService';
 import * as ReviewSessionService from '@/src/services/ReviewSessionService';
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
@@ -146,6 +147,13 @@ function formatFileSize(fileSize: number): string {
     return `${Math.round(fileSize / 1024)} KB`;
   }
   return `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function createReviewSolutionEditId(mistakeId: string): string {
+  const randomPart = Math.floor(Math.random() * 10000)
+    .toString()
+    .padStart(4, '0');
+  return `review-solution-edit-${mistakeId}-${Date.now()}-${randomPart}`;
 }
 
 function getReviewActionSymbol(tone: 'known' | 'fuzzy' | 'unknown'): string {
@@ -366,6 +374,7 @@ function ReviewSolutionImageCard({
   isBusy = false,
   onTakePhoto,
   onPickImage,
+  onEdit,
   onDelete,
   onPreview,
 }: {
@@ -373,6 +382,7 @@ function ReviewSolutionImageCard({
   isBusy?: boolean;
   onTakePhoto: () => void;
   onPickImage: () => void;
+  onEdit: () => void;
   onDelete: () => void;
   onPreview: (uri: string) => void;
 }) {
@@ -470,6 +480,7 @@ function ReviewSolutionImageCard({
 
   const hasImage = !!normalizedUri;
   const canShowImage = hasImage && !imageFailed;
+  const canEdit = hasImage && !imageFailed && !isBusy;
 
   return (
     <CardContainer style={styles.solutionCard} padding={spacing.lg}>
@@ -553,7 +564,7 @@ function ReviewSolutionImageCard({
             pressed && !isBusy && styles.solutionActionButtonPressed,
             isBusy && styles.disabledControl,
           ]}>
-          <Text style={styles.solutionActionButtonPrimaryText}>{isBusy ? '处理中...' : '拍照'}</Text>
+          <Text numberOfLines={1} style={styles.solutionActionButtonPrimaryText}>{isBusy ? '处理中...' : '拍照'}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -565,7 +576,19 @@ function ReviewSolutionImageCard({
             pressed && !isBusy && styles.solutionActionButtonPressed,
             isBusy && styles.disabledControl,
           ]}>
-          <Text style={styles.solutionActionButtonText}>{isBusy ? '处理中...' : '从相册选择'}</Text>
+          <Text numberOfLines={1} style={styles.solutionActionButtonText}>{isBusy ? '处理中...' : '从相册选择'}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="编辑我的做法"
+          disabled={!canEdit}
+          onPress={onEdit}
+          style={({ pressed }) => [
+            styles.solutionActionButton,
+            pressed && canEdit && styles.solutionActionButtonPressed,
+            !canEdit && styles.disabledControl,
+          ]}>
+          <Text numberOfLines={1} style={styles.solutionActionButtonText}>编辑</Text>
         </Pressable>
       </View>
 
@@ -627,6 +650,7 @@ export default function ReviewSessionPage() {
   const voiceReplacePendingUriRef = useRef<string | null>(null);
   const voiceStopInProgressRef = useRef(false);
   const allowNextLeaveRef = useRef(false);
+  const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
 
   const totalCount = queue.length;
   const hasRemaining = sessionState === 'ready' && currentIndex < totalCount;
@@ -1174,6 +1198,60 @@ export default function ReviewSessionPage() {
     showToast,
   ]);
 
+  const handleEditReviewSolutionImage = useCallback(() => {
+    if (
+      !currentQueueItem ||
+      !reviewSolutionImage ||
+      isReviewSolutionImageBusy ||
+      isSubmitting ||
+      isLoadingCurrent ||
+      !!currentErrorMessage ||
+      isVoiceRecording ||
+      isVoiceBusy
+    ) {
+      return;
+    }
+
+    const normalizedUri = typeof reviewSolutionImage.uri === 'string' ? reviewSolutionImage.uri.trim() : '';
+    if (!normalizedUri) {
+      showToast('请先拍照添加图片', 'info');
+      return;
+    }
+
+    const editId = createReviewSolutionEditId(currentQueueItem.id);
+    pendingReviewSolutionEditIdRef.current = editId;
+    Logger.info(PAGE_SCOPE, 'Open review solution draft image edit page.', {
+      mistakeId: currentQueueItem.id,
+      editId,
+      sourceUriLength: normalizedUri.length,
+    });
+
+    router.push(
+      {
+        pathname: '/mistake/[id]/image-edit',
+        params: {
+          id: currentQueueItem.id,
+          imageType: 'review_solution',
+          imageSlot: 'solution',
+          sourceUri: normalizedUri,
+          oldImageUri: normalizedUri,
+          draftEditId: editId,
+        },
+      } as never,
+    );
+  }, [
+    currentErrorMessage,
+    currentQueueItem,
+    isLoadingCurrent,
+    isReviewSolutionImageBusy,
+    isSubmitting,
+    isVoiceBusy,
+    isVoiceRecording,
+    reviewSolutionImage,
+    router,
+    showToast,
+  ]);
+
   const navigateHome = useCallback(() => {
     router.replace('/(tabs)' as never);
   }, [router]);
@@ -1229,6 +1307,40 @@ export default function ReviewSessionPage() {
       },
     ]);
   }, [confirmLeaveWhileRecording, hasRemaining, isCompleted, isVoiceRecording, navigateHome]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const editId = pendingReviewSolutionEditIdRef.current;
+      if (!editId) {
+        return;
+      }
+
+      pendingReviewSolutionEditIdRef.current = null;
+      const editResult = ReviewDraftImageEditService.consumeReviewDraftImageEditResult(editId);
+      if (!editResult) {
+        return;
+      }
+
+      if (!currentQueueItemId || editResult.mistakeId !== currentQueueItemId) {
+        void cleanupReviewSolutionImage(editResult.image);
+        showToast('编辑结果已过期，请重新添加图片', 'info');
+        Logger.warn(PAGE_SCOPE, 'Discarded stale review solution draft image edit result.', {
+          editId,
+          expectedMistakeId: currentQueueItemId,
+          actualMistakeId: editResult.mistakeId,
+        });
+        return;
+      }
+
+      setReviewSolutionImage((previousImage) => {
+        if (previousImage && previousImage.uri !== editResult.image.uri) {
+          void cleanupReviewSolutionImage(previousImage);
+        }
+        return editResult.image;
+      });
+      showToast('我的做法已更新', 'success');
+    }, [cleanupReviewSolutionImage, currentQueueItemId, showToast]),
+  );
 
   useFocusEffect(
     useCallback(() => {
@@ -1687,6 +1799,7 @@ export default function ReviewSessionPage() {
                 onPickImage={() => {
                   void saveReviewSolutionImage('album');
                 }}
+                onEdit={handleEditReviewSolutionImage}
                 onDelete={() => {
                   void deleteReviewSolutionImage();
                 }}
@@ -2183,11 +2296,15 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: '#1F2937',
     fontWeight: '800',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   solutionActionButtonPrimaryText: {
     ...typography.bodySmall,
     color: colors.success,
     fontWeight: '800',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   solutionDeleteButton: {
     position: 'absolute',

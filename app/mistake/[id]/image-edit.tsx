@@ -21,6 +21,7 @@ import * as ImageStorageService from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
 import type { ManagedDetailImageType } from '@/src/services/MistakeDetailService';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
+import * as ReviewDraftImageEditService from '@/src/services/ReviewDraftImageEditService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
@@ -75,6 +76,7 @@ type PageState =
       imageSlot: ImageSlot;
       imageType: CropImageType;
       reviewRecordId: string | null;
+      draftEditId: string | null;
       title: string;
       sourceUri: string;
       sourceWidth: number;
@@ -486,13 +488,14 @@ function parseCropRectToSourceRect(
 export default function MistakeImageEditScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id, imageSlot, imageType, sourceUri, oldImageUri, reviewRecordId } = useLocalSearchParams<{
+  const { id, imageSlot, imageType, sourceUri, oldImageUri, reviewRecordId, draftEditId } = useLocalSearchParams<{
     id?: string | string[];
     imageSlot?: string | string[];
     imageType?: string | string[];
     sourceUri?: string | string[];
     oldImageUri?: string | string[];
     reviewRecordId?: string | string[];
+    draftEditId?: string | string[];
   }>();
 
   const routeMistakeId = useMemo(() => normalizeRouteText(id), [id]);
@@ -501,6 +504,7 @@ export default function MistakeImageEditScreen() {
   const routeSourceUri = useMemo(() => normalizeRouteText(sourceUri), [sourceUri]);
   const routeOldImageUri = useMemo(() => normalizeRouteText(oldImageUri), [oldImageUri]);
   const routeReviewRecordId = useMemo(() => normalizeRouteText(reviewRecordId), [reviewRecordId]);
+  const routeDraftEditId = useMemo(() => normalizeRouteText(draftEditId), [draftEditId]);
 
   const [state, setState] = useState<PageState>({ kind: 'loading' });
   const [isImageSizeLoading, setIsImageSizeLoading] = useState(true);
@@ -651,7 +655,8 @@ export default function MistakeImageEditScreen() {
         return;
       }
       const isReviewImage = resolvedImageType === 'review_solution';
-      if (isReviewImage && !routeReviewRecordId) {
+      const isDraftReviewImage = isReviewImage && !!routeDraftEditId && !routeReviewRecordId;
+      if (isReviewImage && !routeReviewRecordId && !routeDraftEditId) {
         setState({
           kind: 'error',
           message: '复做记录参数无效，请返回重试。',
@@ -665,6 +670,7 @@ export default function MistakeImageEditScreen() {
       Logger.info(PAGE_SCOPE, 'Enter crop image page.', {
         mistakeId: routeMistakeId,
         reviewRecordId: routeReviewRecordId,
+        draftEditId: routeDraftEditId,
         imageSlot: resolvedImageSlot,
         imageType: resolvedImageType,
         sourceUriShort: toShortUri(routeSourceUri),
@@ -687,6 +693,9 @@ export default function MistakeImageEditScreen() {
       const detailUri =
         resolvedImageType === 'review_solution'
           ? (() => {
+              if (isDraftReviewImage) {
+                return '';
+              }
               const record = detailResult.detail.reviewRecords.find((item) => item.id === routeReviewRecordId);
               if (!record) {
                 setState({
@@ -798,6 +807,7 @@ export default function MistakeImageEditScreen() {
         imageSlot: resolvedImageSlot,
         imageType: resolvedImageType,
         reviewRecordId: resolvedImageType === 'review_solution' ? routeReviewRecordId : null,
+        draftEditId: isDraftReviewImage ? routeDraftEditId : null,
         title: getImageTitle(resolvedImageSlot, resolvedImageType),
         sourceUri: preparedSource.uri,
         sourceWidth: preparedSource.width,
@@ -812,7 +822,15 @@ export default function MistakeImageEditScreen() {
     return () => {
       cancelled = true;
     };
-  }, [routeImageSlot, routeImageType, routeMistakeId, routeOldImageUri, routeReviewRecordId, routeSourceUri]);
+  }, [
+    routeDraftEditId,
+    routeImageSlot,
+    routeImageType,
+    routeMistakeId,
+    routeOldImageUri,
+    routeReviewRecordId,
+    routeSourceUri,
+  ]);
 
   useEffect(() => {
     if (state.kind !== 'success') {
@@ -1015,7 +1033,7 @@ export default function MistakeImageEditScreen() {
   ).current;
 
   const updateMistakeImageSafely = useCallback(
-    async (nextImageUri: string, nextFileSize: number) => {
+    async (nextImageUri: string, nextFileSize: number, nextWidth?: number, nextHeight?: number) => {
       if (state.kind !== 'success') {
         throw new Error('Invalid page state.');
       }
@@ -1030,6 +1048,23 @@ export default function MistakeImageEditScreen() {
       });
 
       if (state.imageType === 'review_solution') {
+        if (state.draftEditId) {
+          ReviewDraftImageEditService.saveReviewDraftImageEditResult({
+            editId: state.draftEditId,
+            mistakeId: state.mistakeId,
+            imageUri: nextImageUri,
+            width: nextWidth,
+            height: nextHeight,
+            fileSize: nextFileSize,
+          });
+          Logger.info(PAGE_SCOPE, 'Saved cropped review draft image result.', {
+            mistakeId: state.mistakeId,
+            draftEditId: state.draftEditId,
+            imageSlot: state.imageSlot,
+          });
+          return;
+        }
+
         if (!state.reviewRecordId) {
           throw new Error('复做记录参数无效，请返回重试。');
         }
@@ -1208,12 +1243,14 @@ export default function MistakeImageEditScreen() {
         }
 
         try {
-          await updateMistakeImageSafely(processed.uri, nextFileSize);
+          await updateMistakeImageSafely(processed.uri, nextFileSize, processed.width, processed.height);
         } catch (dbError) {
           await cleanupNewImageIfNeeded(processed.uri);
           throw dbError;
         }
-        await deleteOldImageAfterSuccess(state.oldImageUri, processed.uri);
+        if (!state.draftEditId) {
+          await deleteOldImageAfterSuccess(state.oldImageUri, processed.uri);
+        }
 
         Logger.info(PAGE_SCOPE, 'Crop page save flow completed.', {
           debugSessionId: debugSessionIdRef.current,
