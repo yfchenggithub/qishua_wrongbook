@@ -58,6 +58,9 @@ const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
 const TOAST_DURATION_SHORT = 1400;
 const TITLE_DOUBLE_TAP_WINDOW_MS = 280;
+const NOTE_SAVE_DEBOUNCE_MS = 800;
+const NOTE_MAX_LENGTH = MistakeDetailService.MISTAKE_DETAIL_NOTE_MAX_LENGTH;
+const NOTE_PLACEHOLDER = '点击输入备注，记录你的思考或重点...';
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
@@ -440,6 +443,20 @@ function normalizeErrorMessage(message?: string): string {
   return message.replace(/\s+/g, ' ').trim();
 }
 
+function normalizeNoteDraft(value: string | null | undefined): string {
+  if (typeof value !== 'string') {
+    return '';
+  }
+  return value.trim();
+}
+
+function clampNoteDraft(value: string): string {
+  if (value.length <= NOTE_MAX_LENGTH) {
+    return value;
+  }
+  return value.slice(0, NOTE_MAX_LENGTH);
+}
+
 function isCancelLikeMessage(message?: string): boolean {
   const normalized = normalizeErrorMessage(message).toLowerCase();
   if (!normalized) {
@@ -725,6 +742,9 @@ export default function MistakeDetailScreen() {
   const [isTitleEditing, setIsTitleEditing] = useState(false);
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [noteInput, setNoteInput] = useState('');
+  const [isNoteFocused, setIsNoteFocused] = useState(false);
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const [isDeletingMistake, setIsDeletingMistake] = useState(false);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
   const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
@@ -739,6 +759,11 @@ export default function MistakeDetailScreen() {
   const browseRequestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noteSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestNoteInputRef = useRef('');
+  const syncedNoteInputRef = useRef('');
+  const syncedNoteMistakeIdRef = useRef<string | null>(null);
+  const lastNoteSaveFailedValueRef = useRef<string | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voiceStopInProgressRef = useRef(false);
@@ -864,6 +889,95 @@ export default function MistakeDetailScreen() {
     },
     [hideToast, toastOpacity, toastTranslateY],
   );
+
+  const clearNoteSaveTimer = useCallback(() => {
+    if (noteSaveTimerRef.current) {
+      clearTimeout(noteSaveTimerRef.current);
+      noteSaveTimerRef.current = null;
+    }
+  }, []);
+
+  const handleSaveNote = useCallback(
+    async (nextValue?: string) => {
+      if (state.kind !== 'success' || isSavingNote) {
+        return;
+      }
+
+      const rawNextNote = typeof nextValue === 'string' ? nextValue : latestNoteInputRef.current;
+      const normalizedNextNote = normalizeNoteDraft(rawNextNote);
+      const normalizedCurrentNote = normalizeNoteDraft(state.detail.note ?? null);
+      if (normalizedNextNote === normalizedCurrentNote) {
+        return;
+      }
+
+      setIsSavingNote(true);
+      try {
+        const result = await MistakeDetailService.updateMistakeNote({
+          mistakeId: state.detail.id,
+          note: normalizedNextNote.length > 0 ? normalizedNextNote : null,
+        });
+
+        if (!result.ok || !result.detail) {
+          lastNoteSaveFailedValueRef.current = normalizedNextNote;
+          showToast(result.errorMessage ?? '备注保存失败，请重试。', 'error');
+          return;
+        }
+
+        const updatedDetail = result.detail;
+        lastNoteSaveFailedValueRef.current = null;
+        setState((current) => {
+          if (current.kind !== 'success' || current.detail.id !== updatedDetail.id) {
+            return current;
+          }
+          return {
+            kind: 'success',
+            detail: updatedDetail,
+          };
+        });
+      } catch (error) {
+        lastNoteSaveFailedValueRef.current = normalizedNextNote;
+        Logger.error(PAGE_SCOPE, 'Unexpected error while updating note.', {
+          routeId,
+          error,
+        });
+        showToast(
+          error instanceof Error ? error.message : '备注保存失败，请重试。',
+          'error',
+        );
+      } finally {
+        setIsSavingNote(false);
+      }
+    },
+    [isSavingNote, routeId, showToast, state],
+  );
+
+  const handleChangeNote = useCallback((value: string) => {
+    const nextValue = clampNoteDraft(value);
+    latestNoteInputRef.current = nextValue;
+    const normalizedNextValue = normalizeNoteDraft(nextValue);
+    if (lastNoteSaveFailedValueRef.current !== normalizedNextValue) {
+      lastNoteSaveFailedValueRef.current = null;
+    }
+    setNoteInput(nextValue);
+  }, []);
+
+  const handleNoteBlur = useCallback(() => {
+    setIsNoteFocused(false);
+    clearNoteSaveTimer();
+    void handleSaveNote(latestNoteInputRef.current);
+  }, [clearNoteSaveTimer, handleSaveNote]);
+
+  const handleClearNote = useCallback(() => {
+    if (isSavingNote) {
+      return;
+    }
+
+    clearNoteSaveTimer();
+    lastNoteSaveFailedValueRef.current = null;
+    latestNoteInputRef.current = '';
+    setNoteInput('');
+    void handleSaveNote('');
+  }, [clearNoteSaveTimer, handleSaveNote, isSavingNote]);
 
   const clearVoicePlaybackResetTimer = useCallback(() => {
     if (voicePlaybackResetTimerRef.current) {
@@ -1723,6 +1837,10 @@ export default function MistakeDetailScreen() {
         clearTimeout(titleTapTimerRef.current);
         titleTapTimerRef.current = null;
       }
+      if (noteSaveTimerRef.current) {
+        clearTimeout(noteSaveTimerRef.current);
+        noteSaveTimerRef.current = null;
+      }
       if (voicePlaybackResetTimerRef.current) {
         clearTimeout(voicePlaybackResetTimerRef.current);
         voicePlaybackResetTimerRef.current = null;
@@ -1736,6 +1854,10 @@ export default function MistakeDetailScreen() {
   );
 
   useEffect(() => {
+    latestNoteInputRef.current = noteInput;
+  }, [noteInput]);
+
+  useEffect(() => {
     if (state.kind !== 'success') {
       return;
     }
@@ -1744,6 +1866,66 @@ export default function MistakeDetailScreen() {
     }
     setTitleInput(state.detail.title);
   }, [isTitleEditing, state]);
+
+  useEffect(() => {
+    if (state.kind !== 'success') {
+      clearNoteSaveTimer();
+      latestNoteInputRef.current = '';
+      syncedNoteInputRef.current = '';
+      syncedNoteMistakeIdRef.current = null;
+      setNoteInput('');
+      lastNoteSaveFailedValueRef.current = null;
+      return;
+    }
+
+    if (isNoteFocused || isSavingNote) {
+      return;
+    }
+
+    const nextNoteInput = state.detail.note ?? '';
+    const previousSyncedNoteInput = syncedNoteInputRef.current;
+    const isSameMistake = syncedNoteMistakeIdRef.current === state.detail.id;
+    const isLocalNoteDirty =
+      isSameMistake
+      && normalizeNoteDraft(noteInput) !== normalizeNoteDraft(previousSyncedNoteInput);
+
+    syncedNoteInputRef.current = nextNoteInput;
+    syncedNoteMistakeIdRef.current = state.detail.id;
+    if (isLocalNoteDirty) {
+      return;
+    }
+
+    latestNoteInputRef.current = nextNoteInput;
+    setNoteInput((current) => (current === nextNoteInput ? current : nextNoteInput));
+    lastNoteSaveFailedValueRef.current = null;
+  }, [clearNoteSaveTimer, isNoteFocused, isSavingNote, noteInput, state]);
+
+  useEffect(() => {
+    if (state.kind !== 'success' || isSavingNote) {
+      return;
+    }
+
+    const normalizedNoteInput = normalizeNoteDraft(noteInput);
+    const normalizedCurrentNote = normalizeNoteDraft(state.detail.note ?? null);
+    if (normalizedNoteInput === normalizedCurrentNote) {
+      lastNoteSaveFailedValueRef.current = null;
+      return;
+    }
+
+    if (lastNoteSaveFailedValueRef.current === normalizedNoteInput) {
+      return;
+    }
+
+    clearNoteSaveTimer();
+    noteSaveTimerRef.current = setTimeout(() => {
+      noteSaveTimerRef.current = null;
+      void handleSaveNote(latestNoteInputRef.current);
+    }, NOTE_SAVE_DEBOUNCE_MS);
+
+    return () => {
+      clearNoteSaveTimer();
+    };
+  }, [clearNoteSaveTimer, handleSaveNote, isSavingNote, noteInput, state]);
 
   const detailSlots = state.kind === 'success' ? state.detail.imageSlots : [];
 
@@ -1780,12 +1962,14 @@ export default function MistakeDetailScreen() {
     isDeletingMistake
     || isRefreshing
     || isSavingTitle
+    || isSavingNote
     || takePhotoType !== null
     || pickImageType !== null
     || deleteType !== null
     || activeReviewRecordId !== null
     || activeVoiceRecordingRecordId !== null
     || isVoiceRecordingBusy;
+  const isNoteClearDisabled = isSavingNote || noteInput.length <= 0;
 
   const browseCurrentIndex = useMemo(() => {
     if (state.kind !== 'success') {
@@ -2484,11 +2668,82 @@ export default function MistakeDetailScreen() {
                 <StatusPill label={state.detail.statusLabel} tone={mapStatusToTone(state.detail.status)} />
               </View>
 
-              <View style={styles.summaryInfoList}>
-                {state.detail.errorReason ? (
+              {state.detail.errorReason ? (
+                <View style={styles.summaryInfoList}>
                   <Text style={styles.summaryInfoText}>错因：{state.detail.errorReason}</Text>
-                ) : null}
-                {state.detail.note ? <Text style={styles.summaryInfoText}>备注：{state.detail.note}</Text> : null}
+                </View>
+              ) : null}
+
+              <View style={styles.noteEditorWrap}>
+                <View style={styles.noteHeaderRow}>
+                  <Text style={styles.noteTitleText}>备注</Text>
+                  <View style={styles.noteEditIconWrap}>
+                    <MaterialIcons name="edit" size={20} color={colors.textMuted} />
+                  </View>
+                </View>
+
+                <View style={[
+                  styles.noteInputBox,
+                  isNoteFocused && styles.noteInputBoxFocused,
+                ]}>
+                  <TextInput
+                    value={noteInput}
+                    onChangeText={handleChangeNote}
+                    editable={!isDeletingMistake}
+                    placeholder={NOTE_PLACEHOLDER}
+                    placeholderTextColor={colors.textMuted}
+                    multiline
+                    maxLength={NOTE_MAX_LENGTH}
+                    numberOfLines={4}
+                    scrollEnabled={false}
+                    textAlignVertical="top"
+                    style={styles.noteInput}
+                    onFocus={() => {
+                      setIsNoteFocused(true);
+                    }}
+                    onBlur={handleNoteBlur}
+                  />
+                  <Text style={styles.noteCounterText}>
+                    {noteInput.length}/{NOTE_MAX_LENGTH}
+                  </Text>
+                </View>
+
+                <View style={styles.noteFooterRow}>
+                  <View style={styles.noteSaveStatusRow}>
+                    {isSavingNote ? (
+                      <ActivityIndicator size="small" color={colors.success} />
+                    ) : (
+                      <MaterialIcons name="check-circle" size={16} color={colors.success} />
+                    )}
+                    <Text style={styles.noteSaveStatusText}>
+                      {isSavingNote ? '备注保存中...' : '备注将自动保存'}
+                    </Text>
+                  </View>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="清空备注"
+                    disabled={isNoteClearDisabled}
+                    onPress={handleClearNote}
+                    style={({ pressed }) => [
+                      styles.noteClearButton,
+                      pressed && !isNoteClearDisabled && styles.noteClearButtonPressed,
+                      isNoteClearDisabled && styles.noteClearButtonDisabled,
+                    ]}>
+                    <MaterialIcons
+                      name="delete-outline"
+                      size={16}
+                      color={isNoteClearDisabled ? colors.textMuted : colors.textSecondary}
+                    />
+                    <Text
+                      style={[
+                        styles.noteClearButtonText,
+                        isNoteClearDisabled && styles.noteClearButtonTextDisabled,
+                      ]}>
+                      清空
+                    </Text>
+                  </Pressable>
+                </View>
               </View>
             </CardContainer>
 
@@ -2499,6 +2754,7 @@ export default function MistakeDetailScreen() {
                   onPress={() => void loadDetail({ keepCurrent: true })}
                   disabled={
                     isRefreshing
+                    || isSavingNote
                     || takePhotoType !== null
                     || pickImageType !== null
                     || deleteType !== null
@@ -2509,6 +2765,7 @@ export default function MistakeDetailScreen() {
                   style={[
                     styles.refreshButton,
                     (isRefreshing
+                      || isSavingNote
                       || takePhotoType !== null
                       || pickImageType !== null
                       || deleteType !== null
@@ -2890,6 +3147,101 @@ const styles = StyleSheet.create({
   summaryInfoText: {
     ...typography.body,
     color: colors.textSecondary,
+  },
+  noteEditorWrap: {
+    marginTop: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  noteHeaderRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  noteTitleText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  noteEditIconWrap: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteInputBox: {
+    minHeight: 112,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FCFCFD',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+  },
+  noteInputBoxFocused: {
+    borderColor: colors.successBorder,
+    backgroundColor: '#FBFFFC',
+  },
+  noteInput: {
+    ...typography.bodySmall,
+    minHeight: 74,
+    color: colors.textPrimary,
+    padding: 0,
+    includeFontPadding: false,
+  },
+  noteCounterText: {
+    ...typography.caption,
+    marginTop: spacing.xs,
+    color: colors.textMuted,
+    textAlign: 'right',
+    fontWeight: '600',
+  },
+  noteFooterRow: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  noteSaveStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  noteSaveStatusText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  noteClearButton: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  noteClearButtonPressed: {
+    opacity: 0.78,
+  },
+  noteClearButtonDisabled: {
+    opacity: 0.56,
+  },
+  noteClearButtonText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '800',
+  },
+  noteClearButtonTextDisabled: {
+    color: colors.textMuted,
   },
   imagesSectionCard: {
     borderRadius: radius.xl,

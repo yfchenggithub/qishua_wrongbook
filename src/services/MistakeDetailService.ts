@@ -19,6 +19,8 @@ const FALLBACK_ERROR_MESSAGE = '读取错题详情失败，请稍后重试。';
 const DELETE_MISTAKE_ERROR_MESSAGE = '删除错题失败，请稍后重试。';
 const MODULE_NAVIGATION_LIMIT = 500;
 
+export const MISTAKE_DETAIL_NOTE_MAX_LENGTH = 200;
+
 export type ManagedDetailImageType = Exclude<DetailImageSlot['type'], 'review_solution'>;
 export type DetailBrowseMode = 'today_due' | 'same_module' | 'none';
 
@@ -85,6 +87,17 @@ export type UpdateMistakeTitleParams = {
 };
 
 export type UpdateMistakeTitleResult = {
+  ok: boolean;
+  detail?: MistakeDetailViewModel;
+  errorMessage?: string;
+};
+
+export type UpdateMistakeNoteParams = {
+  mistakeId: string;
+  note?: string | null;
+};
+
+export type UpdateMistakeNoteResult = {
   ok: boolean;
   detail?: MistakeDetailViewModel;
   errorMessage?: string;
@@ -799,6 +812,65 @@ export async function updateMistakeTitle(
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'updateMistakeTitle failed.', {
+      mistakeId,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function updateMistakeNote(
+  params: UpdateMistakeNoteParams,
+): Promise<UpdateMistakeNoteResult> {
+  const mistakeId = normalizeMistakeId(params.mistakeId);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  const nextNote = normalizeOptionalText(params.note ?? null);
+  if (nextNote && nextNote.length > MISTAKE_DETAIL_NOTE_MAX_LENGTH) {
+    return {
+      ok: false,
+      errorMessage: `备注不能超过 ${MISTAKE_DETAIL_NOTE_MAX_LENGTH} 字。`,
+    };
+  }
+
+  try {
+    const updated = await MistakeRepository.updateMistake(mistakeId, {
+      note: nextNote,
+    });
+    if (!updated) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Updated mistake note successfully.', {
+      mistakeId,
+      noteLength: nextNote?.length ?? 0,
+    });
+
+    const detailResult = await getMistakeDetail(mistakeId);
+    if (!detailResult.ok || !detailResult.detail) {
+      return {
+        ok: false,
+        errorMessage: detailResult.errorMessage ?? '备注已更新，但刷新详情失败。',
+      };
+    }
+
+    return {
+      ok: true,
+      detail: detailResult.detail,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'updateMistakeNote failed.', {
       mistakeId,
       error,
     });
