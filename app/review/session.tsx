@@ -47,7 +47,7 @@ const QUESTION_PREVIEW_EMPTY_HEIGHT = 148;
 const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
-const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
+const VOICE_RECORDING_MAX_DURATION_MS = 30 * 60 * 1000;
 const SWIPE_HINT_MESSAGE = '点击「不会 / 模糊 / 会了」后进入下一题';
 const SWIPE_HINT_DURATION_MS = 1500;
 const SWIPE_HINT_THROTTLE_MS = 1500;
@@ -1001,7 +1001,7 @@ export default function ReviewSessionPage() {
       }
 
       if (trigger === 'auto_limit') {
-        showToast('已达到3分钟上限，录音已保存', 'success', TOAST_DURATION_LONG);
+        showToast('已达到30分钟上限，录音已保存', 'success', TOAST_DURATION_LONG);
       } else {
         showToast('语音讲解已保存', 'success');
       }
