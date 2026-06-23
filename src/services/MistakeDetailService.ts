@@ -12,8 +12,9 @@ import type { MistakeImage } from '@/src/models/MistakeImage';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
+import * as MistakeListService from '@/src/services/MistakeListService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
-import { formatDateShort, getLocalDayRange } from '@/src/utils/date';
+import { formatDateShort } from '@/src/utils/date';
 
 const SERVICE_SCOPE = 'MistakeDetailService';
 const FALLBACK_ERROR_MESSAGE = '读取错题详情失败，请稍后重试。';
@@ -455,12 +456,7 @@ export async function getDetailBrowseContext(
   }
 
   try {
-    const { start: todayStart, end: todayEnd } = getLocalDayRange(new Date(), 0);
-    const dueMistakes = await MistakeRepository.listTodayReviewQueue({
-      todayStartIso: todayStart.toISOString(),
-      todayEndIso: todayEnd.toISOString(),
-    });
-    const dueIds = normalizeMistakeIdList(dueMistakes.map((mistake) => mistake.id));
+    const dueIds = normalizeMistakeIdList(await MistakeListService.getTodayReviewQueueIds());
     if (dueIds.includes(mistakeId)) {
       const context = buildBrowseContext('today_due', dueIds, mistakeId);
       Logger.info(SERVICE_SCOPE, 'Resolved detail browse context from today due queue.', {

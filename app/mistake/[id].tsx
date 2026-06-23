@@ -2024,9 +2024,35 @@ export default function MistakeDetailScreen() {
     || activeReviewRecordId !== null
     || activeVoiceRecordingRecordId !== null
     || isVoiceRecordingBusy;
+  const canStartDetailReview = useMemo(() => {
+    if (state.kind !== 'success') {
+      return false;
+    }
+
+    return browseContext.mode === 'today_due' && browseContext.ids.includes(state.detail.id);
+  }, [browseContext.ids, browseContext.mode, state]);
+  const isStartDetailReviewDisabled = isDeleteMistakeDisabled;
   const hasNoteContent = normalizeNoteDraft(noteInput).length > 0;
   const noteReadText = hasNoteContent ? noteInput : '暂无备注';
   const isNoteClearDisabled = !isNoteEditing || isSavingNote || noteInput.length <= 0;
+
+  const handleStartDetailReview = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    if (!canStartDetailReview) {
+      showToast('这道题当前不在今日待复做队列', 'info');
+      return;
+    }
+
+    router.push({
+      pathname: '/review/session',
+      params: {
+        initialMistakeId: state.detail.id,
+      },
+    } as never);
+  }, [canStartDetailReview, router, showToast, state]);
 
   const browseCurrentIndex = useMemo(() => {
     if (state.kind !== 'success') {
@@ -2932,6 +2958,23 @@ export default function MistakeDetailScreen() {
                   {nextReviewInfo?.displayText ?? '⏳ 待安排（完成本次复做后自动生成）'}
                 </Text>
               </View>
+              {canStartDetailReview ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="立即复做这道错题"
+                  disabled={isStartDetailReviewDisabled}
+                  onPress={handleStartDetailReview}
+                  style={({ pressed }) => [
+                    styles.detailReviewButton,
+                    pressed && !isStartDetailReviewDisabled && styles.detailReviewButtonPressed,
+                    isStartDetailReviewDisabled && styles.detailReviewButtonDisabled,
+                  ]}>
+                  <View style={styles.detailReviewButtonContent}>
+                    <MaterialIcons name="edit" size={22} color={colors.white} />
+                    <Text style={styles.detailReviewButtonText}>立即复做</Text>
+                  </View>
+                </Pressable>
+              ) : null}
               {state.detail.reviewRecords.length <= 0 ? (
                 <Text style={styles.reviewRecordsEmptyText}>还没有复做记录</Text>
               ) : (
@@ -3562,6 +3605,37 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textSecondary,
     fontWeight: '600',
+  },
+  detailReviewButton: {
+    minHeight: 56,
+    borderRadius: radius.lg,
+    backgroundColor: '#F5222D',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    shadowColor: '#F5222D',
+    shadowOpacity: 0.24,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 3,
+  },
+  detailReviewButtonPressed: {
+    opacity: 0.86,
+  },
+  detailReviewButtonDisabled: {
+    opacity: 0.58,
+  },
+  detailReviewButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  detailReviewButtonText: {
+    ...typography.sectionTitle,
+    color: colors.white,
+    fontWeight: '800',
   },
   browseSummaryText: {
     ...typography.caption,

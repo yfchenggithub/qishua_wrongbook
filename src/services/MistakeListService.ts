@@ -335,6 +335,16 @@ export async function getTodayReviewQueue(): Promise<MistakeListItem[]> {
   }
 }
 
+export async function getTodayReviewQueueIds(): Promise<string[]> {
+  try {
+    const dueMistakes = await listTodayReviewQueueMistakes(new Date());
+    return dueMistakes.map((mistake) => mistake.id);
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'getTodayReviewQueueIds failed.', error);
+    throw error;
+  }
+}
+
 export async function getPendingReviewCountByDate(date: Date): Promise<number> {
   try {
     const baseDate = date instanceof Date ? date : new Date();

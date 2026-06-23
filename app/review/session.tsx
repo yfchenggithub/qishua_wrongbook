@@ -1,4 +1,4 @@
-import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
@@ -128,6 +128,32 @@ function toShortErrorMessage(input?: string): string {
     return normalized;
   }
   return `${normalized.slice(0, 60)}...`;
+}
+
+function normalizeInitialMistakeId(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string') {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function rotateQueueToInitialMistake(
+  queue: ReviewSessionQueueItem[],
+  initialMistakeId: string | null,
+): ReviewSessionQueueItem[] {
+  if (!initialMistakeId || queue.length <= 1) {
+    return queue;
+  }
+
+  const initialIndex = queue.findIndex((item) => item.id === initialMistakeId);
+  if (initialIndex <= 0) {
+    return queue;
+  }
+
+  return [...queue.slice(initialIndex), ...queue.slice(0, initialIndex)];
 }
 
 function isCancelLikeMessage(input?: string): boolean {
@@ -607,7 +633,14 @@ function ReviewSolutionImageCard({
 export default function ReviewSessionPage() {
   const router = useRouter();
   const navigation = useNavigation();
+  const { initialMistakeId } = useLocalSearchParams<{
+    initialMistakeId?: string | string[];
+  }>();
   const insets = useSafeAreaInsets();
+  const routeInitialMistakeId = useMemo(
+    () => normalizeInitialMistakeId(initialMistakeId),
+    [initialMistakeId],
+  );
 
   const [sessionState, setSessionState] = useState<SessionState>('loading');
   const [queue, setQueue] = useState<ReviewSessionQueueItem[]>([]);
@@ -1475,7 +1508,15 @@ export default function ReviewSessionPage() {
         return;
       }
 
-      setQueue(todayQueue);
+      const orderedQueue = rotateQueueToInitialMistake(todayQueue, routeInitialMistakeId);
+      if (routeInitialMistakeId && orderedQueue[0]?.id !== routeInitialMistakeId) {
+        Logger.warn(PAGE_SCOPE, 'Initial mistake is not in today review queue.', {
+          initialMistakeId: routeInitialMistakeId,
+          queueCount: todayQueue.length,
+        });
+      }
+
+      setQueue(orderedQueue);
       setCurrentIndex(0);
       setSessionState('ready');
     } catch (error) {
@@ -1486,7 +1527,7 @@ export default function ReviewSessionPage() {
       setSessionErrorMessage('读取今日复做队列失败，请稍后重试。');
       setSessionState('error');
     }
-  }, [clearVoicePlaybackResetTimer]);
+  }, [clearVoicePlaybackResetTimer, routeInitialMistakeId]);
 
   useEffect(() => {
     void loadQueue();
