@@ -22,6 +22,8 @@ const DEFAULT_VOICE_NOTE_EXTENSION = '.m4a';
 const VOICE_FILE_NOT_FOUND_MESSAGE = '\u8bed\u97f3\u6587\u4ef6\u4e0d\u5b58\u5728';
 const PLAYBACK_FAILED_MESSAGE = 'Voice note playback failed. Please try again.';
 const RECORDING_FAILED_MESSAGE = 'Voice note recording failed. Please try again.';
+const PAUSE_RECORDING_FAILED_MESSAGE = 'Pausing voice note recording failed. Please try again.';
+const RESUME_RECORDING_FAILED_MESSAGE = 'Resuming voice note recording failed. Please try again.';
 const SAVE_FAILED_MESSAGE = 'Saving voice note failed. Please try again.';
 const STOP_PLAYING_FAILED_MESSAGE = 'Stopping voice note playback failed. Please try again.';
 
@@ -90,6 +92,8 @@ export type GetVoiceNoteFileInfoResult =
 
 let activeRecorder: AudioRecorder | null = null;
 let activeRecorderStartedAtMs: number | null = null;
+let activeRecorderAccumulatedDurationMs = 0;
+let activeRecorderPaused = false;
 let activePlayer: AudioPlayer | null = null;
 let activePlayerUri: string | null = null;
 
@@ -144,14 +148,25 @@ function toIsoString(timestampMs: number | null | undefined): string | null {
   return new Date(timestampMs).toISOString();
 }
 
-function resolveDurationMs(durationMillis: number, startedAtMs: number | null): number {
+function resolveDurationMs(
+  durationMillis: number,
+  startedAtMs: number | null,
+  accumulatedDurationMs = 0,
+  isPaused = false,
+): number {
   if (Number.isFinite(durationMillis) && durationMillis > 0) {
     return Math.floor(durationMillis);
   }
-  if (typeof startedAtMs === 'number' && startedAtMs > 0) {
-    return Math.max(0, Date.now() - startedAtMs);
+  const safeAccumulatedDurationMs = Number.isFinite(accumulatedDurationMs)
+    ? Math.max(0, Math.floor(accumulatedDurationMs))
+    : 0;
+  if (isPaused) {
+    return safeAccumulatedDurationMs;
   }
-  return 0;
+  if (typeof startedAtMs === 'number' && startedAtMs > 0) {
+    return safeAccumulatedDurationMs + Math.max(0, Date.now() - startedAtMs);
+  }
+  return safeAccumulatedDurationMs;
 }
 
 function resolveFileExtension(fileUri: string): string {
@@ -232,6 +247,8 @@ async function applyRecordingAudioMode(allowsRecording: boolean): Promise<void> 
 async function clearActiveRecorderState(): Promise<void> {
   activeRecorder = null;
   activeRecorderStartedAtMs = null;
+  activeRecorderAccumulatedDurationMs = 0;
+  activeRecorderPaused = false;
   await applyRecordingAudioMode(false);
 }
 
@@ -353,6 +370,8 @@ export async function startRecording(): Promise<VoiceNoteActionResult> {
 
     activeRecorder = recorder;
     activeRecorderStartedAtMs = Date.now();
+    activeRecorderAccumulatedDurationMs = 0;
+    activeRecorderPaused = false;
 
     Logger.info(SERVICE_SCOPE, 'start_recording', {});
     return { ok: true };
@@ -366,9 +385,100 @@ export async function startRecording(): Promise<VoiceNoteActionResult> {
   }
 }
 
+export async function pauseRecording(): Promise<VoiceNoteActionResult> {
+  const recorder = activeRecorder;
+  if (!recorder) {
+    return {
+      ok: false,
+      errorMessage: 'No active recording to pause.',
+    };
+  }
+
+  try {
+    const currentState = recorder.getStatus();
+    if (!currentState.isRecording) {
+      activeRecorderPaused = true;
+      activeRecorderStartedAtMs = null;
+      activeRecorderAccumulatedDurationMs = resolveDurationMs(
+        currentState.durationMillis,
+        null,
+        activeRecorderAccumulatedDurationMs,
+        true,
+      );
+      return { ok: true };
+    }
+
+    recorder.pause();
+    const pausedState = recorder.getStatus();
+    activeRecorderAccumulatedDurationMs = resolveDurationMs(
+      pausedState.durationMillis,
+      activeRecorderStartedAtMs,
+      activeRecorderAccumulatedDurationMs,
+      true,
+    );
+    activeRecorderStartedAtMs = null;
+    activeRecorderPaused = true;
+
+    Logger.info(SERVICE_SCOPE, 'pause_recording', {
+      durationMs: activeRecorderAccumulatedDurationMs,
+    });
+    return { ok: true };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to pause voice note recording.', { error });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error, PAUSE_RECORDING_FAILED_MESSAGE),
+    };
+  }
+}
+
+export async function resumeRecording(): Promise<VoiceNoteActionResult> {
+  const recorder = activeRecorder;
+  if (!recorder) {
+    return {
+      ok: false,
+      errorMessage: 'No paused recording to resume.',
+    };
+  }
+
+  try {
+    const currentState = recorder.getStatus();
+    if (currentState.isRecording) {
+      activeRecorderPaused = false;
+      activeRecorderStartedAtMs = activeRecorderStartedAtMs ?? Date.now();
+      return { ok: true };
+    }
+
+    if (!currentState.canRecord) {
+      return {
+        ok: false,
+        errorMessage: 'Recording cannot be resumed.',
+      };
+    }
+
+    await applyRecordingAudioMode(true);
+    recorder.record();
+    activeRecorderStartedAtMs = Date.now();
+    activeRecorderPaused = false;
+
+    Logger.info(SERVICE_SCOPE, 'resume_recording', {
+      durationMs: activeRecorderAccumulatedDurationMs,
+    });
+    return { ok: true };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to resume voice note recording.', { error });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error, RESUME_RECORDING_FAILED_MESSAGE),
+    };
+  }
+}
+
 export async function stopAndSaveRecording(): Promise<StopAndSaveRecordingResult> {
   const recorder = activeRecorder;
   const startedAtMs = activeRecorderStartedAtMs;
+  const accumulatedDurationMs = activeRecorderAccumulatedDurationMs;
+  const isPaused = activeRecorderPaused;
 
   if (!recorder) {
     return {
@@ -380,7 +490,12 @@ export async function stopAndSaveRecording(): Promise<StopAndSaveRecordingResult
   try {
     await recorder.stop();
     const recorderState: RecorderState = recorder.getStatus();
-    const durationMs = resolveDurationMs(recorderState.durationMillis, startedAtMs);
+    const durationMs = resolveDurationMs(
+      recorderState.durationMillis,
+      startedAtMs,
+      accumulatedDurationMs,
+      isPaused,
+    );
     const sourceFile = buildRecorderSourceFile(recorder, recorderState);
     if (!sourceFile) {
       Logger.warn(SERVICE_SCOPE, 'stop_recording_failed', {

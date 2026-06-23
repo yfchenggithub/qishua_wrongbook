@@ -18,6 +18,7 @@ import {
   APP_NAME,
   APP_VERSION,
   DATA_MODE_LABEL,
+  IMAGE_COMBINER_URL,
   OFFICIAL_ACCOUNT_SEARCH_TEXT,
   SUPPORT_EMAIL,
 } from '@/src/constants/app';
@@ -117,6 +118,10 @@ export default function AboutSupportScreen() {
     void copyText(SUPPORT_EMAIL, '邮箱已复制');
   }, [copyText]);
 
+  const handleCopyImageCombinerUrl = useCallback(() => {
+    void copyText(IMAGE_COMBINER_URL, '图片合并网址已复制');
+  }, [copyText]);
+
   useEffect(() => {
     return () => {
       if (toastTimerRef.current) {
@@ -208,6 +213,47 @@ export default function AboutSupportScreen() {
               <Text style={styles.secondaryActionText}>查看大图</Text>
             </Pressable>
           </View>
+        </CardContainer>
+
+        <CardContainer style={styles.sectionCard} padding={spacing.lg}>
+          <View style={styles.toolHeaderRow}>
+            <View style={styles.toolIconBox}>
+              <MaterialIcons color="#2563EB" name="collections" size={20} />
+            </View>
+            <View style={styles.toolTitleWrap}>
+              <Text style={styles.sectionTitle}>多图合并成一张</Text>
+              <Text style={styles.toolBadgeText}>外部网页工具</Text>
+            </View>
+          </View>
+          <Text style={styles.descriptionText}>
+            如果一道题被拍成多张图片，可以先用外部网页把图片合并成一张，再回到七刷错题本选择合并后的图片。
+          </Text>
+
+          <View style={styles.toolNoticeBox}>
+            <MaterialIcons color="#64748B" name="info-outline" size={18} />
+            <Text style={styles.toolNoticeText}>
+              七刷错题本不会读取网页中的图片，也不会接收网页生成结果。请在浏览器中自行合并、保存后再手动导入。
+            </Text>
+          </View>
+
+          <View style={styles.toolSteps}>
+            <Text style={styles.toolStepText}>1. 复制网址并在浏览器打开</Text>
+            <Text style={styles.toolStepText}>2. 在网页里选择多张图片并下载合并结果</Text>
+            <Text style={styles.toolStepText}>3. 回到七刷错题本，选择合并后的图片</Text>
+          </View>
+
+          <Pressable
+            accessibilityLabel="复制图片合并网址"
+            accessibilityRole="button"
+            onPress={handleCopyImageCombinerUrl}
+            style={({ pressed }) => [
+              styles.copyToolButton,
+              pressed ? styles.buttonPressed : null,
+            ]}
+          >
+            <MaterialIcons color="#2563EB" name="content-copy" size={18} />
+            <Text style={styles.copyToolButtonText}>复制网址</Text>
+          </Pressable>
         </CardContainer>
 
         <CardContainer style={styles.sectionCard} padding={spacing.lg}>
@@ -443,6 +489,79 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontSize: 13,
     lineHeight: 18,
+  },
+  toolHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  toolIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EEF6FF',
+    borderWidth: 1,
+    borderColor: '#D7E7FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toolTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  toolBadgeText: {
+    ...typography.caption,
+    color: '#64748B',
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '700',
+  },
+  toolNoticeBox: {
+    marginTop: spacing.md,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F8FAFC',
+    padding: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  toolNoticeText: {
+    ...typography.caption,
+    flex: 1,
+    color: '#475569',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  toolSteps: {
+    marginTop: spacing.md,
+    gap: spacing.xs,
+  },
+  toolStepText: {
+    ...typography.bodySmall,
+    color: '#374151',
+    lineHeight: 20,
+  },
+  copyToolButton: {
+    marginTop: spacing.md,
+    minHeight: 44,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#D7E7FF',
+    backgroundColor: '#EEF6FF',
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  copyToolButtonText: {
+    ...typography.bodySmall,
+    color: '#2563EB',
+    fontSize: 13,
+    fontWeight: '700',
   },
   actionRow: {
     marginTop: spacing.md,

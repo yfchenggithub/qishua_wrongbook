@@ -176,6 +176,11 @@ function formatDurationMs(durationMs: number): string {
   return `${minutes}:${seconds}`;
 }
 
+function roundRecordingElapsedMs(durationMs: number): number {
+  const safeDurationMs = Number.isFinite(durationMs) ? Math.max(0, durationMs) : 0;
+  return Math.floor(safeDurationMs / 1000) * 1000;
+}
+
 function toReviewRecordVoiceNote(value: VoiceNoteEntity | null): ReviewRecordVoiceNote | null {
   if (!value) {
     return null;
@@ -628,6 +633,7 @@ export default function ReviewSessionPage() {
   const [lastSwipeHintTime, setLastSwipeHintTime] = useState(0);
   const [voiceNote, setVoiceNote] = useState<VoiceNoteEntity | null>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
+  const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
@@ -646,6 +652,7 @@ export default function ReviewSessionPage() {
   const touchStartPointRef = useRef<{ x: number; y: number } | null>(null);
   const touchMovedWithScrollRef = useRef(false);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  const voiceRecordingAccumulatedMsRef = useRef(0);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceReplacePendingUriRef = useRef<string | null>(null);
   const voiceStopInProgressRef = useRef(false);
@@ -851,8 +858,10 @@ export default function ReviewSessionPage() {
     const discardResult = await VoiceNoteService.stopAndDiscardRecording();
     voiceReplacePendingUriRef.current = null;
     voiceRecordingStartedAtRef.current = null;
+    voiceRecordingAccumulatedMsRef.current = 0;
     voiceStopInProgressRef.current = false;
     setIsVoiceRecording(false);
+    setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
     setIsVoiceBusy(false);
 
@@ -934,8 +943,10 @@ export default function ReviewSessionPage() {
 
       await stopVoicePlayback(false);
       setIsVoiceRecording(true);
+      setIsVoiceRecordingPaused(false);
       setRecordingElapsedMs(0);
       voiceRecordingStartedAtRef.current = Date.now();
+      voiceRecordingAccumulatedMsRef.current = 0;
       voiceStopInProgressRef.current = false;
       setIsVoiceBusy(false);
     },
@@ -951,6 +962,47 @@ export default function ReviewSessionPage() {
     ],
   );
 
+  const pauseVoiceRecording = useCallback(async () => {
+    if (!isVoiceRecording || isVoiceRecordingPaused || isVoiceBusy || voiceStopInProgressRef.current) {
+      return;
+    }
+
+    setIsVoiceBusy(true);
+    const pauseResult = await VoiceNoteService.pauseRecording();
+    if (!pauseResult.ok) {
+      showToast(toShortErrorMessage(pauseResult.errorMessage), 'error', TOAST_DURATION_LONG);
+      setIsVoiceBusy(false);
+      return;
+    }
+
+    const startedAt = voiceRecordingStartedAtRef.current;
+    const elapsedMs =
+      voiceRecordingAccumulatedMsRef.current + (startedAt ? Math.max(0, Date.now() - startedAt) : 0);
+    voiceRecordingAccumulatedMsRef.current = elapsedMs;
+    voiceRecordingStartedAtRef.current = null;
+    setRecordingElapsedMs(roundRecordingElapsedMs(elapsedMs));
+    setIsVoiceRecordingPaused(true);
+    setIsVoiceBusy(false);
+  }, [isVoiceBusy, isVoiceRecording, isVoiceRecordingPaused, showToast]);
+
+  const resumeVoiceRecording = useCallback(async () => {
+    if (!isVoiceRecording || !isVoiceRecordingPaused || isVoiceBusy || voiceStopInProgressRef.current) {
+      return;
+    }
+
+    setIsVoiceBusy(true);
+    const resumeResult = await VoiceNoteService.resumeRecording();
+    if (!resumeResult.ok) {
+      showToast(toShortErrorMessage(resumeResult.errorMessage), 'error', TOAST_DURATION_LONG);
+      setIsVoiceBusy(false);
+      return;
+    }
+
+    voiceRecordingStartedAtRef.current = Date.now();
+    setIsVoiceRecordingPaused(false);
+    setIsVoiceBusy(false);
+  }, [isVoiceBusy, isVoiceRecording, isVoiceRecordingPaused, showToast]);
+
   const stopAndSaveVoiceRecording = useCallback(
     async (trigger: 'manual' | 'auto_limit' = 'manual') => {
       if (!isVoiceRecording || isVoiceBusy || voiceStopInProgressRef.current) {
@@ -964,7 +1016,9 @@ export default function ReviewSessionPage() {
 
       voiceReplacePendingUriRef.current = null;
       voiceRecordingStartedAtRef.current = null;
+      voiceRecordingAccumulatedMsRef.current = 0;
       setIsVoiceRecording(false);
+      setIsVoiceRecordingPaused(false);
       setRecordingElapsedMs(0);
 
       if (!saveResult.ok) {
@@ -1398,11 +1452,13 @@ export default function ReviewSessionPage() {
     setResultStats(EMPTY_RESULT_STATS);
     setVoiceNote(null);
     setIsVoiceRecording(false);
+    setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
     setIsVoicePlaying(false);
     setReviewSolutionImage(null);
     setIsReviewSolutionImageBusy(false);
     voiceRecordingStartedAtRef.current = null;
+    voiceRecordingAccumulatedMsRef.current = 0;
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
     clearVoicePlaybackResetTimer();
@@ -1454,7 +1510,7 @@ export default function ReviewSessionPage() {
   );
 
   useEffect(() => {
-    if (!isVoiceRecording) {
+    if (!isVoiceRecording || isVoiceRecordingPaused) {
       return;
     }
 
@@ -1463,8 +1519,8 @@ export default function ReviewSessionPage() {
       if (!startedAt) {
         return;
       }
-      const elapsedMs = Math.max(0, Date.now() - startedAt);
-      const roundedElapsedMs = Math.floor(elapsedMs / 1000) * 1000;
+      const elapsedMs = voiceRecordingAccumulatedMsRef.current + Math.max(0, Date.now() - startedAt);
+      const roundedElapsedMs = roundRecordingElapsedMs(elapsedMs);
       setRecordingElapsedMs((current) => (current === roundedElapsedMs ? current : roundedElapsedMs));
 
       if (elapsedMs >= VOICE_RECORDING_MAX_DURATION_MS && !voiceStopInProgressRef.current) {
@@ -1478,17 +1534,19 @@ export default function ReviewSessionPage() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [isVoiceRecording, stopAndSaveVoiceRecording]);
+  }, [isVoiceRecording, isVoiceRecordingPaused, stopAndSaveVoiceRecording]);
 
   useEffect(() => {
     if (!currentQueueItemId) {
       setVoiceNote(null);
       setIsVoiceRecording(false);
+      setIsVoiceRecordingPaused(false);
       setRecordingElapsedMs(0);
       setIsVoicePlaying(false);
       setReviewSolutionImage(null);
       setIsReviewSolutionImageBusy(false);
       voiceRecordingStartedAtRef.current = null;
+      voiceRecordingAccumulatedMsRef.current = 0;
       voiceReplacePendingUriRef.current = null;
       voiceStopInProgressRef.current = false;
       clearVoicePlaybackResetTimer();
@@ -1498,11 +1556,13 @@ export default function ReviewSessionPage() {
 
     setVoiceNote(null);
     setIsVoiceRecording(false);
+    setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
     setIsVoicePlaying(false);
     setReviewSolutionImage(null);
     setIsReviewSolutionImageBusy(false);
     voiceRecordingStartedAtRef.current = null;
+    voiceRecordingAccumulatedMsRef.current = 0;
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
     clearVoicePlaybackResetTimer();
@@ -1658,6 +1718,12 @@ export default function ReviewSessionPage() {
   const toastBottomOffset = showResultActions
     ? actionBarBottomOffset + effectiveActionBarHeight + spacing.sm
     : insets.bottom + spacing.lg;
+  const voiceIconName = isVoiceRecordingPaused ? 'pause' : isVoiceRecording ? 'mic' : 'record-voice-over';
+  const voiceTitleText = isVoiceRecordingPaused ? '录音已暂停' : isVoiceRecording ? '正在录音' : '语音讲解';
+  const voiceRecordingHintText = isVoiceRecordingPaused
+    ? '已暂停，想好后点继续，当前录音不会丢'
+    : '说出关键条件、解题思路和容易错的地方';
+  const voiceRecordingToggleText = isVoiceBusy ? '处理中...' : isVoiceRecordingPaused ? '继续' : '暂停';
 
   return (
     <View style={styles.pageRoot}>
@@ -1811,12 +1877,10 @@ export default function ReviewSessionPage() {
               <CardContainer style={styles.voiceCard} padding={spacing.lg}>
                 <View style={styles.voiceHeaderRow}>
                   <View style={styles.voiceIconWrap}>
-                    <MaterialIcons name={isVoiceRecording ? 'mic' : 'record-voice-over'} size={19} color="#0F766E" />
+                    <MaterialIcons name={voiceIconName} size={19} color="#0F766E" />
                   </View>
                   <View style={styles.voiceHeaderTextWrap}>
-                    <Text style={styles.voiceTitle}>
-                      {isVoiceRecording ? '正在录音' : '语音讲解'}
-                    </Text>
+                    <Text style={styles.voiceTitle}>{voiceTitleText}</Text>
                     {!isVoiceRecording && !voiceNote ? (
                       <Text style={styles.voiceDescription}>
                         {'讲一遍你的思路，下次更容易想起来'}
@@ -1828,23 +1892,39 @@ export default function ReviewSessionPage() {
                 {isVoiceRecording ? (
                   <>
                     <Text style={styles.voiceTimerText}>{formatDurationMs(recordingElapsedMs)}</Text>
-                    <Text style={styles.voiceHintText}>
-                      {'说出关键条件、解题思路和容易错的地方'}
-                    </Text>
-                    <Pressable
-                      disabled={isVoiceBusy}
-                      onPress={() => {
-                        void stopAndSaveVoiceRecording();
-                      }}
-                      style={({ pressed }) => [
-                        styles.voiceMainButton,
-                        styles.voiceMainButtonDanger,
-                        (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                      ]}>
-                      <Text style={styles.voiceMainButtonText}>
-                        {isVoiceBusy ? '保存中...' : '停止并保存'}
-                      </Text>
-                    </Pressable>
+                    <Text style={styles.voiceHintText}>{voiceRecordingHintText}</Text>
+                    <View style={styles.voiceActionRow}>
+                      <Pressable
+                        disabled={isVoiceBusy}
+                        onPress={() => {
+                          if (isVoiceRecordingPaused) {
+                            void resumeVoiceRecording();
+                            return;
+                          }
+                          void pauseVoiceRecording();
+                        }}
+                        style={({ pressed }) => [
+                          styles.voiceActionButton,
+                          styles.voiceActionButtonPlay,
+                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                        ]}>
+                        <Text style={styles.voiceActionButtonText}>{voiceRecordingToggleText}</Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={isVoiceBusy}
+                        onPress={() => {
+                          void stopAndSaveVoiceRecording();
+                        }}
+                        style={({ pressed }) => [
+                          styles.voiceActionButton,
+                          styles.voiceActionButtonDanger,
+                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                        ]}>
+                        <Text style={styles.voiceActionButtonDangerText}>
+                          {isVoiceBusy ? '处理中...' : '停止并保存'}
+                        </Text>
+                      </Pressable>
+                    </View>
                   </>
                 ) : null}
 

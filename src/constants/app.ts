@@ -3,3 +3,4 @@ export const APP_VERSION = '0.1.0';
 export const DATA_MODE_LABEL = '离线本地版';
 export const OFFICIAL_ACCOUNT_SEARCH_TEXT = 'ok-shuxue';
 export const SUPPORT_EMAIL = '18912964525@163.com';
+export const IMAGE_COMBINER_URL = 'https://imagecombiner.com/';

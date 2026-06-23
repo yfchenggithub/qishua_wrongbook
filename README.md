@@ -102,12 +102,45 @@ npm run dev-client
 
 ## 常用命令
 
-```bash
+### 依赖安装
+
+```powershell
+npm install
+```
+
+### 开发运行
+
+```powershell
+npm run start       # 启动 Expo 开发服务
+npm run android     # 构建并运行到 Android 真机/模拟器
+npm run dev-client  # 启动 Dev Client 开发服务
+```
+
+### 代码检查
+
+```powershell
 npm run check:deps      # 检查 Expo 依赖匹配
+npm run check:encoding  # 检查文件编码
 npm run typecheck       # TypeScript 类型检查
 npm run lint            # 代码规范检查
 npm run preflight       # 编码/类型/lint 一键检查
 ```
+
+### Android Release APK
+
+从项目根目录执行：
+
+```powershell
+.\android\gradlew.bat -p android assembleRelease
+```
+
+生成位置：
+
+```text
+android/app/build/outputs/apk/release/app-release.apk
+```
+
+说明：当前 release 构建仍使用 `debug.keystore` 签名，适合本地安装测试；正式发布前需要替换为正式 release keystore。
 
 ## 相关文档
 
