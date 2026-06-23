@@ -398,6 +398,12 @@ function QuestionPhotoQueueCard({
       <Text numberOfLines={2} maxFontSizeMultiplier={1.1} style={styles.captureSubtitle}>
         {config.subtitle}
       </Text>
+      <View style={styles.combineHintRow}>
+        <MaterialIcons name="collections" size={16} color={colors.textSecondary} />
+        <Text maxFontSizeMultiplier={1.1} style={styles.combineHintText}>
+          多张图想合成一张，可到设置里的关于与支持查看方法。
+        </Text>
+      </View>
 
       <View style={styles.capturePreviewWrap}>
         {hasPhotos ? (
@@ -1633,6 +1639,21 @@ const styles = StyleSheet.create({
   captureSubtitleCompact: {
     ...typography.caption,
     color: colors.textSecondary,
+  },
+  combineHintRow: {
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  combineHintText: {
+    ...typography.caption,
+    flex: 1,
+    color: colors.textSecondary,
+    lineHeight: 18,
   },
   capturePreviewWrap: {
     height: 126,
