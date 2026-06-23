@@ -8,9 +8,11 @@ import {
   type GestureResponderEvent,
   Image,
   Linking,
+  Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -58,6 +60,7 @@ const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
 const TOAST_DURATION_SHORT = 1400;
 const TITLE_DOUBLE_TAP_WINDOW_MS = 280;
+const NOTE_DOUBLE_TAP_WINDOW_MS = 300;
 const NOTE_SAVE_DEBOUNCE_MS = 800;
 const NOTE_MAX_LENGTH = MistakeDetailService.MISTAKE_DETAIL_NOTE_MAX_LENGTH;
 const NOTE_PLACEHOLDER = '点击输入备注，记录你的思考或重点...';
@@ -744,6 +747,8 @@ export default function MistakeDetailScreen() {
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [noteInput, setNoteInput] = useState('');
   const [isNoteFocused, setIsNoteFocused] = useState(false);
+  const [isNoteEditing, setIsNoteEditing] = useState(false);
+  const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isDeletingMistake, setIsDeletingMistake] = useState(false);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
@@ -760,6 +765,8 @@ export default function MistakeDetailScreen() {
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const noteSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const noteInputRef = useRef<TextInput | null>(null);
+  const lastNoteReadTapAtRef = useRef(0);
   const latestNoteInputRef = useRef('');
   const syncedNoteInputRef = useRef('');
   const syncedNoteMistakeIdRef = useRef<string | null>(null);
@@ -967,8 +974,53 @@ export default function MistakeDetailScreen() {
     void handleSaveNote(latestNoteInputRef.current);
   }, [clearNoteSaveTimer, handleSaveNote]);
 
+  const handleStartNoteEdit = useCallback(() => {
+    if (isDeletingMistake) {
+      return;
+    }
+
+    setIsNoteModalVisible(false);
+    setIsNoteEditing(true);
+  }, [isDeletingMistake]);
+
+  const handleFinishNoteEdit = useCallback(() => {
+    setIsNoteEditing(false);
+    setIsNoteFocused(false);
+    noteInputRef.current?.blur();
+    clearNoteSaveTimer();
+    void handleSaveNote(latestNoteInputRef.current);
+  }, [clearNoteSaveTimer, handleSaveNote]);
+
+  const handleToggleNoteEdit = useCallback(() => {
+    if (isNoteEditing) {
+      handleFinishNoteEdit();
+      return;
+    }
+
+    handleStartNoteEdit();
+  }, [handleFinishNoteEdit, handleStartNoteEdit, isNoteEditing]);
+
+  const handlePressNoteRead = useCallback(() => {
+    if (isNoteEditing) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - lastNoteReadTapAtRef.current <= NOTE_DOUBLE_TAP_WINDOW_MS) {
+      lastNoteReadTapAtRef.current = 0;
+      setIsNoteModalVisible(true);
+      return;
+    }
+
+    lastNoteReadTapAtRef.current = now;
+  }, [isNoteEditing]);
+
+  const handleCloseNoteModal = useCallback(() => {
+    setIsNoteModalVisible(false);
+  }, []);
+
   const handleClearNote = useCallback(() => {
-    if (isSavingNote) {
+    if (!isNoteEditing || isSavingNote) {
       return;
     }
 
@@ -977,7 +1029,7 @@ export default function MistakeDetailScreen() {
     latestNoteInputRef.current = '';
     setNoteInput('');
     void handleSaveNote('');
-  }, [clearNoteSaveTimer, handleSaveNote, isSavingNote]);
+  }, [clearNoteSaveTimer, handleSaveNote, isNoteEditing, isSavingNote]);
 
   const clearVoicePlaybackResetTimer = useCallback(() => {
     if (voicePlaybackResetTimerRef.current) {
@@ -1874,11 +1926,14 @@ export default function MistakeDetailScreen() {
       syncedNoteInputRef.current = '';
       syncedNoteMistakeIdRef.current = null;
       setNoteInput('');
+      setIsNoteEditing(false);
+      setIsNoteFocused(false);
+      setIsNoteModalVisible(false);
       lastNoteSaveFailedValueRef.current = null;
       return;
     }
 
-    if (isNoteFocused || isSavingNote) {
+    if (isNoteEditing || isNoteFocused || isSavingNote) {
       return;
     }
 
@@ -1898,7 +1953,7 @@ export default function MistakeDetailScreen() {
     latestNoteInputRef.current = nextNoteInput;
     setNoteInput((current) => (current === nextNoteInput ? current : nextNoteInput));
     lastNoteSaveFailedValueRef.current = null;
-  }, [clearNoteSaveTimer, isNoteFocused, isSavingNote, noteInput, state]);
+  }, [clearNoteSaveTimer, isNoteEditing, isNoteFocused, isSavingNote, noteInput, state]);
 
   useEffect(() => {
     if (state.kind !== 'success' || isSavingNote) {
@@ -1969,7 +2024,9 @@ export default function MistakeDetailScreen() {
     || activeReviewRecordId !== null
     || activeVoiceRecordingRecordId !== null
     || isVoiceRecordingBusy;
-  const isNoteClearDisabled = isSavingNote || noteInput.length <= 0;
+  const hasNoteContent = normalizeNoteDraft(noteInput).length > 0;
+  const noteReadText = hasNoteContent ? noteInput : '暂无备注';
+  const isNoteClearDisabled = !isNoteEditing || isSavingNote || noteInput.length <= 0;
 
   const browseCurrentIndex = useMemo(() => {
     if (state.kind !== 'success') {
@@ -2677,73 +2734,117 @@ export default function MistakeDetailScreen() {
               <View style={styles.noteEditorWrap}>
                 <View style={styles.noteHeaderRow}>
                   <Text style={styles.noteTitleText}>备注</Text>
-                  <View style={styles.noteEditIconWrap}>
-                    <MaterialIcons name="edit" size={20} color={colors.textMuted} />
-                  </View>
-                </View>
-
-                <View style={[
-                  styles.noteInputBox,
-                  isNoteFocused && styles.noteInputBoxFocused,
-                ]}>
-                  <TextInput
-                    value={noteInput}
-                    onChangeText={handleChangeNote}
-                    editable={!isDeletingMistake}
-                    placeholder={NOTE_PLACEHOLDER}
-                    placeholderTextColor={colors.textMuted}
-                    multiline
-                    maxLength={NOTE_MAX_LENGTH}
-                    numberOfLines={4}
-                    scrollEnabled={false}
-                    textAlignVertical="top"
-                    style={styles.noteInput}
-                    onFocus={() => {
-                      setIsNoteFocused(true);
-                    }}
-                    onBlur={handleNoteBlur}
-                  />
-                  <Text style={styles.noteCounterText}>
-                    {noteInput.length}/{NOTE_MAX_LENGTH}
-                  </Text>
-                </View>
-
-                <View style={styles.noteFooterRow}>
-                  <View style={styles.noteSaveStatusRow}>
-                    {isSavingNote ? (
-                      <ActivityIndicator size="small" color={colors.success} />
-                    ) : (
-                      <MaterialIcons name="check-circle" size={16} color={colors.success} />
-                    )}
-                    <Text style={styles.noteSaveStatusText}>
-                      {isSavingNote ? '备注保存中...' : '备注将自动保存'}
-                    </Text>
-                  </View>
-
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="清空备注"
-                    disabled={isNoteClearDisabled}
-                    onPress={handleClearNote}
+                    accessibilityLabel={isNoteEditing ? '完成备注编辑' : '编辑备注'}
+                    disabled={isDeletingMistake}
+                    onPress={handleToggleNoteEdit}
                     style={({ pressed }) => [
-                      styles.noteClearButton,
-                      pressed && !isNoteClearDisabled && styles.noteClearButtonPressed,
-                      isNoteClearDisabled && styles.noteClearButtonDisabled,
+                      styles.noteEditIconWrap,
+                      isNoteEditing && styles.noteEditIconWrapActive,
+                      pressed && !isDeletingMistake && styles.noteEditIconWrapPressed,
+                      isDeletingMistake && styles.noteEditIconWrapDisabled,
                     ]}>
                     <MaterialIcons
-                      name="delete-outline"
-                      size={16}
-                      color={isNoteClearDisabled ? colors.textMuted : colors.textSecondary}
+                      name="edit"
+                      size={20}
+                      color={isNoteEditing ? colors.success : colors.textMuted}
                     />
-                    <Text
-                      style={[
-                        styles.noteClearButtonText,
-                        isNoteClearDisabled && styles.noteClearButtonTextDisabled,
-                      ]}>
-                      清空
-                    </Text>
                   </Pressable>
                 </View>
+
+                {isNoteEditing ? (
+                  <>
+                    <View style={[
+                      styles.noteInputBox,
+                      isNoteFocused && styles.noteInputBoxFocused,
+                    ]}>
+                      <TextInput
+                        ref={noteInputRef}
+                        value={noteInput}
+                        onChangeText={handleChangeNote}
+                        editable={!isDeletingMistake}
+                        placeholder={NOTE_PLACEHOLDER}
+                        placeholderTextColor={colors.textMuted}
+                        multiline
+                        autoFocus
+                        maxLength={NOTE_MAX_LENGTH}
+                        numberOfLines={4}
+                        scrollEnabled
+                        textAlignVertical="top"
+                        style={styles.noteInput}
+                        onFocus={() => {
+                          setIsNoteFocused(true);
+                        }}
+                        onBlur={handleNoteBlur}
+                      />
+                      <Text style={styles.noteCounterText}>
+                        {noteInput.length}/{NOTE_MAX_LENGTH}
+                      </Text>
+                    </View>
+
+                    <View style={styles.noteFooterRow}>
+                      <View style={styles.noteSaveStatusRow}>
+                        {isSavingNote ? (
+                          <ActivityIndicator size="small" color={colors.success} />
+                        ) : (
+                          <MaterialIcons name="check-circle" size={16} color={colors.success} />
+                        )}
+                        <Text style={styles.noteSaveStatusText}>
+                          {isSavingNote ? '备注保存中...' : '备注将自动保存'}
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="清空备注"
+                        disabled={isNoteClearDisabled}
+                        onPress={handleClearNote}
+                        style={({ pressed }) => [
+                          styles.noteClearButton,
+                          pressed && !isNoteClearDisabled && styles.noteClearButtonPressed,
+                          isNoteClearDisabled && styles.noteClearButtonDisabled,
+                        ]}>
+                        <MaterialIcons
+                          name="delete-outline"
+                          size={16}
+                          color={isNoteClearDisabled ? colors.textMuted : colors.textSecondary}
+                        />
+                        <Text
+                          style={[
+                            styles.noteClearButtonText,
+                            isNoteClearDisabled && styles.noteClearButtonTextDisabled,
+                          ]}>
+                          清空
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </>
+                ) : (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="备注内容，双击查看全部"
+                    onPress={handlePressNoteRead}
+                    style={({ pressed }) => [
+                      styles.noteReadBox,
+                      pressed && styles.noteReadBoxPressed,
+                    ]}>
+                    <Text
+                      numberOfLines={4}
+                      style={[
+                        styles.noteReadText,
+                        !hasNoteContent && styles.noteReadPlaceholderText,
+                      ]}>
+                      {noteReadText}
+                    </Text>
+                    <View style={styles.noteReadFooterRow}>
+                      <Text style={styles.noteReadHintText}>双击查看全部</Text>
+                      <Text style={styles.noteReadCounterText}>
+                        {noteInput.length}/{NOTE_MAX_LENGTH}
+                      </Text>
+                    </View>
+                  </Pressable>
+                )}
               </View>
             </CardContainer>
 
@@ -2885,6 +2986,60 @@ export default function MistakeDetailScreen() {
         />
         </ScreenContainer>
       </Animated.View>
+
+      <Modal
+        visible={isNoteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseNoteModal}>
+        <View
+          style={[
+            styles.noteModalOverlay,
+            {
+              paddingTop: Math.max(insets.top + spacing.xl, spacing.xxl),
+              paddingBottom: Math.max(insets.bottom + spacing.xl, spacing.xxl),
+            },
+          ]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭备注大窗口"
+            style={styles.noteModalBackdrop}
+            onPress={handleCloseNoteModal}
+          />
+          <View style={styles.noteModalCard}>
+            <View style={styles.noteModalHeaderRow}>
+              <View style={styles.noteModalTitleWrap}>
+                <Text style={styles.noteModalTitle}>备注</Text>
+                <Text style={styles.noteModalSubtitle}>
+                  {noteInput.length}/{NOTE_MAX_LENGTH}
+                </Text>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="关闭备注大窗口"
+                onPress={handleCloseNoteModal}
+                style={({ pressed }) => [
+                  styles.noteModalCloseButton,
+                  pressed && styles.noteModalCloseButtonPressed,
+                ]}>
+                <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+            <ScrollView
+              style={styles.noteModalScroll}
+              contentContainerStyle={styles.noteModalScrollContent}>
+              <Text
+                selectable
+                style={[
+                  styles.noteModalText,
+                  !hasNoteContent && styles.noteReadPlaceholderText,
+                ]}>
+                {noteReadText}
+              </Text>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
 
       {toastVisible ? (
         <Animated.View
@@ -3172,8 +3327,18 @@ const styles = StyleSheet.create({
   noteEditIconWrap: {
     width: 28,
     height: 28,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  noteEditIconWrapActive: {
+    backgroundColor: colors.successBg,
+  },
+  noteEditIconWrapPressed: {
+    opacity: 0.78,
+  },
+  noteEditIconWrapDisabled: {
+    opacity: 0.56,
   },
   noteInputBox: {
     minHeight: 112,
@@ -3183,6 +3348,48 @@ const styles = StyleSheet.create({
     backgroundColor: '#FCFCFD',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
+  },
+  noteReadBox: {
+    minHeight: 112,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: '#FCFCFD',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  noteReadBoxPressed: {
+    borderColor: colors.successBorder,
+    backgroundColor: '#FBFFFC',
+  },
+  noteReadText: {
+    ...typography.bodySmall,
+    minHeight: 74,
+    color: colors.textPrimary,
+    includeFontPadding: false,
+  },
+  noteReadPlaceholderText: {
+    color: colors.textMuted,
+  },
+  noteReadFooterRow: {
+    minHeight: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  noteReadHintText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  noteReadCounterText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'right',
+    fontWeight: '600',
   },
   noteInputBoxFocused: {
     borderColor: colors.successBorder,
@@ -3242,6 +3449,73 @@ const styles = StyleSheet.create({
   },
   noteClearButtonTextDisabled: {
     color: colors.textMuted,
+  },
+  noteModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.screenPadding,
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+  },
+  noteModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  noteModalCard: {
+    maxHeight: '100%',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+  noteModalHeaderRow: {
+    minHeight: 36,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  noteModalTitleWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  noteModalTitle: {
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
+  },
+  noteModalSubtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  noteModalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteModalCloseButtonPressed: {
+    opacity: 0.78,
+  },
+  noteModalScroll: {
+    flexGrow: 0,
+  },
+  noteModalScrollContent: {
+    paddingBottom: spacing.sm,
+  },
+  noteModalText: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '500',
   },
   imagesSectionCard: {
     borderRadius: radius.xl,

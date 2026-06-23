@@ -1,4 +1,5 @@
 ﻿import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
+import { MISTAKE_NOTE_MAX_LENGTH } from '@/src/constants/mistakeOptions';
 import type {
   DetailImageSlot,
   DetailPreviewImageItem,
@@ -19,7 +20,7 @@ const FALLBACK_ERROR_MESSAGE = '读取错题详情失败，请稍后重试。';
 const DELETE_MISTAKE_ERROR_MESSAGE = '删除错题失败，请稍后重试。';
 const MODULE_NAVIGATION_LIMIT = 500;
 
-export const MISTAKE_DETAIL_NOTE_MAX_LENGTH = 200;
+export const MISTAKE_DETAIL_NOTE_MAX_LENGTH = MISTAKE_NOTE_MAX_LENGTH;
 
 export type ManagedDetailImageType = Exclude<DetailImageSlot['type'], 'review_solution'>;
 export type DetailBrowseMode = 'today_due' | 'same_module' | 'none';

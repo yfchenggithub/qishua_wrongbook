@@ -1,5 +1,6 @@
 import {
   DIFFICULTY_OPTIONS,
+  MISTAKE_NOTE_MAX_LENGTH,
   SUBJECT_OPTIONS,
 } from '@/src/constants/mistakeOptions';
 import type {
@@ -50,6 +51,10 @@ export function validateAddMistakeDraft(draft: AddMistakeDraft): AddMistakeValid
     draft.difficulty > MAX_DIFFICULTY
   ) {
     errors.push(`难度必须是 ${MIN_DIFFICULTY}-${MAX_DIFFICULTY} 的整数。`);
+  }
+
+  if (typeof draft.note === 'string' && draft.note.length > MISTAKE_NOTE_MAX_LENGTH) {
+    errors.push(`备注不能超过 ${MISTAKE_NOTE_MAX_LENGTH} 字。`);
   }
 
   return {

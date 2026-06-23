@@ -16,6 +16,7 @@ import {
 import {
   DIFFICULTY_OPTIONS,
   ERROR_REASON_OPTIONS,
+  MISTAKE_NOTE_MAX_LENGTH,
   MODULE_OPTIONS,
 } from '@/src/constants/mistakeOptions';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
@@ -1535,6 +1536,7 @@ export default function AddScreen() {
                 placeholderTextColor={colors.textMuted}
                 style={[styles.textInput, styles.noteInput]}
                 multiline
+                maxLength={MISTAKE_NOTE_MAX_LENGTH}
                 maxFontSizeMultiplier={1.2}
                 textAlignVertical="top"
               />
