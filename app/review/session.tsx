@@ -36,6 +36,7 @@ import type { ReviewSessionQueueItem } from '@/src/services/ReviewSessionService
 import * as ReviewSessionService from '@/src/services/ReviewSessionService';
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
+import { prewarmTodayReviewPrintEnhanceCache } from '@/src/services/export/PrintEnhancePrewarmService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'ReviewSessionPage';
@@ -1519,6 +1520,7 @@ export default function ReviewSessionPage() {
       setQueue(orderedQueue);
       setCurrentIndex(0);
       setSessionState('ready');
+      void prewarmTodayReviewPrintEnhanceCache({ reason: 'review_session_ready' });
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Failed to load today review queue.', { error });
       if (requestId !== queueRequestIdRef.current) {

@@ -26,6 +26,7 @@ import * as BackupHistoryService from '@/src/services/backup/BackupHistoryServic
 import * as BackupService from '@/src/services/backup/BackupService';
 import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
 import type { BackupManifest, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
+import { clearPrintEnhanceImageCache } from '@/src/services/export/PrintEnhanceCacheService';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
@@ -454,6 +455,7 @@ export default function SettingsScreen() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
   const [isCleaningOrphanImages, setIsCleaningOrphanImages] = useState(false);
+  const [isClearingPrintEnhanceCache, setIsClearingPrintEnhanceCache] = useState(false);
   const [reminderSettings, setReminderSettings] =
     useState<ReviewReminderSettings>(DEFAULT_REMINDER_SETTINGS);
   const [isReminderLoading, setIsReminderLoading] = useState(true);
@@ -1886,6 +1888,45 @@ export default function SettingsScreen() {
     }
   }, [cleanupStorageOrphans, isCleaningOrphanImages, isScanningOrphanImages, showToast]);
 
+  const handleClearPrintEnhanceCache = useCallback(async () => {
+    if (isClearingPrintEnhanceCache) {
+      return;
+    }
+
+    Logger.info(PAGE_SCOPE, 'Start clearing print enhance image cache from settings.');
+    setIsClearingPrintEnhanceCache(true);
+    try {
+      const result = await clearPrintEnhanceImageCache();
+      if (result.scannedCount <= 0) {
+        showToast('没有可清理的图片缓存', 'info');
+        return;
+      }
+
+      const releasedText = formatStorageSize(result.releasedBytes);
+      if (result.failedCount > 0) {
+        showToast(
+          `已清理 ${result.deletedCount} 张图片缓存，部分缓存清理失败`,
+          'warning',
+          TOAST_DURATION_LONG,
+        );
+        Logger.warn(PAGE_SCOPE, 'Some print enhance cache files failed to delete.', {
+          scannedCount: result.scannedCount,
+          deletedCount: result.deletedCount,
+          failedCount: result.failedCount,
+          releasedBytes: result.releasedBytes,
+        });
+        return;
+      }
+
+      showToast(`已清理 ${result.deletedCount} 张图片缓存，释放 ${releasedText}`, 'success', TOAST_DURATION_LONG);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to clear print enhance image cache from settings.', { error });
+      showToast('图片缓存清理失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+    } finally {
+      setIsClearingPrintEnhanceCache(false);
+    }
+  }, [isClearingPrintEnhanceCache, showToast]);
+
   const statsItems = useMemo(
     () => [
       { label: '已录入', value: displayNumber(dataOverview.totalMistakes) },
@@ -1904,7 +1945,7 @@ export default function SettingsScreen() {
     'history',
   ] as const;
 
-  const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages;
+  const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages || isClearingPrintEnhanceCache;
   const isRestoreBusy = isInspectingBackup || isRestoring;
   const isBackupBusy = isBackingUp || isRestoreBusy;
   const isExportImageModeBusy =
@@ -2422,6 +2463,20 @@ export default function SettingsScreen() {
                   ]}>
                   <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
                     {isCleaningOrphanImages ? '清理中...' : isScanningOrphanImages ? '扫描中...' : '清理无效图片'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  disabled={isStorageBusy}
+                  onPress={() => {
+                    void handleClearPrintEnhanceCache();
+                  }}
+                  style={[
+                    styles.actionButton,
+                    styles.actionButtonGreen,
+                    isStorageBusy ? styles.disabledButton : null,
+                  ]}>
+                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
+                    {isClearingPrintEnhanceCache ? '清理中...' : '清理图片缓存'}
                   </Text>
                 </Pressable>
                 <Pressable

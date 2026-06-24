@@ -5,9 +5,9 @@ import { Image, Platform } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
+import { getCachedPrintEnhancedImageForPdf, type PrintEnhanceCacheStatus } from '@/src/services/export/PrintEnhanceCacheService';
 import {
   cleanupPrintEnhancedTempFiles,
-  enhanceImageForPdfPrint,
   type PrintEnhanceEngine,
   type PrintEnhanceOutputFormat,
 } from '@/src/services/export/PrintImageEnhancer';
@@ -162,6 +162,7 @@ type QuestionImageEnhanceTrace = {
   success: boolean;
   usedFallback: boolean;
   durationMs: number;
+  cacheStatus: PrintEnhanceCacheStatus;
 };
 
 type BuildQuestionImageSrcResult = {
@@ -532,14 +533,14 @@ async function buildQuestionImageSrc(
     };
   }
 
-  const enhanceResult = await enhanceImageForPdfPrint(
+  const enhanceResult = await getCachedPrintEnhancedImageForPdf(
     normalizedUri,
     printEnhanceMode,
     clearPrintStrength,
     performanceProfile,
   );
   const enhancedUri = normalizeOptionalText(enhanceResult.outputUri) ?? normalizedUri;
-  const temporaryEnhancedUri = (enhancedUri !== normalizedUri)
+  const temporaryEnhancedUri = (enhanceResult.shouldCleanupOutput && enhancedUri !== normalizedUri)
     ? enhancedUri
     : null;
   const candidateUris = enhancedUri === normalizedUri ? [normalizedUri] : [enhancedUri, normalizedUri];
@@ -565,6 +566,7 @@ async function buildQuestionImageSrc(
         success: enhanceResult.success,
         usedFallback: enhanceResult.usedFallback,
         durationMs: enhanceResult.durationMs,
+        cacheStatus: enhanceResult.cacheStatus,
       };
       return {
         imageDataUri: dataUri,
@@ -583,6 +585,7 @@ async function buildQuestionImageSrc(
     printEnhanceMode,
     enhanceEngine: enhanceResult.engine,
     enhanceUsedFallback: enhanceResult.usedFallback,
+    cacheStatus: enhanceResult.cacheStatus,
     enhanceDurationMs: enhanceResult.durationMs,
   });
   return {
@@ -601,6 +604,7 @@ async function buildQuestionImageSrc(
       success: enhanceResult.success,
       usedFallback: enhanceResult.usedFallback,
       durationMs: enhanceResult.durationMs,
+      cacheStatus: enhanceResult.cacheStatus,
     },
     base64ReadDurationMs,
     base64ReadAttemptCount,
@@ -1253,6 +1257,7 @@ async function buildSingleRenderItem(
       outputFormat: imageResult.trace.outputFormat,
       enhanceSuccess: imageResult.trace.success,
       enhanceUsedFallback: imageResult.trace.usedFallback,
+      cacheStatus: imageResult.trace.cacheStatus,
       enhanceDurationMs: imageResult.trace.durationMs,
       base64ReadDurationMs: imageResult.base64ReadDurationMs,
       base64ReadAttemptCount: imageResult.base64ReadAttemptCount,

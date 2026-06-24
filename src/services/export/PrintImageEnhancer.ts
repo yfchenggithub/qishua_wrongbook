@@ -23,6 +23,7 @@ const OPENCV_NATIVE_MODULE_CANDIDATES = [
 
 export type PrintEnhanceEngine =
   | 'original'
+  | 'cache'
   | 'opencv'
   | 'bitmap_fallback'
   | 'original_fallback';
