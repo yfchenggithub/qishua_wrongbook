@@ -26,6 +26,7 @@ import {
   CardContainer,
   MistakeImageBrowser,
   type MistakeImageBrowserItem,
+  type MistakeImageBrowserLongPressHelpers,
   MistakeImageSection,
   ProgressDots,
   ScreenContainer,
@@ -1147,10 +1148,35 @@ export default function MistakeDetailScreen() {
     setImageBrowserVisible(true);
   }, [state]);
 
+  const showImageBrowserActionToast = useCallback(
+    (
+      browserToast: MistakeImageBrowserLongPressHelpers['showToast'] | undefined,
+      message: string,
+      type: ToastType = 'info',
+      duration = TOAST_DURATION_DEFAULT,
+    ) => {
+      if (browserToast) {
+        browserToast(message);
+        return;
+      }
+
+      showToast(message, type, duration);
+    },
+    [showToast],
+  );
+
   const handleSaveBrowserImage = useCallback(
-    (item: MistakeImageBrowserItem) => {
+    (
+      item: MistakeImageBrowserItem,
+      browserToast?: MistakeImageBrowserLongPressHelpers['showToast'],
+    ) => {
       if (activeImageBrowserAction !== null) {
-        showToast('正在处理图片，请稍后...', 'info', TOAST_DURATION_SHORT);
+        showImageBrowserActionToast(
+          browserToast,
+          '正在处理图片，请稍后...',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
         return;
       }
 
@@ -1159,30 +1185,48 @@ export default function MistakeDetailScreen() {
         try {
           const result = await ImageService.saveLocalImageToGallery(item.uri);
           if (result.success) {
-            showToast('图片已保存到相册', 'success');
+            showImageBrowserActionToast(browserToast, '保存成功', 'success');
             return;
           }
 
-          showToast(result.message || '保存图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+          showImageBrowserActionToast(
+            browserToast,
+            result.message || '保存图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
         } catch (error) {
           Logger.error(PAGE_SCOPE, 'Unexpected error while saving browser image.', {
             itemId: item.id,
             title: item.title,
             error,
           });
-          showToast('保存图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+          showImageBrowserActionToast(
+            browserToast,
+            '保存图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
         } finally {
           setActiveImageBrowserAction(null);
         }
       })();
     },
-    [activeImageBrowserAction, showToast],
+    [activeImageBrowserAction, showImageBrowserActionToast],
   );
 
   const handleShareBrowserImage = useCallback(
-    (item: MistakeImageBrowserItem) => {
+    (
+      item: MistakeImageBrowserItem,
+      browserToast?: MistakeImageBrowserLongPressHelpers['showToast'],
+    ) => {
       if (activeImageBrowserAction !== null) {
-        showToast('正在处理图片，请稍后...', 'info', TOAST_DURATION_SHORT);
+        showImageBrowserActionToast(
+          browserToast,
+          '正在处理图片，请稍后...',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
         return;
       }
 
@@ -1198,26 +1242,44 @@ export default function MistakeDetailScreen() {
             return;
           }
 
-          showToast(result.message || '分享图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+          showImageBrowserActionToast(
+            browserToast,
+            result.message || '分享图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
         } catch (error) {
           Logger.error(PAGE_SCOPE, 'Unexpected error while sharing browser image.', {
             itemId: item.id,
             title: item.title,
             error,
           });
-          showToast('分享图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+          showImageBrowserActionToast(
+            browserToast,
+            '分享图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
         } finally {
           setActiveImageBrowserAction(null);
         }
       })();
     },
-    [activeImageBrowserAction, showToast],
+    [activeImageBrowserAction, showImageBrowserActionToast],
   );
 
   const handleImageBrowserLongPress = useCallback(
-    (item: MistakeImageBrowserItem) => {
+    (
+      item: MistakeImageBrowserItem,
+      helpers: MistakeImageBrowserLongPressHelpers,
+    ) => {
       if (activeImageBrowserAction !== null) {
-        showToast('正在处理图片，请稍后...', 'info', TOAST_DURATION_SHORT);
+        showImageBrowserActionToast(
+          helpers.showToast,
+          '正在处理图片，请稍后...',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
         return;
       }
 
@@ -1225,11 +1287,11 @@ export default function MistakeDetailScreen() {
       Alert.alert(`${title}操作`, '请选择要对这张图片执行的操作。', [
         {
           text: '保存图片',
-          onPress: () => handleSaveBrowserImage(item),
+          onPress: () => handleSaveBrowserImage(item, helpers.showToast),
         },
         {
           text: '分享图片',
-          onPress: () => handleShareBrowserImage(item),
+          onPress: () => handleShareBrowserImage(item, helpers.showToast),
         },
         {
           text: '取消',
@@ -1241,7 +1303,7 @@ export default function MistakeDetailScreen() {
       activeImageBrowserAction,
       handleSaveBrowserImage,
       handleShareBrowserImage,
-      showToast,
+      showImageBrowserActionToast,
     ],
   );
 

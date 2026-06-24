@@ -27,12 +27,19 @@ export type MistakeImageBrowserItem = {
   subtitle?: string;
 };
 
+export type MistakeImageBrowserLongPressHelpers = {
+  showToast: (message: string) => void;
+};
+
 export interface MistakeImageBrowserProps {
   visible: boolean;
   items: MistakeImageBrowserItem[];
   initialIndex: number;
   onClose: () => void;
-  onImageLongPress?: (item: MistakeImageBrowserItem) => void;
+  onImageLongPress?: (
+    item: MistakeImageBrowserItem,
+    helpers: MistakeImageBrowserLongPressHelpers,
+  ) => void;
 }
 
 type Size = {
@@ -630,7 +637,7 @@ export function MistakeImageBrowser({
     switchingRef.current = false;
   }, []);
 
-  const showBoundaryToast = useCallback((message: string) => {
+  const showBrowserToast = useCallback((message: string) => {
     const nextMessage = message.trim();
     if (!nextMessage) {
       return;
@@ -792,14 +799,14 @@ export function MistakeImageBrowser({
                 onRequestPrev={handleSwitchPrev}
                 onRequestNext={handleSwitchNext}
                 onReachFirstBoundary={() => {
-                  showBoundaryToast('当前是第一张');
+                  showBrowserToast('当前是第一张');
                 }}
                 onReachLastBoundary={() => {
-                  showBoundaryToast('当前是最后一张');
+                  showBrowserToast('当前是最后一张');
                 }}
                 onSingleTapClose={onClose}
                 onLongPressImage={() => {
-                  onImageLongPress?.(activeItem);
+                  onImageLongPress?.(activeItem, { showToast: showBrowserToast });
                 }}
               />
             ) : (
