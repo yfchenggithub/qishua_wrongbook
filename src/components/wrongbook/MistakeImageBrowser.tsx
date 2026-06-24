@@ -32,6 +32,7 @@ export interface MistakeImageBrowserProps {
   items: MistakeImageBrowserItem[];
   initialIndex: number;
   onClose: () => void;
+  onImageLongPress?: (item: MistakeImageBrowserItem) => void;
 }
 
 type Size = {
@@ -154,6 +155,7 @@ type SwipeZoomImageStageProps = {
   onReachFirstBoundary: () => void;
   onReachLastBoundary: () => void;
   onSingleTapClose: () => void;
+  onLongPressImage?: () => void;
 };
 
 function SwipeZoomImageStage({
@@ -165,6 +167,7 @@ function SwipeZoomImageStage({
   onReachFirstBoundary,
   onReachLastBoundary,
   onSingleTapClose,
+  onLongPressImage,
 }: SwipeZoomImageStageProps) {
   const [imageFailed, setImageFailed] = useState(false);
   const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
@@ -495,9 +498,29 @@ function SwipeZoomImageStage({
       hasPanMotion.value = withTiming(0, { duration: 130 });
     });
 
+  const longPressGesture = Gesture.LongPress()
+    .shouldCancelWhenOutside(false)
+    .minDuration(520)
+    .maxDistance(12)
+    .onStart(() => {
+      suppressSingleTap.value = 1;
+      hasPanMotion.value = 1;
+      if (onLongPressImage) {
+        runOnJS(onLongPressImage)();
+      }
+    })
+    .onEnd(() => {
+      suppressSingleTap.value = withDelay(
+        TAP_GUARD_RELEASE_DELAY_MS,
+        withTiming(0, { duration: 80 }),
+      );
+      hasPanMotion.value = withTiming(0, { duration: 130 });
+    });
+
   const gesture = Gesture.Simultaneous(
     pinchGesture,
     panGesture,
+    longPressGesture,
     Gesture.Exclusive(doubleTapGesture, singleTapGesture),
   );
 
@@ -543,7 +566,7 @@ function SwipeZoomImageStage({
           )}
 
           <View pointerEvents="none" style={styles.gestureHintWrap}>
-            <Text style={styles.gestureHintText}>上下滑动切图 · 双击放大 · 双指缩放 · 拖动查看 · 单击关闭</Text>
+            <Text style={styles.gestureHintText}>上下滑动切图 · 双击放大 · 双指缩放 · 拖动查看 · 长按保存/分享 · 单击关闭</Text>
           </View>
         </View>
       </Animated.View>
@@ -551,7 +574,13 @@ function SwipeZoomImageStage({
   );
 }
 
-export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: MistakeImageBrowserProps) {
+export function MistakeImageBrowser({
+  visible,
+  items,
+  initialIndex,
+  onClose,
+  onImageLongPress,
+}: MistakeImageBrowserProps) {
   const normalizedItems = useMemo(() => {
     const result: NormalizedBrowserItem[] = [];
     for (const item of items) {
@@ -769,6 +798,9 @@ export function MistakeImageBrowser({ visible, items, initialIndex, onClose }: M
                   showBoundaryToast('当前是最后一张');
                 }}
                 onSingleTapClose={onClose}
+                onLongPressImage={() => {
+                  onImageLongPress?.(activeItem);
+                }}
               />
             ) : (
               <View style={styles.emptyWrap}>

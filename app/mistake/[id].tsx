@@ -25,6 +25,7 @@ import {
   BrandHeader,
   CardContainer,
   MistakeImageBrowser,
+  type MistakeImageBrowserItem,
   MistakeImageSection,
   ProgressDots,
   ScreenContainer,
@@ -739,6 +740,7 @@ export default function MistakeDetailScreen() {
   const [imageBrowserVisible, setImageBrowserVisible] = useState(false);
   const [imageBrowserInitialIndex, setImageBrowserInitialIndex] = useState(0);
   const [imageBrowserItems, setImageBrowserItems] = useState<DetailImagePreviewItem[]>([]);
+  const [activeImageBrowserAction, setActiveImageBrowserAction] = useState<'save' | 'share' | null>(null);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -1144,6 +1146,104 @@ export default function MistakeDetailScreen() {
     setImageBrowserInitialIndex(targetIndex >= 0 ? targetIndex : 0);
     setImageBrowserVisible(true);
   }, [state]);
+
+  const handleSaveBrowserImage = useCallback(
+    (item: MistakeImageBrowserItem) => {
+      if (activeImageBrowserAction !== null) {
+        showToast('正在处理图片，请稍后...', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      setActiveImageBrowserAction('save');
+      void (async () => {
+        try {
+          const result = await ImageService.saveLocalImageToGallery(item.uri);
+          if (result.success) {
+            showToast('图片已保存到相册', 'success');
+            return;
+          }
+
+          showToast(result.message || '保存图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+        } catch (error) {
+          Logger.error(PAGE_SCOPE, 'Unexpected error while saving browser image.', {
+            itemId: item.id,
+            title: item.title,
+            error,
+          });
+          showToast('保存图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+        } finally {
+          setActiveImageBrowserAction(null);
+        }
+      })();
+    },
+    [activeImageBrowserAction, showToast],
+  );
+
+  const handleShareBrowserImage = useCallback(
+    (item: MistakeImageBrowserItem) => {
+      if (activeImageBrowserAction !== null) {
+        showToast('正在处理图片，请稍后...', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      setActiveImageBrowserAction('share');
+      void (async () => {
+        try {
+          const result = await ImageService.shareLocalImage(item.uri);
+          if (result.success) {
+            return;
+          }
+
+          if (result.reason === 'cancelled') {
+            return;
+          }
+
+          showToast(result.message || '分享图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+        } catch (error) {
+          Logger.error(PAGE_SCOPE, 'Unexpected error while sharing browser image.', {
+            itemId: item.id,
+            title: item.title,
+            error,
+          });
+          showToast('分享图片失败，请稍后重试。', 'error', TOAST_DURATION_LONG);
+        } finally {
+          setActiveImageBrowserAction(null);
+        }
+      })();
+    },
+    [activeImageBrowserAction, showToast],
+  );
+
+  const handleImageBrowserLongPress = useCallback(
+    (item: MistakeImageBrowserItem) => {
+      if (activeImageBrowserAction !== null) {
+        showToast('正在处理图片，请稍后...', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      const title = item.title.trim().length > 0 ? item.title : '图片';
+      Alert.alert(`${title}操作`, '请选择要对这张图片执行的操作。', [
+        {
+          text: '保存图片',
+          onPress: () => handleSaveBrowserImage(item),
+        },
+        {
+          text: '分享图片',
+          onPress: () => handleShareBrowserImage(item),
+        },
+        {
+          text: '取消',
+          style: 'cancel',
+        },
+      ]);
+    },
+    [
+      activeImageBrowserAction,
+      handleSaveBrowserImage,
+      handleShareBrowserImage,
+      showToast,
+    ],
+  );
 
   const refreshDetail = useCallback(async () => {
     if (!routeId) {
@@ -3026,6 +3126,7 @@ export default function MistakeDetailScreen() {
           items={imageBrowserItems}
           initialIndex={imageBrowserInitialIndex}
           onClose={handleCloseImageBrowser}
+          onImageLongPress={handleImageBrowserLongPress}
         />
         </ScreenContainer>
       </Animated.View>
