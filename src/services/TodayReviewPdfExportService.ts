@@ -1,7 +1,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { Platform } from 'react-native';
+import { Image, Platform } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
@@ -37,6 +37,20 @@ const PDF_MIME_TYPE = 'application/pdf';
 const PDF_FILE_PREFIX = 'qishua_today_review';
 const DEFAULT_EXPORT_PRINT_ENHANCE_MODE: PrintEnhanceMode = DEFAULT_PRINT_ENHANCE_MODE;
 const SUSPICIOUS_PDF_SIZE_BYTES = 4 * 1024;
+const A4_WIDTH_MM = 210;
+const A4_HEIGHT_MM = 297;
+const PDF_PAGE_MARGIN_MM = 12;
+const PDF_CONTENT_WIDTH_MM = A4_WIDTH_MM - PDF_PAGE_MARGIN_MM * 2;
+const PDF_CONTENT_HEIGHT_MM = A4_HEIGHT_MM - PDF_PAGE_MARGIN_MM * 2;
+const SINGLE_PAGE_FIXED_HEIGHT_MM = 72;
+const TWO_PAGE_QUESTION_FIXED_HEIGHT_MM = 58;
+const ANSWER_PAGE_FIXED_HEIGHT_MM = 62;
+const ANSWER_MIN_HEIGHT_MM = 80;
+const THOUGHT_MIN_HEIGHT_MM = 35;
+const RESULT_AREA_HEIGHT_MM = 18;
+const SINGLE_PAGE_IMAGE_WIDTH_RATIO_SHORT = 0.84;
+const SINGLE_PAGE_IMAGE_WIDTH_RATIO_MEDIUM = 0.9;
+const TWO_PAGE_IMAGE_WIDTH_RATIO = 0.95;
 const EXPORT_BUSY_MESSAGE = '导出/分享进行中，请稍后再试。';
 const SHARE_BUSY_ERROR_FRAGMENT = 'another share request is being processed';
 let isExportInProgress = false;
@@ -110,7 +124,31 @@ export type OpenTodayReviewPdfWithOtherAppResult =
 type TodayReviewPdfRenderItem = {
   raw: TodayReviewExportItem;
   questionImageSrc: string | null;
+  questionImageSize: PrintImageSize | null;
 };
+
+type PrintImageSize = {
+  width: number;
+  height: number;
+};
+
+type QuestionPrintLayout =
+  | {
+      kind: 'single_page';
+      ratio: number;
+      imageDisplayWidthMm: number;
+      imageMaxHeightMm: number;
+      estimatedImageHeightMm: number;
+      remainingAnswerSpaceMm: number;
+    }
+  | {
+      kind: 'question_answer_pages';
+      ratio: number;
+      imageDisplayWidthMm: number;
+      imageMaxHeightMm: number;
+      estimatedImageHeightMm: number;
+      remainingAnswerSpaceMm: number;
+    };
 
 type QuestionImageEnhanceTrace = {
   mode: PrintEnhanceMode;
@@ -128,6 +166,7 @@ type QuestionImageEnhanceTrace = {
 
 type BuildQuestionImageSrcResult = {
   imageDataUri: string | null;
+  imageSize: PrintImageSize | null;
   temporaryEnhancedUri: string | null;
   trace: QuestionImageEnhanceTrace | null;
   base64ReadDurationMs: number;
@@ -259,10 +298,10 @@ function getFileSizeBytes(uri: string): number | null {
 }
 
 function countWorksheetPagesInHtml(html: string): number {
-  return (html.match(/<section class="worksheet-page">/g) ?? []).length;
+  return (html.match(/<section class="worksheet-page\b/g) ?? []).length;
 }
 
-function summarizeExportItems(items: TodayReviewExportItem[]): Array<{
+function summarizeExportItems(items: TodayReviewExportItem[]): {
   index: number;
   mistakeId: string;
   module: string;
@@ -271,7 +310,7 @@ function summarizeExportItems(items: TodayReviewExportItem[]): Array<{
   hasQuestionImageUri: boolean;
   currentReviewIndex: number;
   totalReviewCount: number;
-}> {
+}[] {
   return items.slice(0, 8).map((item, index) => ({
     index: index + 1,
     mistakeId: item.mistakeId,
@@ -447,6 +486,34 @@ async function toImageDataUri(uri: string): Promise<string | null> {
   }
 }
 
+function normalizePrintImageSize(width: number, height: number): PrintImageSize | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return {
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}
+
+async function getPrintImageSize(uri: string): Promise<PrintImageSize | null> {
+  return new Promise((resolve) => {
+    Image.getSize(
+      uri,
+      (width, height) => {
+        resolve(normalizePrintImageSize(width, height));
+      },
+      (error) => {
+        Logger.warn(SERVICE_SCOPE, 'Failed to read print image size.', {
+          uriPreview: toSafeUriPreview(uri),
+          error,
+        });
+        resolve(null);
+      },
+    );
+  });
+}
+
 async function buildQuestionImageSrc(
   uri: string,
   printEnhanceMode: PrintEnhanceMode,
@@ -457,6 +524,7 @@ async function buildQuestionImageSrc(
   if (!normalizedUri) {
     return {
       imageDataUri: null,
+      imageSize: null,
       temporaryEnhancedUri: null,
       trace: null,
       base64ReadDurationMs: 0,
@@ -484,6 +552,7 @@ async function buildQuestionImageSrc(
     base64ReadDurationMs += Math.max(0, Date.now() - base64StartedAt);
     base64ReadAttemptCount += 1;
     if (dataUri) {
+      const imageSize = await getPrintImageSize(candidateUri);
       const trace: QuestionImageEnhanceTrace = {
         mode: printEnhanceMode,
         clearPrintStrength,
@@ -499,6 +568,7 @@ async function buildQuestionImageSrc(
       };
       return {
         imageDataUri: dataUri,
+        imageSize,
         temporaryEnhancedUri,
         trace,
         base64ReadDurationMs,
@@ -517,6 +587,7 @@ async function buildQuestionImageSrc(
   });
   return {
     imageDataUri: null,
+    imageSize: null,
     temporaryEnhancedUri,
     trace: {
       mode: printEnhanceMode,
@@ -605,6 +676,8 @@ function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): s
   `;
 }
 
+// Keep the previous fixed one-page template around while the print layout change settles.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function buildWorksheetPageHtml(
   item: TodayReviewPdfRenderItem,
   index: number,
@@ -625,6 +698,243 @@ function buildWorksheetPageHtml(
   `;
 }
 
+function getImageRatio(size: PrintImageSize | null): number {
+  if (!size || size.width <= 0 || size.height <= 0) {
+    return 0.72;
+  }
+  return Math.max(0.1, Math.min(8, size.height / size.width));
+}
+
+function getSinglePageImageWidthRatio(imageRatio: number): number {
+  if (imageRatio < 1.2) {
+    return SINGLE_PAGE_IMAGE_WIDTH_RATIO_SHORT;
+  }
+  return SINGLE_PAGE_IMAGE_WIDTH_RATIO_MEDIUM;
+}
+
+function chooseQuestionPrintLayout(item: TodayReviewPdfRenderItem): QuestionPrintLayout {
+  const ratio = getImageRatio(item.questionImageSize);
+  const singlePageWidthMm = PDF_CONTENT_WIDTH_MM * getSinglePageImageWidthRatio(ratio);
+  const singlePageEstimatedHeightMm = singlePageWidthMm * ratio;
+  const singlePageMaxImageHeightMm = Math.max(
+    80,
+    PDF_CONTENT_HEIGHT_MM - SINGLE_PAGE_FIXED_HEIGHT_MM - ANSWER_MIN_HEIGHT_MM,
+  );
+  const singlePageRemainingAnswerSpaceMm =
+    PDF_CONTENT_HEIGHT_MM - SINGLE_PAGE_FIXED_HEIGHT_MM - singlePageEstimatedHeightMm;
+
+  if (!item.questionImageSize || singlePageRemainingAnswerSpaceMm >= ANSWER_MIN_HEIGHT_MM) {
+    return {
+      kind: 'single_page',
+      ratio,
+      imageDisplayWidthMm: singlePageWidthMm,
+      imageMaxHeightMm: singlePageMaxImageHeightMm,
+      estimatedImageHeightMm: singlePageEstimatedHeightMm,
+      remainingAnswerSpaceMm: Math.max(0, singlePageRemainingAnswerSpaceMm),
+    };
+  }
+
+  const twoPageWidthMm = PDF_CONTENT_WIDTH_MM * TWO_PAGE_IMAGE_WIDTH_RATIO;
+  const twoPageEstimatedHeightMm = twoPageWidthMm * ratio;
+  const twoPageMaxImageHeightMm = Math.max(
+    120,
+    PDF_CONTENT_HEIGHT_MM - TWO_PAGE_QUESTION_FIXED_HEIGHT_MM - THOUGHT_MIN_HEIGHT_MM,
+  );
+  const twoPageRemainingAnswerSpaceMm =
+    PDF_CONTENT_HEIGHT_MM - TWO_PAGE_QUESTION_FIXED_HEIGHT_MM - twoPageEstimatedHeightMm;
+
+  return {
+    kind: 'question_answer_pages',
+    ratio,
+    imageDisplayWidthMm: twoPageWidthMm,
+    imageMaxHeightMm: twoPageMaxImageHeightMm,
+    estimatedImageHeightMm: twoPageEstimatedHeightMm,
+    remainingAnswerSpaceMm: Math.max(0, twoPageRemainingAnswerSpaceMm),
+  };
+}
+
+function formatMm(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0mm';
+  }
+  return `${Math.max(0, value).toFixed(1)}mm`;
+}
+
+function getFittedImageWidthMm(layout: QuestionPrintLayout): number {
+  const widthByMaxHeight = layout.imageMaxHeightMm / Math.max(layout.ratio, 0.1);
+  return Math.max(40, Math.min(layout.imageDisplayWidthMm, widthByMaxHeight));
+}
+
+function buildAutoQuestionMetaHtml(
+  item: TodayReviewPdfRenderItem,
+  index: number,
+  totalCount: number,
+  dateString: string,
+  pageLabelHtml?: string,
+): string {
+  const questionNo = index + 1;
+  const title = escapeHtml(toDisplayText(item.raw.title, '\u672A\u547D\u540D\u9898\u76EE'));
+  const module = escapeHtml(toDisplayText(item.raw.module, '\u6A21\u5757\u672A\u77E5'));
+  const progressText = escapeHtml(formatProgressText(item.raw));
+  const difficultyText = escapeHtml(formatDifficultyText(item.raw.difficulty));
+  const dueDate = escapeHtml(formatDueDateText(item.raw.dueDate));
+  const pageLabel = pageLabelHtml
+    ? `<span class="problem-page-label">${pageLabelHtml}</span>`
+    : '';
+
+  return `
+    <div class="problem-heading">
+      <h2 class="problem-title">&#31532; ${questionNo} &#39064;</h2>
+      ${pageLabel}
+      <span class="sheet-summary">${escapeHtml(dateString)} &#183; ${totalCount} &#39064;</span>
+    </div>
+    <div class="problem-meta">
+      <span class="problem-meta-item">&#27169;&#22359;&#65306;${module}</span>
+      <span class="problem-meta-item">&#26631;&#39064;&#65306;${title}</span>
+      <span class="problem-meta-item">&#36827;&#24230;&#65306;${progressText}</span>
+      <span class="problem-meta-item">&#38590;&#24230;&#65306;${difficultyText}</span>
+      <span class="problem-meta-item">&#21040;&#26399;&#26085;&#65306;${dueDate}</span>
+    </div>
+  `;
+}
+
+function buildAutoQuestionImageHtml(item: TodayReviewPdfRenderItem, layout: QuestionPrintLayout): string {
+  const questionImageSrc = item.questionImageSrc ? escapeHtml(item.questionImageSrc) : null;
+  const imageWidthMm = getFittedImageWidthMm(layout);
+  const imageMaxHeightMm = Math.min(layout.imageMaxHeightMm, imageWidthMm * layout.ratio);
+  const imageStyle = [
+    `width: ${formatMm(imageWidthMm)}`,
+    `max-height: ${formatMm(imageMaxHeightMm)}`,
+    'height: auto',
+  ].join('; ');
+  const imageBlock = questionImageSrc
+    ? `<img class="problem-image" style="${imageStyle}" src="${questionImageSrc}" alt="question image" />`
+    : `<div class="image-fallback">&#39064;&#30446;&#22270;&#29255;&#26242;&#26102;&#26080;&#27861;&#21152;&#36733;</div>`;
+
+  return `
+    <div class="problem-label">&#39064;&#30446;&#65306;</div>
+    <div class="problem-image-wrap">
+      ${imageBlock}
+    </div>
+  `;
+}
+
+function buildAnswerLinesHtml(minHeightMm: number): string {
+  return `<div class="answer-lines-fill" style="min-height: ${formatMm(minHeightMm)}" aria-hidden="true"></div>`;
+}
+
+function buildResultAreaHtml(): string {
+  return `
+    <div class="result-area">
+      <div class="result-title">&#26412;&#27425;&#32467;&#26524;&#65306;</div>
+      <div class="result-options">
+        <span class="result-option"><span class="checkbox"></span>&#20250;&#20102;</span>
+        <span class="result-option"><span class="checkbox"></span>&#27169;&#31946;</span>
+        <span class="result-option"><span class="checkbox"></span>&#19981;&#20250;</span>
+      </div>
+    </div>
+  `;
+}
+
+function buildAutoSingleQuestionPageHtml(
+  item: TodayReviewPdfRenderItem,
+  index: number,
+  totalCount: number,
+  dateString: string,
+  layout: QuestionPrintLayout,
+): string {
+  return `
+    <section class="worksheet-page worksheet-page-single">
+      <section class="problem-card">
+        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString)}
+        ${buildAutoQuestionImageHtml(item, layout)}
+        <div class="answer-area">
+          <div class="answer-title">&#25105;&#30340;&#35299;&#31572;&#65306;</div>
+          ${buildAnswerLinesHtml(ANSWER_MIN_HEIGHT_MM)}
+        </div>
+        ${buildResultAreaHtml()}
+      </section>
+      <footer class="footer">&#20248;&#20808;&#20445;&#35777;&#39064;&#22270;&#28165;&#26224;</footer>
+    </section>
+  `;
+}
+
+function buildAutoQuestionOnlyPageHtml(
+  item: TodayReviewPdfRenderItem,
+  index: number,
+  totalCount: number,
+  dateString: string,
+  layout: QuestionPrintLayout,
+): string {
+  return `
+    <section class="worksheet-page worksheet-page-question">
+      <section class="problem-card">
+        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, '&#39064;&#30446;&#39029;')}
+        ${buildAutoQuestionImageHtml(item, layout)}
+        <div class="answer-area thought-area">
+          <div class="answer-title">&#25105;&#30340;&#24605;&#36335;&#65306;</div>
+          ${buildAnswerLinesHtml(THOUGHT_MIN_HEIGHT_MM)}
+        </div>
+      </section>
+      <footer class="footer">&#35299;&#31572;&#21306;&#22312;&#19979;&#19968;&#39029;</footer>
+    </section>
+  `;
+}
+
+function buildAutoAnswerPageHtml(
+  item: TodayReviewPdfRenderItem,
+  index: number,
+  totalCount: number,
+  dateString: string,
+): string {
+  const answerLinesHeightMm = Math.max(
+    ANSWER_MIN_HEIGHT_MM,
+    PDF_CONTENT_HEIGHT_MM - ANSWER_PAGE_FIXED_HEIGHT_MM - RESULT_AREA_HEIGHT_MM,
+  );
+
+  return `
+    <section class="worksheet-page worksheet-page-answer">
+      <section class="problem-card">
+        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, '&#35299;&#31572;&#39029;')}
+        <div class="answer-area">
+          <div class="answer-title">&#25105;&#30340;&#35299;&#31572;&#65306;</div>
+          ${buildAnswerLinesHtml(answerLinesHeightMm)}
+        </div>
+        ${buildResultAreaHtml()}
+      </section>
+    </section>
+  `;
+}
+
+function buildAutoWorksheetPageHtml(
+  item: TodayReviewPdfRenderItem,
+  index: number,
+  totalCount: number,
+  dateString: string,
+): string {
+  const layout = chooseQuestionPrintLayout(item);
+  Logger.info(SERVICE_SCOPE, 'pdf_export_question_layout_selected', {
+    mistakeId: item.raw.mistakeId,
+    layout: layout.kind,
+    imageWidth: item.questionImageSize?.width ?? null,
+    imageHeight: item.questionImageSize?.height ?? null,
+    ratio: layout.ratio,
+    imageDisplayWidthMm: layout.imageDisplayWidthMm,
+    imageMaxHeightMm: layout.imageMaxHeightMm,
+    estimatedImageHeightMm: layout.estimatedImageHeightMm,
+    remainingAnswerSpaceMm: layout.remainingAnswerSpaceMm,
+  });
+
+  if (layout.kind === 'single_page') {
+    return buildAutoSingleQuestionPageHtml(item, index, totalCount, dateString, layout);
+  }
+
+  return [
+    buildAutoQuestionOnlyPageHtml(item, index, totalCount, dateString, layout),
+    buildAutoAnswerPageHtml(item, index, totalCount, dateString),
+  ].join('\n');
+}
+
 function buildPdfHtml(
   items: TodayReviewPdfRenderItem[],
   dateString: string,
@@ -636,7 +946,7 @@ function buildPdfHtml(
 
   for (let index = 0; index < total; index += 1) {
     const item = items[index];
-    pageHtmlList.push(buildWorksheetPageHtml(item, index, total, dateString));
+    pageHtmlList.push(buildAutoWorksheetPageHtml(item, index, total, dateString));
     if (onPageProgress) {
       onPageProgress({
         current: index + 1,
@@ -658,7 +968,7 @@ function buildPdfHtml(
         <style>
           @page {
             size: A4;
-            margin: 14mm 14mm;
+            margin: ${PDF_PAGE_MARGIN_MM}mm ${PDF_PAGE_MARGIN_MM}mm;
           }
           * {
             box-sizing: border-box;
@@ -675,7 +985,7 @@ function buildPdfHtml(
             width: 100%;
           }
           .worksheet-page {
-            min-height: calc(297mm - 28mm);
+            min-height: calc(${A4_HEIGHT_MM}mm - ${PDF_PAGE_MARGIN_MM * 2}mm);
             display: flex;
             flex-direction: column;
             page-break-after: always;
@@ -725,6 +1035,29 @@ function buildPdfHtml(
             font-size: 18px;
             font-weight: 800;
             margin: 0 0 8px 0;
+          }
+          .problem-heading {
+            display: flex;
+            align-items: baseline;
+            gap: 8px 12px;
+            flex-wrap: wrap;
+            margin-bottom: 6px;
+          }
+          .problem-heading .problem-title {
+            margin: 0;
+          }
+          .problem-page-label {
+            border: 1px solid #333333;
+            border-radius: 999px;
+            padding: 1px 8px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #111111;
+          }
+          .sheet-summary {
+            margin-left: auto;
+            font-size: 12px;
+            color: #666666;
           }
           .problem-meta {
             display: flex;
@@ -796,7 +1129,7 @@ function buildPdfHtml(
             min-height: 140px;
             position: relative;
             --answer-rule-color: #666666;
-            --answer-row-gap: 30px;
+            --answer-row-gap: 9mm;
             --answer-center-gap: 8px;
           }
           .answer-lines-fill::before {
@@ -903,6 +1236,7 @@ async function buildSingleRenderItem(
     )
     : {
       imageDataUri: null,
+      imageSize: null,
       temporaryEnhancedUri: null,
       trace: null,
       base64ReadDurationMs: 0,
@@ -937,6 +1271,7 @@ async function buildSingleRenderItem(
     renderItem: {
       raw: item,
       questionImageSrc: imageResult.imageDataUri,
+      questionImageSize: imageResult.imageSize,
     },
     temporaryEnhancedUri: imageResult.temporaryEnhancedUri,
     enhanceDurationMs: imageResult.trace ? Math.max(0, imageResult.trace.durationMs) : 0,
@@ -1023,6 +1358,7 @@ async function buildRenderItems(
     renderItems: renderItems.map((item, index) => item ?? {
       raw: items[index],
       questionImageSrc: null,
+      questionImageSize: null,
     }),
     temporaryEnhancedUris,
       processMetrics: {
