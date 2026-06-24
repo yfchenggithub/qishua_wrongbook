@@ -9,6 +9,8 @@ import {
   type GestureResponderEvent,
   Image,
   type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   StyleSheet,
   Text,
@@ -52,11 +54,12 @@ const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 30 * 60 * 1000;
-const SWIPE_HINT_MESSAGE = '点击「不会 / 模糊 / 会了」后进入下一题';
+const SWIPE_HINT_MESSAGE = '到顶部下拉上一题，到底部上拉下一题';
 const SWIPE_HINT_DURATION_MS = 1500;
 const SWIPE_HINT_THROTTLE_MS = 1500;
 const SWIPE_VERTICAL_DISTANCE_THRESHOLD = 40;
 const SWIPE_VERTICAL_DOMINANCE_RATIO = 1.2;
+const SCROLL_BOUNDARY_TOLERANCE = 16;
 const BUTTON_HINT_LIFT_DISTANCE = 4;
 
 type ToastType = 'success' | 'info' | 'error';
@@ -78,6 +81,16 @@ type QuestionImageSizeState = ImageDimensions | null | 'unresolved';
 type PreviewImageState = {
   uri: string;
   title: string;
+};
+type ReviewNavigationDirection = 'prev' | 'next';
+type ScrollMetrics = {
+  offsetY: number;
+  visibleHeight: number;
+  contentHeight: number;
+};
+type ScrollBoundarySnapshot = {
+  atTop: boolean;
+  atBottom: boolean;
 };
 
 const EMPTY_RESULT_STATS: SessionResultStats = {
@@ -242,6 +255,42 @@ function pickSlotImageDimensions(slot?: DetailImageSlot): ImageDimensions | null
   }
 
   return null;
+}
+
+function findPendingReviewIndex(
+  queue: ReviewSessionQueueItem[],
+  submittedIds: ReadonlySet<string>,
+  startIndex: number,
+  direction: ReviewNavigationDirection,
+): number | null {
+  if (queue.length <= 0) {
+    return null;
+  }
+
+  const step = direction === 'prev' ? -1 : 1;
+  let index = startIndex;
+  while (index >= 0 && index < queue.length) {
+    const item = queue[index];
+    if (item && !submittedIds.has(item.id)) {
+      return index;
+    }
+    index += step;
+  }
+
+  return null;
+}
+
+function findNextPendingReviewIndexAfterSubmit(
+  queue: ReviewSessionQueueItem[],
+  submittedIds: ReadonlySet<string>,
+  currentIndex: number,
+): number | null {
+  const forwardIndex = findPendingReviewIndex(queue, submittedIds, currentIndex + 1, 'next');
+  if (forwardIndex !== null) {
+    return forwardIndex;
+  }
+
+  return findPendingReviewIndex(queue, submittedIds, 0, 'next');
 }
 
 function QuestionImageCard({
@@ -648,6 +697,7 @@ export default function ReviewSessionPage() {
 
   const [sessionState, setSessionState] = useState<SessionState>('loading');
   const [queue, setQueue] = useState<ReviewSessionQueueItem[]>([]);
+  const [submittedMistakeIds, setSubmittedMistakeIds] = useState<Set<string>>(() => new Set());
   const [currentIndex, setCurrentIndex] = useState(0);
   const [resultStats, setResultStats] = useState<SessionResultStats>(EMPTY_RESULT_STATS);
   const [currentErrorMessage, setCurrentErrorMessage] = useState<string | null>(null);
@@ -688,7 +738,9 @@ export default function ReviewSessionPage() {
   const lastSwipeHintTimeRef = useRef(0);
   const buttonsHintAnim = useRef(new Animated.Value(0)).current;
   const touchStartPointRef = useRef<{ x: number; y: number } | null>(null);
-  const touchMovedWithScrollRef = useRef(false);
+  const touchStartBoundaryRef = useRef<ScrollBoundarySnapshot>({ atTop: true, atBottom: false });
+  const scrollMetricsRef = useRef<ScrollMetrics>({ offsetY: 0, visibleHeight: 0, contentHeight: 0 });
+  const requestNavigateReviewItemRef = useRef<((direction: ReviewNavigationDirection) => void) | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voiceRecordingAccumulatedMsRef = useRef(0);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -698,10 +750,12 @@ export default function ReviewSessionPage() {
   const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
 
   const totalCount = queue.length;
-  const hasRemaining = sessionState === 'ready' && currentIndex < totalCount;
-  const isCompleted = sessionState === 'ready' && totalCount > 0 && currentIndex >= totalCount;
+  const isCompleted =
+    sessionState === 'ready' && totalCount > 0 && submittedMistakeIds.size >= totalCount;
+  const hasRemaining = sessionState === 'ready' && !isCompleted && currentIndex < totalCount;
   const currentQueueItem = hasRemaining ? queue[currentIndex] ?? null : null;
   const currentQueueItemId = currentQueueItem?.id ?? null;
+  const hasUnsubmittedReviewDraft = !!reviewSolutionImage || !!voiceNote || isVoiceRecording;
 
   const hideToast = useCallback(() => {
     Animated.parallel([
@@ -822,13 +876,35 @@ export default function ReviewSessionPage() {
     triggerButtonsHintAnimation,
   ]);
 
+  const resolveScrollBoundary = useCallback((): ScrollBoundarySnapshot => {
+    const metrics = scrollMetricsRef.current;
+    const offsetY = Number.isFinite(metrics.offsetY) ? Math.max(0, metrics.offsetY) : 0;
+    const visibleHeight = Number.isFinite(metrics.visibleHeight) ? Math.max(0, metrics.visibleHeight) : 0;
+    const contentHeight = Number.isFinite(metrics.contentHeight) ? Math.max(0, metrics.contentHeight) : 0;
+    const maxOffsetY = Math.max(0, contentHeight - visibleHeight);
+
+    return {
+      atTop: offsetY <= SCROLL_BOUNDARY_TOLERANCE,
+      atBottom: visibleHeight > 0 && offsetY >= maxOffsetY - SCROLL_BOUNDARY_TOLERANCE,
+    };
+  }, []);
+
+  const updateScrollMetrics = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    scrollMetricsRef.current = {
+      offsetY: contentOffset.y,
+      visibleHeight: layoutMeasurement.height,
+      contentHeight: contentSize.height,
+    };
+  }, []);
+
   const handleTouchStart = useCallback((event: GestureResponderEvent) => {
-    touchMovedWithScrollRef.current = false;
     touchStartPointRef.current = {
       x: event.nativeEvent.pageX,
       y: event.nativeEvent.pageY,
     };
-  }, []);
+    touchStartBoundaryRef.current = resolveScrollBoundary();
+  }, [resolveScrollBoundary]);
 
   const handleTouchEnd = useCallback(
     (event: GestureResponderEvent) => {
@@ -836,12 +912,6 @@ export default function ReviewSessionPage() {
       touchStartPointRef.current = null;
 
       if (!startPoint) {
-        touchMovedWithScrollRef.current = false;
-        return;
-      }
-
-      if (touchMovedWithScrollRef.current) {
-        touchMovedWithScrollRef.current = false;
         return;
       }
 
@@ -858,14 +928,28 @@ export default function ReviewSessionPage() {
         return;
       }
 
+      const startBoundary = touchStartBoundaryRef.current;
+      if (startBoundary.atTop && dy > 0) {
+        requestNavigateReviewItemRef.current?.('prev');
+        return;
+      }
+
+      if (startBoundary.atBottom && dy < 0) {
+        requestNavigateReviewItemRef.current?.('next');
+        return;
+      }
+
       showSwipeHint();
     },
     [showSwipeHint],
   );
 
-  const handleScroll = useCallback(() => {
-    touchMovedWithScrollRef.current = true;
-  }, []);
+  const handleScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      updateScrollMetrics(event);
+    },
+    [updateScrollMetrics],
+  );
 
   const clearVoicePlaybackResetTimer = useCallback(() => {
     if (voicePlaybackResetTimerRef.current) {
@@ -885,60 +969,6 @@ export default function ReviewSessionPage() {
       }
     },
     [clearVoicePlaybackResetTimer, showToast],
-  );
-
-  const discardCurrentVoiceRecording = useCallback(async () => {
-    if (!isVoiceRecording) {
-      return true;
-    }
-
-    setIsVoiceBusy(true);
-    const discardResult = await VoiceNoteService.stopAndDiscardRecording();
-    voiceReplacePendingUriRef.current = null;
-    voiceRecordingStartedAtRef.current = null;
-    voiceRecordingAccumulatedMsRef.current = 0;
-    voiceStopInProgressRef.current = false;
-    setIsVoiceRecording(false);
-    setIsVoiceRecordingPaused(false);
-    setRecordingElapsedMs(0);
-    setIsVoiceBusy(false);
-
-    if (!discardResult.ok) {
-      Logger.warn(PAGE_SCOPE, 'stop_recording_failed', {
-        reason: 'discard_recording_on_leave_failed',
-        errorMessage: discardResult.errorMessage ?? null,
-      });
-      return false;
-    }
-
-    return true;
-  }, [isVoiceRecording]);
-
-  const confirmLeaveWhileRecording = useCallback(
-    (onContinue: () => void) => {
-      Alert.alert(
-        '正在录音',
-        '正在录音，离开后将放弃本次录音，是否继续？',
-        [
-          {
-            text: '继续录音',
-            style: 'cancel',
-          },
-          {
-            text: '继续离开',
-            style: 'destructive',
-            onPress: () => {
-              void (async () => {
-                await discardCurrentVoiceRecording();
-                allowNextLeaveRef.current = true;
-                onContinue();
-              })();
-            },
-          },
-        ],
-      );
-    },
-    [discardCurrentVoiceRecording],
   );
 
   const startVoiceRecording = useCallback(
@@ -1203,6 +1233,54 @@ export default function ReviewSessionPage() {
     }
     await ImageService.deleteLocalImage(imageUri);
   }, []);
+
+  const discardUnsubmittedReviewDraft = useCallback(async () => {
+    const imageToDelete = reviewSolutionImage;
+    const voiceNoteToDelete = voiceNote;
+    const shouldDiscardRecording = isVoiceRecording;
+
+    setReviewSolutionImage(null);
+    setVoiceNote(null);
+    setIsVoicePlaying(false);
+    setIsVoiceRecording(false);
+    setIsVoiceRecordingPaused(false);
+    setRecordingElapsedMs(0);
+    voiceRecordingStartedAtRef.current = null;
+    voiceRecordingAccumulatedMsRef.current = 0;
+    voiceReplacePendingUriRef.current = null;
+    voiceStopInProgressRef.current = false;
+
+    await stopVoicePlayback(false);
+
+    if (shouldDiscardRecording) {
+      const discardResult = await VoiceNoteService.stopAndDiscardRecording();
+      if (!discardResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'Failed to discard unsubmitted review recording.', {
+          errorMessage: discardResult.errorMessage ?? null,
+        });
+      }
+    }
+
+    if (voiceNoteToDelete?.fileUri) {
+      const deleteVoiceResult = await VoiceNoteService.deleteVoiceNote(voiceNoteToDelete.fileUri);
+      if (!deleteVoiceResult.ok) {
+        Logger.warn(PAGE_SCOPE, 'Failed to delete unsubmitted review voice note.', {
+          voiceNoteId: voiceNoteToDelete.id,
+          errorMessage: deleteVoiceResult.errorMessage ?? null,
+        });
+      }
+    }
+
+    if (imageToDelete) {
+      await cleanupReviewSolutionImage(imageToDelete);
+    }
+  }, [
+    cleanupReviewSolutionImage,
+    isVoiceRecording,
+    reviewSolutionImage,
+    stopVoicePlayback,
+    voiceNote,
+  ]);
 
   const saveReviewSolutionImage = useCallback(
     async (source: 'camera' | 'album') => {
@@ -1527,31 +1605,119 @@ export default function ReviewSessionPage() {
     ],
   );
 
+  const runAfterDiscardingDraft = useCallback(
+    (message: string, confirmText: string, action: () => void) => {
+      if (!hasUnsubmittedReviewDraft) {
+        action();
+        return;
+      }
+
+      Alert.alert('未提交内容', message, [
+        {
+          text: '取消',
+          style: 'cancel',
+        },
+        {
+          text: confirmText,
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              await discardUnsubmittedReviewDraft();
+              action();
+            })();
+          },
+        },
+      ]);
+    },
+    [discardUnsubmittedReviewDraft, hasUnsubmittedReviewDraft],
+  );
+
+  const requestNavigateReviewItem = useCallback(
+    (direction: ReviewNavigationDirection) => {
+      if (sessionState !== 'ready' || isCompleted || previewImage !== null) {
+        return;
+      }
+
+      if (isSubmitting || isReviewSolutionImageBusy || isVoiceBusy || activePreviewImageAction !== null) {
+        showToast('正在处理，请稍后...', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      if (isLoadingCurrent) {
+        showToast('题目加载中，请稍后...', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      const targetIndex = findPendingReviewIndex(
+        queue,
+        submittedMistakeIds,
+        direction === 'prev' ? currentIndex - 1 : currentIndex + 1,
+        direction,
+      );
+      if (targetIndex === null && direction === 'prev') {
+        showToast('已经是第一题', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+      if (targetIndex === null) {
+        showToast('已经是最后一题', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      runAfterDiscardingDraft(
+        '当前题已添加内容但还没有选择结果，切题后这些内容不会保存。是否继续？',
+        '继续切题',
+        () => {
+          setCurrentIndex(targetIndex);
+        },
+      );
+    },
+    [
+      activePreviewImageAction,
+      currentIndex,
+      isCompleted,
+      isLoadingCurrent,
+      isReviewSolutionImageBusy,
+      isSubmitting,
+      isVoiceBusy,
+      previewImage,
+      queue,
+      runAfterDiscardingDraft,
+      sessionState,
+      showToast,
+      submittedMistakeIds,
+    ],
+  );
+
+  useEffect(() => {
+    requestNavigateReviewItemRef.current = requestNavigateReviewItem;
+    return () => {
+      requestNavigateReviewItemRef.current = null;
+    };
+  }, [requestNavigateReviewItem]);
+
   const handleRequestExit = useCallback(() => {
-    if (isVoiceRecording) {
-      confirmLeaveWhileRecording(() => {
+    if (isSubmitting || isReviewSolutionImageBusy || isVoiceBusy || activePreviewImageAction !== null) {
+      showToast('正在处理，请稍后...', 'info', TOAST_DURATION_SHORT);
+      return;
+    }
+
+    runAfterDiscardingDraft(
+      '当前题已添加内容但还没有选择结果，退出后这些内容不会保存。是否继续？',
+      '继续退出',
+      () => {
+        allowNextLeaveRef.current = true;
         navigateHome();
-      });
-      return;
-    }
-
-    if (!hasRemaining || isCompleted) {
-      navigateHome();
-      return;
-    }
-
-    Alert.alert('确认退出', '今日复做还没完成，确定退出吗？', [
-      {
-        text: '取消',
-        style: 'cancel',
       },
-      {
-        text: '确定退出',
-        style: 'destructive',
-        onPress: navigateHome,
-      },
-    ]);
-  }, [confirmLeaveWhileRecording, hasRemaining, isCompleted, isVoiceRecording, navigateHome]);
+    );
+  }, [
+    activePreviewImageAction,
+    isReviewSolutionImageBusy,
+    isSubmitting,
+    isVoiceBusy,
+    navigateHome,
+    runAfterDiscardingDraft,
+    showToast,
+  ]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1616,19 +1782,37 @@ export default function ReviewSessionPage() {
         return;
       }
 
-      if (!isVoiceRecording) {
+      if (!hasUnsubmittedReviewDraft) {
         return;
       }
 
       event.preventDefault();
-      confirmLeaveWhileRecording(() => {
-        allowNextLeaveRef.current = true;
-        navigation.dispatch(event.data.action);
-      });
+      if (isSubmitting || isReviewSolutionImageBusy || isVoiceBusy || activePreviewImageAction !== null) {
+        showToast('正在处理，请稍后...', 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      runAfterDiscardingDraft(
+        '当前题已添加内容但还没有选择结果，退出后这些内容不会保存。是否继续？',
+        '继续退出',
+        () => {
+          allowNextLeaveRef.current = true;
+          navigation.dispatch(event.data.action);
+        },
+      );
     });
 
     return unsubscribe;
-  }, [confirmLeaveWhileRecording, isVoiceRecording, navigation]);
+  }, [
+    activePreviewImageAction,
+    hasUnsubmittedReviewDraft,
+    isReviewSolutionImageBusy,
+    isSubmitting,
+    isVoiceBusy,
+    navigation,
+    runAfterDiscardingDraft,
+    showToast,
+  ]);
 
   const loadQueue = useCallback(async () => {
     const requestId = queueRequestIdRef.current + 1;
@@ -1639,6 +1823,7 @@ export default function ReviewSessionPage() {
     setCurrentMeta(null);
     setCurrentQuestionSlot(undefined);
     setQueue([]);
+    setSubmittedMistakeIds(new Set());
     setCurrentIndex(0);
     setResultStats(EMPTY_RESULT_STATS);
     setVoiceNote(null);
@@ -1779,6 +1964,16 @@ export default function ReviewSessionPage() {
       return;
     }
 
+    if (submittedMistakeIds.has(currentQueueItem.id)) {
+      const nextPendingIndex = findNextPendingReviewIndexAfterSubmit(
+        queue,
+        submittedMistakeIds,
+        currentIndex,
+      );
+      setCurrentIndex(nextPendingIndex ?? totalCount);
+      return;
+    }
+
     const requestId = currentRequestIdRef.current + 1;
     currentRequestIdRef.current = requestId;
     setIsLoadingCurrent(true);
@@ -1818,7 +2013,17 @@ export default function ReviewSessionPage() {
     };
 
     void loadCurrent();
-  }, [currentQueueItem, currentReloadNonce, isCompleted, sessionState, showToast]);
+  }, [
+    currentIndex,
+    currentQueueItem,
+    currentReloadNonce,
+    isCompleted,
+    queue,
+    sessionState,
+    showToast,
+    submittedMistakeIds,
+    totalCount,
+  ]);
 
   const incrementStats = useCallback((statsKey: SessionResultKey) => {
     setResultStats((previous) => ({
@@ -1865,14 +2070,21 @@ export default function ReviewSessionPage() {
           return;
         }
 
+        const nextSubmittedMistakeIds = new Set(submittedMistakeIds);
+        nextSubmittedMistakeIds.add(currentQueueItem.id);
+        const isAllSubmitted = nextSubmittedMistakeIds.size >= totalCount;
+        const nextPendingIndex = isAllSubmitted
+          ? null
+          : findNextPendingReviewIndexAfterSubmit(queue, nextSubmittedMistakeIds, currentIndex);
+
+        setSubmittedMistakeIds(nextSubmittedMistakeIds);
         incrementStats(statsKey);
-        const isLast = currentIndex >= totalCount - 1;
         if (submitResult.warningMessage) {
           showToast(toShortErrorMessage(submitResult.warningMessage), 'info', TOAST_DURATION_LONG);
         } else {
-          showToast(isLast ? '已记录，今日复做完成' : '已记录，进入下一题', 'success');
+          showToast(isAllSubmitted ? '已记录，今日复做完成' : '已记录，进入下一题', 'success');
         }
-        setCurrentIndex((prev) => prev + 1);
+        setCurrentIndex(nextPendingIndex ?? totalCount);
         setReviewSolutionImage(null);
       } catch (error) {
         Logger.error(PAGE_SCOPE, 'Failed to submit session review result.', {
@@ -1897,9 +2109,11 @@ export default function ReviewSessionPage() {
       isVoicePlaying,
       isVoiceBusy,
       isVoiceRecording,
+      queue,
       reviewSolutionImage?.uri,
       showToast,
       stopVoicePlayback,
+      submittedMistakeIds,
       totalCount,
       voiceNote,
     ],
@@ -1934,6 +2148,8 @@ export default function ReviewSessionPage() {
         style={styles.screenSafeArea}
         contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
         onScroll={handleScroll}
+        onScrollBeginDrag={updateScrollMetrics}
+        onScrollEndDrag={updateScrollMetrics}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}>
         <Pressable style={styles.exitButton} onPress={handleRequestExit}>
@@ -2207,7 +2423,7 @@ export default function ReviewSessionPage() {
         <FloatingBottomCta
           bottom={actionBarBottomOffset}
           hintActive={swipeHintVisible}
-          hintText="选择结果后会自动进入下一题"
+          hintText="顶部下拉上一题 · 底部上拉下一题 · 选择结果保存"
           onHeightChange={(nextHeight) => {
             setActionBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
           }}>
