@@ -34,6 +34,14 @@ import {
   StatusPill,
 } from '@/src/components';
 import { useMistakeDetailImages } from '@/src/hooks/useMistakeDetailImages';
+import {
+  BOTTOM_RELEASE_DISTANCE,
+  BOTTOM_TRIGGER_DISTANCE,
+  EDGE_END_DRAG_VELOCITY_MIN,
+  EDGE_PULL_TRIGGER_DISTANCE,
+  TOP_PULL_RELEASE_DISTANCE,
+  TOP_PULL_TRIGGER_DISTANCE,
+} from '@/src/constants/edgePullNavigation';
 import type {
   DetailImageSlot,
   DetailImageSlotType,
@@ -70,12 +78,6 @@ const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 3 * 60 * 1000;
 const VOICE_FILE_MISSING_MESSAGE = '语音文件不存在，可能已被删除或未恢复';
-const TOP_PULL_TRIGGER_DISTANCE = 2;
-const TOP_PULL_RELEASE_DISTANCE = 20;
-const BOTTOM_TRIGGER_DISTANCE = 20;
-const BOTTOM_RELEASE_DISTANCE = 52;
-const EDGE_PULL_TRIGGER_DISTANCE = 42;
-const EDGE_END_DRAG_VELOCITY_MIN = 0.55;
 const PAGE_SWITCH_ANIMATION_DISTANCE = 34;
 const PAGE_SWITCH_ANIMATION_DURATION_MS = 180;
 

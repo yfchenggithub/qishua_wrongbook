@@ -172,6 +172,7 @@ export function ImagePreviewModal({
   const canShowImage = visible && !!normalizedUri && !imageFailed;
   const headerTitle = title.trim().length > 0 ? title : '图片预览';
   const isZoomable = interactionMode === 'zoomable';
+  const hasLongPressAction = !!normalizedUri && typeof onImageLongPress === 'function';
   const previewLogScope = `ImagePreviewModal:${logSource}`;
   const containedSize = useMemo(
     () => computeContainedSize(containerSizeState, intrinsicSize),
@@ -607,7 +608,7 @@ export function ImagePreviewModal({
     });
 
   const longPressGesture = Gesture.LongPress()
-    .enabled(isZoomable && !!normalizedUri && typeof onImageLongPress === 'function')
+    .enabled(isZoomable && hasLongPressAction)
     .shouldCancelWhenOutside(false)
     .minDuration(520)
     .maxDistance(12)
@@ -669,7 +670,9 @@ export function ImagePreviewModal({
 
       <View pointerEvents="none" style={styles.gestureHintWrap}>
         <Text style={styles.gestureHintText}>
-          {isZoomable ? '单击关闭 · 双击放大 · 双指缩放 · 拖动查看' : '双击关闭预览'}
+          {isZoomable
+            ? `单击关闭 · 双击放大 · 双指缩放 · 拖动查看${hasLongPressAction ? ' · 长按分享/保存' : ''}`
+            : '双击关闭预览'}
         </Text>
       </View>
     </>

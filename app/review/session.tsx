@@ -29,6 +29,14 @@ import {
   PrimaryButton,
   ScreenContainer,
 } from '@/src/components';
+import {
+  BOTTOM_RELEASE_DISTANCE,
+  BOTTOM_TRIGGER_DISTANCE,
+  EDGE_END_DRAG_VELOCITY_MIN,
+  EDGE_PULL_TRIGGER_DISTANCE,
+  TOP_PULL_RELEASE_DISTANCE,
+  TOP_PULL_TRIGGER_DISTANCE,
+} from '@/src/constants/edgePullNavigation';
 import type { DetailImageSlot } from '@/src/models/MistakeDetailViewModel';
 import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewResult } from '@/src/models/Mistake';
@@ -54,12 +62,6 @@ const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 30 * 60 * 1000;
-const SWIPE_HINT_MESSAGE = '到顶部下拉上一题，到底部上拉下一题';
-const SWIPE_HINT_DURATION_MS = 1500;
-const SWIPE_HINT_THROTTLE_MS = 1500;
-const SWIPE_VERTICAL_DISTANCE_THRESHOLD = 40;
-const SWIPE_VERTICAL_DOMINANCE_RATIO = 1.2;
-const SCROLL_BOUNDARY_TOLERANCE = 16;
 const BUTTON_HINT_LIFT_DISTANCE = 4;
 
 type ToastType = 'success' | 'info' | 'error';
@@ -83,15 +85,7 @@ type PreviewImageState = {
   title: string;
 };
 type ReviewNavigationDirection = 'prev' | 'next';
-type ScrollMetrics = {
-  offsetY: number;
-  visibleHeight: number;
-  contentHeight: number;
-};
-type ScrollBoundarySnapshot = {
-  atTop: boolean;
-  atBottom: boolean;
-};
+type ScrollBoundary = 'top' | 'bottom';
 
 const EMPTY_RESULT_STATS: SessionResultStats = {
   known: 0,
@@ -717,8 +711,6 @@ export default function ReviewSessionPage() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
-  const [swipeHintVisible, setSwipeHintVisible] = useState(false);
-  const [lastSwipeHintTime, setLastSwipeHintTime] = useState(0);
   const [voiceNote, setVoiceNote] = useState<VoiceNoteEntity | null>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
@@ -734,12 +726,15 @@ export default function ReviewSessionPage() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const swipeHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSwipeHintTimeRef = useRef(0);
   const buttonsHintAnim = useRef(new Animated.Value(0)).current;
-  const touchStartPointRef = useRef<{ x: number; y: number } | null>(null);
-  const touchStartBoundaryRef = useRef<ScrollBoundarySnapshot>({ atTop: true, atBottom: false });
-  const scrollMetricsRef = useRef<ScrollMetrics>({ offsetY: 0, visibleHeight: 0, contentHeight: 0 });
+  const isScrollDraggingRef = useRef(false);
+  const lastScrollYRef = useRef(0);
+  const maxScrollYRef = useRef(0);
+  const lastTouchYRef = useRef<number | null>(null);
+  const touchMoveCountRef = useRef(0);
+  const topEdgePullDistanceRef = useRef(0);
+  const bottomEdgePullDistanceRef = useRef(0);
+  const scrollBoundaryLockRef = useRef<ScrollBoundary | null>(null);
   const requestNavigateReviewItemRef = useRef<((direction: ReviewNavigationDirection) => void) | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voiceRecordingAccumulatedMsRef = useRef(0);
@@ -748,6 +743,7 @@ export default function ReviewSessionPage() {
   const voiceStopInProgressRef = useRef(false);
   const allowNextLeaveRef = useRef(false);
   const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
+  const currentIndexRef = useRef(0);
 
   const totalCount = queue.length;
   const isCompleted =
@@ -756,6 +752,10 @@ export default function ReviewSessionPage() {
   const currentQueueItem = hasRemaining ? queue[currentIndex] ?? null : null;
   const currentQueueItemId = currentQueueItem?.id ?? null;
   const hasUnsubmittedReviewDraft = !!reviewSolutionImage || !!voiceNote || isVoiceRecording;
+
+  useEffect(() => {
+    currentIndexRef.current = currentIndex;
+  }, [currentIndex]);
 
   const hideToast = useCallback(() => {
     Animated.parallel([
@@ -813,142 +813,148 @@ export default function ReviewSessionPage() {
     [hideToast, toastOpacity, toastTranslateY],
   );
 
-  const triggerButtonsHintAnimation = useCallback(() => {
-    buttonsHintAnim.stopAnimation();
-    buttonsHintAnim.setValue(0);
-    Animated.sequence([
-      Animated.timing(buttonsHintAnim, {
-        toValue: 1,
-        duration: 130,
-        useNativeDriver: true,
-      }),
-      Animated.spring(buttonsHintAnim, {
-        toValue: 0,
-        speed: 22,
-        bounciness: 3,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [buttonsHintAnim]);
-
-  const showSwipeHint = useCallback(() => {
-    if (
-      sessionState !== 'ready' ||
-      isCompleted ||
-      isLoadingCurrent ||
-      !!currentErrorMessage ||
-      isSubmitting ||
-      previewImage !== null
-    ) {
-      return;
-    }
-
-    const now = Date.now();
-    const lastShownAt = Math.max(lastSwipeHintTimeRef.current, lastSwipeHintTime);
-    if (now - lastShownAt < SWIPE_HINT_THROTTLE_MS) {
-      return;
-    }
-
-    lastSwipeHintTimeRef.current = now;
-    setLastSwipeHintTime(now);
-    setSwipeHintVisible(true);
-    triggerButtonsHintAnimation();
-    showToast(SWIPE_HINT_MESSAGE, 'info', SWIPE_HINT_DURATION_MS);
-
-    if (swipeHintTimerRef.current) {
-      clearTimeout(swipeHintTimerRef.current);
-      swipeHintTimerRef.current = null;
-    }
-
-    swipeHintTimerRef.current = setTimeout(() => {
-      setSwipeHintVisible(false);
-      swipeHintTimerRef.current = null;
-    }, SWIPE_HINT_DURATION_MS);
-  }, [
-    currentErrorMessage,
-    isCompleted,
-    isLoadingCurrent,
-    isSubmitting,
-    lastSwipeHintTime,
-    previewImage,
-    sessionState,
-    showToast,
-    triggerButtonsHintAnimation,
-  ]);
-
-  const resolveScrollBoundary = useCallback((): ScrollBoundarySnapshot => {
-    const metrics = scrollMetricsRef.current;
-    const offsetY = Number.isFinite(metrics.offsetY) ? Math.max(0, metrics.offsetY) : 0;
-    const visibleHeight = Number.isFinite(metrics.visibleHeight) ? Math.max(0, metrics.visibleHeight) : 0;
-    const contentHeight = Number.isFinite(metrics.contentHeight) ? Math.max(0, metrics.contentHeight) : 0;
-    const maxOffsetY = Math.max(0, contentHeight - visibleHeight);
-
-    return {
-      atTop: offsetY <= SCROLL_BOUNDARY_TOLERANCE,
-      atBottom: visibleHeight > 0 && offsetY >= maxOffsetY - SCROLL_BOUNDARY_TOLERANCE,
-    };
-  }, []);
-
-  const updateScrollMetrics = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    scrollMetricsRef.current = {
-      offsetY: contentOffset.y,
-      visibleHeight: layoutMeasurement.height,
-      contentHeight: contentSize.height,
-    };
+  const resetEdgePullNavigationState = useCallback(() => {
+    scrollBoundaryLockRef.current = null;
+    topEdgePullDistanceRef.current = 0;
+    bottomEdgePullDistanceRef.current = 0;
   }, []);
 
   const handleTouchStart = useCallback((event: GestureResponderEvent) => {
-    touchStartPointRef.current = {
-      x: event.nativeEvent.pageX,
-      y: event.nativeEvent.pageY,
-    };
-    touchStartBoundaryRef.current = resolveScrollBoundary();
-  }, [resolveScrollBoundary]);
+    lastTouchYRef.current = event.nativeEvent.pageY;
+  }, []);
 
-  const handleTouchEnd = useCallback(
+  const handleTouchMove = useCallback(
     (event: GestureResponderEvent) => {
-      const startPoint = touchStartPointRef.current;
-      touchStartPointRef.current = null;
+      const currentTouchY = event.nativeEvent.pageY;
+      const previousTouchY = lastTouchYRef.current;
+      lastTouchYRef.current = currentTouchY;
+      touchMoveCountRef.current += 1;
 
-      if (!startPoint) {
+      if (previousTouchY === null) {
+        return;
+      }
+      if (!isScrollDraggingRef.current) {
+        return;
+      }
+      if (sessionState !== 'ready' || isCompleted || previewImage !== null) {
         return;
       }
 
-      const dx = event.nativeEvent.pageX - startPoint.x;
-      const dy = event.nativeEvent.pageY - startPoint.y;
-      const absDx = Math.abs(dx);
-      const absDy = Math.abs(dy);
+      const touchDeltaY = currentTouchY - previousTouchY;
+      const y = lastScrollYRef.current;
+      const maxScrollY = maxScrollYRef.current;
+      const atTop = y <= TOP_PULL_TRIGGER_DISTANCE;
+      const atBottom = maxScrollY > 0 && y >= maxScrollY - BOTTOM_TRIGGER_DISTANCE;
 
-      if (absDy < SWIPE_VERTICAL_DISTANCE_THRESHOLD) {
-        return;
+      if (atTop && touchDeltaY > 0) {
+        topEdgePullDistanceRef.current += touchDeltaY;
+      } else {
+        topEdgePullDistanceRef.current = 0;
       }
 
-      if (absDy <= absDx * SWIPE_VERTICAL_DOMINANCE_RATIO) {
-        return;
+      if (atBottom && touchDeltaY < 0) {
+        bottomEdgePullDistanceRef.current += -touchDeltaY;
+      } else {
+        bottomEdgePullDistanceRef.current = 0;
       }
 
-      const startBoundary = touchStartBoundaryRef.current;
-      if (startBoundary.atTop && dy > 0) {
+      if (
+        topEdgePullDistanceRef.current >= EDGE_PULL_TRIGGER_DISTANCE
+        && scrollBoundaryLockRef.current !== 'top'
+      ) {
+        scrollBoundaryLockRef.current = 'top';
+        topEdgePullDistanceRef.current = 0;
+        bottomEdgePullDistanceRef.current = 0;
         requestNavigateReviewItemRef.current?.('prev');
         return;
       }
 
-      if (startBoundary.atBottom && dy < 0) {
+      if (
+        bottomEdgePullDistanceRef.current >= EDGE_PULL_TRIGGER_DISTANCE
+        && scrollBoundaryLockRef.current !== 'bottom'
+      ) {
+        scrollBoundaryLockRef.current = 'bottom';
+        topEdgePullDistanceRef.current = 0;
+        bottomEdgePullDistanceRef.current = 0;
         requestNavigateReviewItemRef.current?.('next');
-        return;
       }
-
-      showSwipeHint();
     },
-    [showSwipeHint],
+    [isCompleted, previewImage, sessionState],
   );
+
+  const handleTouchEnd = useCallback(() => {
+    lastTouchYRef.current = null;
+  }, []);
+
+  const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const y = contentOffset.y;
+    const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
+    isScrollDraggingRef.current = true;
+    lastScrollYRef.current = y;
+    maxScrollYRef.current = maxScrollY;
+    touchMoveCountRef.current = 0;
+    topEdgePullDistanceRef.current = 0;
+    bottomEdgePullDistanceRef.current = 0;
+    scrollBoundaryLockRef.current = null;
+  }, []);
 
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      updateScrollMetrics(event);
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const y = contentOffset.y;
+      const maxOffsetY = Math.max(0, contentSize.height - layoutMeasurement.height);
+      lastScrollYRef.current = y;
+      maxScrollYRef.current = maxOffsetY;
+
+      if (scrollBoundaryLockRef.current === 'top' && y > TOP_PULL_RELEASE_DISTANCE) {
+        scrollBoundaryLockRef.current = null;
+      }
+      if (
+        scrollBoundaryLockRef.current === 'bottom'
+        && y < maxOffsetY - BOTTOM_RELEASE_DISTANCE
+      ) {
+        scrollBoundaryLockRef.current = null;
+      }
     },
-    [updateScrollMetrics],
+    [],
+  );
+
+  const handleScrollEndDrag = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const y = contentOffset.y;
+      const maxOffsetY = Math.max(0, contentSize.height - layoutMeasurement.height);
+      const velocityY = Number(event.nativeEvent.velocity?.y ?? 0);
+      const atTop = y <= TOP_PULL_TRIGGER_DISTANCE;
+      const atBottom = maxOffsetY > 0 && y >= maxOffsetY - BOTTOM_TRIGGER_DISTANCE;
+      isScrollDraggingRef.current = false;
+      lastTouchYRef.current = null;
+
+      if (sessionState !== 'ready' || isCompleted || previewImage !== null) {
+        return;
+      }
+
+      if (
+        atTop
+        && velocityY >= EDGE_END_DRAG_VELOCITY_MIN
+        && scrollBoundaryLockRef.current !== 'top'
+      ) {
+        scrollBoundaryLockRef.current = 'top';
+        requestNavigateReviewItemRef.current?.('prev');
+        return;
+      }
+
+      if (
+        atBottom
+        && velocityY <= -EDGE_END_DRAG_VELOCITY_MIN
+        && scrollBoundaryLockRef.current !== 'bottom'
+      ) {
+        scrollBoundaryLockRef.current = 'bottom';
+        requestNavigateReviewItemRef.current?.('next');
+      }
+    },
+    [isCompleted, previewImage, sessionState],
   );
 
   const clearVoicePlaybackResetTimer = useCallback(() => {
@@ -1606,7 +1612,12 @@ export default function ReviewSessionPage() {
   );
 
   const runAfterDiscardingDraft = useCallback(
-    (message: string, confirmText: string, action: () => void) => {
+    (
+      message: string,
+      confirmText: string,
+      action: () => void,
+      onCancel?: () => void,
+    ) => {
       if (!hasUnsubmittedReviewDraft) {
         action();
         return;
@@ -1616,6 +1627,7 @@ export default function ReviewSessionPage() {
         {
           text: '取消',
           style: 'cancel',
+          onPress: onCancel,
         },
         {
           text: confirmText,
@@ -1635,31 +1647,37 @@ export default function ReviewSessionPage() {
   const requestNavigateReviewItem = useCallback(
     (direction: ReviewNavigationDirection) => {
       if (sessionState !== 'ready' || isCompleted || previewImage !== null) {
+        resetEdgePullNavigationState();
         return;
       }
 
       if (isSubmitting || isReviewSolutionImageBusy || isVoiceBusy || activePreviewImageAction !== null) {
         showToast('正在处理，请稍后...', 'info', TOAST_DURATION_SHORT);
+        resetEdgePullNavigationState();
         return;
       }
 
       if (isLoadingCurrent) {
         showToast('题目加载中，请稍后...', 'info', TOAST_DURATION_SHORT);
+        resetEdgePullNavigationState();
         return;
       }
 
+      const baseIndex = currentIndexRef.current;
       const targetIndex = findPendingReviewIndex(
         queue,
         submittedMistakeIds,
-        direction === 'prev' ? currentIndex - 1 : currentIndex + 1,
+        direction === 'prev' ? baseIndex - 1 : baseIndex + 1,
         direction,
       );
       if (targetIndex === null && direction === 'prev') {
         showToast('已经是第一题', 'info', TOAST_DURATION_SHORT);
+        resetEdgePullNavigationState();
         return;
       }
       if (targetIndex === null) {
         showToast('已经是最后一题', 'info', TOAST_DURATION_SHORT);
+        resetEdgePullNavigationState();
         return;
       }
 
@@ -1667,13 +1685,15 @@ export default function ReviewSessionPage() {
         '当前题已添加内容但还没有选择结果，切题后这些内容不会保存。是否继续？',
         '继续切题',
         () => {
+          currentIndexRef.current = targetIndex;
           setCurrentIndex(targetIndex);
+          resetEdgePullNavigationState();
         },
+        resetEdgePullNavigationState,
       );
     },
     [
       activePreviewImageAction,
-      currentIndex,
       isCompleted,
       isLoadingCurrent,
       isReviewSolutionImageBusy,
@@ -1681,6 +1701,7 @@ export default function ReviewSessionPage() {
       isVoiceBusy,
       previewImage,
       queue,
+      resetEdgePullNavigationState,
       runAfterDiscardingDraft,
       sessionState,
       showToast,
@@ -1882,10 +1903,6 @@ export default function ReviewSessionPage() {
       if (toastTimerRef.current) {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
-      }
-      if (swipeHintTimerRef.current) {
-        clearTimeout(swipeHintTimerRef.current);
-        swipeHintTimerRef.current = null;
       }
       clearVoicePlaybackResetTimer();
       void VoiceNoteService.stopPlaying();
@@ -2148,9 +2165,10 @@ export default function ReviewSessionPage() {
         style={styles.screenSafeArea}
         contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
         onScroll={handleScroll}
-        onScrollBeginDrag={updateScrollMetrics}
-        onScrollEndDrag={updateScrollMetrics}
+        onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
         onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}>
         <Pressable style={styles.exitButton} onPress={handleRequestExit}>
           <Text style={styles.exitButtonText}>退出今日复做</Text>
@@ -2422,7 +2440,6 @@ export default function ReviewSessionPage() {
       {showResultActions ? (
         <FloatingBottomCta
           bottom={actionBarBottomOffset}
-          hintActive={swipeHintVisible}
           hintText="顶部下拉上一题 · 底部上拉下一题 · 选择结果保存"
           onHeightChange={(nextHeight) => {
             setActionBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
