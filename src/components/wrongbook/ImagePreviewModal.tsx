@@ -1,15 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
   useSharedValue,
+  withDelay,
   withSpring,
+  withTiming,
 } from 'react-native-reanimated';
 
 import { Logger } from '@/src/services/Logger';
 import { colors, spacing, typography } from '@/src/styles/tokens';
+
+export type ImagePreviewModalImageActionItem = {
+  uri: string;
+  title: string;
+};
+
+export type ImagePreviewModalLongPressHelpers = {
+  showToast: (message: string) => void;
+};
 
 export interface ImagePreviewModalProps {
   visible: boolean;
@@ -18,6 +29,10 @@ export interface ImagePreviewModalProps {
   onClose: () => void;
   interactionMode?: 'legacy' | 'zoomable';
   logSource?: string;
+  onImageLongPress?: (
+    item: ImagePreviewModalImageActionItem,
+    helpers: ImagePreviewModalLongPressHelpers,
+  ) => void;
 }
 
 type Size = {
@@ -30,6 +45,7 @@ const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2;
 const LEGACY_DOUBLE_TAP_DELAY = 300;
 const EDGE_RESISTANCE = 0.22;
+const TAP_GUARD_RELEASE_DELAY_MS = 240;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -127,12 +143,16 @@ export function ImagePreviewModal({
   onClose,
   interactionMode = 'legacy',
   logSource = 'unknown',
+  onImageLongPress,
 }: ImagePreviewModalProps) {
   const [imageFailed, setImageFailed] = useState(false);
   const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
   const [containerSizeState, setContainerSizeState] = useState<Size>({ width: 0, height: 0 });
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastVisible, setToastVisible] = useState(false);
   const lastTapRef = useRef(0);
   const gestureSessionRef = useRef(0);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const scale = useSharedValue(MIN_SCALE);
   const pinchStartScale = useSharedValue(MIN_SCALE);
@@ -146,6 +166,7 @@ export function ImagePreviewModal({
   const containerHeight = useSharedValue(0);
   const contentWidth = useSharedValue(0);
   const contentHeight = useSharedValue(0);
+  const suppressSingleTap = useSharedValue(0);
 
   const normalizedUri = useMemo(() => normalizeUri(uri), [uri]);
   const canShowImage = visible && !!normalizedUri && !imageFailed;
@@ -196,6 +217,7 @@ export function ImagePreviewModal({
     panStartY.value = 0;
     pinchStartX.value = 0;
     pinchStartY.value = 0;
+    suppressSingleTap.value = 0;
     contentWidth.value = 0;
     contentHeight.value = 0;
   }, [
@@ -208,10 +230,66 @@ export function ImagePreviewModal({
     pinchStartX,
     pinchStartY,
     scale,
+    suppressSingleTap,
     translateX,
     translateY,
     visible,
   ]);
+
+  useEffect(() => {
+    if (visible) {
+      return;
+    }
+
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setToastVisible(false);
+  }, [visible]);
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const showPreviewToast = useCallback((message: string) => {
+    const nextMessage = message.trim();
+    if (!nextMessage) {
+      return;
+    }
+
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+
+    setToastMessage(nextMessage);
+    setToastVisible(true);
+    toastTimerRef.current = setTimeout(() => {
+      setToastVisible(false);
+      toastTimerRef.current = null;
+    }, 1400);
+  }, []);
+
+  const handleImageLongPress = useCallback(() => {
+    if (!normalizedUri || !onImageLongPress) {
+      return;
+    }
+
+    onImageLongPress(
+      {
+        uri: normalizedUri,
+        title: headerTitle,
+      },
+      { showToast: showPreviewToast },
+    );
+  }, [headerTitle, normalizedUri, onImageLongPress, showPreviewToast]);
 
   useEffect(() => {
     Logger.info(
@@ -303,6 +381,9 @@ export function ImagePreviewModal({
     .maxDuration(250)
     .onEnd((_event, success) => {
       if (!success) {
+        return;
+      }
+      if (suppressSingleTap.value > 0.5) {
         return;
       }
 
@@ -525,9 +606,26 @@ export function ImagePreviewModal({
       });
     });
 
+  const longPressGesture = Gesture.LongPress()
+    .enabled(isZoomable && !!normalizedUri && typeof onImageLongPress === 'function')
+    .shouldCancelWhenOutside(false)
+    .minDuration(520)
+    .maxDistance(12)
+    .onStart(() => {
+      suppressSingleTap.value = 1;
+      runOnJS(handleImageLongPress)();
+    })
+    .onEnd(() => {
+      suppressSingleTap.value = withDelay(
+        TAP_GUARD_RELEASE_DELAY_MS,
+        withTiming(0, { duration: 80 }),
+      );
+    });
+
   const gesture = Gesture.Simultaneous(
     pinchGesture,
     panGesture,
+    longPressGesture,
     Gesture.Exclusive(doubleTapGesture, singleTapGesture),
   );
 
@@ -657,6 +755,14 @@ export function ImagePreviewModal({
               {content}
             </Pressable>
           )}
+
+          {toastVisible ? (
+            <View pointerEvents="none" style={styles.toastWrap}>
+              <View style={styles.toastBubble}>
+                <Text style={styles.toastText}>{toastMessage}</Text>
+              </View>
+            </View>
+          ) : null}
         </View>
       </GestureHandlerRootView>
     </Modal>
@@ -745,6 +851,27 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 11,
     lineHeight: 14,
+    fontWeight: '600',
+  },
+  toastWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: spacing.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  toastBubble: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.32)',
+    backgroundColor: 'rgba(0, 0, 0, 0.72)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: '#F3F4F6',
     fontWeight: '600',
   },
 });

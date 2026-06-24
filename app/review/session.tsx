@@ -22,6 +22,8 @@ import {
   CardContainer,
   FloatingBottomCta,
   ImagePreviewModal,
+  type ImagePreviewModalImageActionItem,
+  type ImagePreviewModalLongPressHelpers,
   PrimaryButton,
   ScreenContainer,
 } from '@/src/components';
@@ -42,6 +44,7 @@ import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 const PAGE_SCOPE = 'ReviewSessionPage';
 const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
+const TOAST_DURATION_SHORT = 1400;
 const QUESTION_PREVIEW_MIN_HEIGHT = 112;
 const QUESTION_PREVIEW_MAX_HEIGHT = 228;
 const QUESTION_PREVIEW_EMPTY_HEIGHT = 148;
@@ -660,6 +663,7 @@ export default function ReviewSessionPage() {
     nextReviewIndex: number;
   } | null>(null);
   const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
+  const [activePreviewImageAction, setActivePreviewImageAction] = useState<'save' | 'share' | null>(null);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
@@ -1370,6 +1374,159 @@ export default function ReviewSessionPage() {
     setPreviewImage(null);
   }, []);
 
+  const showPreviewActionToast = useCallback(
+    (
+      previewToast: ImagePreviewModalLongPressHelpers['showToast'] | undefined,
+      message: string,
+      type: ToastType = 'info',
+      duration = TOAST_DURATION_DEFAULT,
+    ) => {
+      if (previewToast) {
+        previewToast(message);
+        return;
+      }
+
+      showToast(message, type, duration);
+    },
+    [showToast],
+  );
+
+  const handleSavePreviewImage = useCallback(
+    (
+      item: ImagePreviewModalImageActionItem,
+      previewToast?: ImagePreviewModalLongPressHelpers['showToast'],
+    ) => {
+      if (activePreviewImageAction !== null) {
+        showPreviewActionToast(
+          previewToast,
+          '正在处理图片，请稍后...',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
+        return;
+      }
+
+      setActivePreviewImageAction('save');
+      void (async () => {
+        try {
+          const result = await ImageService.saveLocalImageToGallery(item.uri);
+          if (result.success) {
+            showPreviewActionToast(previewToast, '保存成功', 'success');
+            return;
+          }
+
+          showPreviewActionToast(
+            previewToast,
+            result.message || '保存图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
+        } catch (error) {
+          Logger.error(PAGE_SCOPE, 'Unexpected error while saving preview image.', {
+            title: item.title,
+            error,
+          });
+          showPreviewActionToast(
+            previewToast,
+            '保存图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
+        } finally {
+          setActivePreviewImageAction(null);
+        }
+      })();
+    },
+    [activePreviewImageAction, showPreviewActionToast],
+  );
+
+  const handleSharePreviewImage = useCallback(
+    (
+      item: ImagePreviewModalImageActionItem,
+      previewToast?: ImagePreviewModalLongPressHelpers['showToast'],
+    ) => {
+      if (activePreviewImageAction !== null) {
+        showPreviewActionToast(
+          previewToast,
+          '正在处理图片，请稍后...',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
+        return;
+      }
+
+      setActivePreviewImageAction('share');
+      void (async () => {
+        try {
+          const result = await ImageService.shareLocalImage(item.uri);
+          if (result.success || result.reason === 'cancelled') {
+            return;
+          }
+
+          showPreviewActionToast(
+            previewToast,
+            result.message || '分享图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
+        } catch (error) {
+          Logger.error(PAGE_SCOPE, 'Unexpected error while sharing preview image.', {
+            title: item.title,
+            error,
+          });
+          showPreviewActionToast(
+            previewToast,
+            '分享图片失败，请稍后重试。',
+            'error',
+            TOAST_DURATION_LONG,
+          );
+        } finally {
+          setActivePreviewImageAction(null);
+        }
+      })();
+    },
+    [activePreviewImageAction, showPreviewActionToast],
+  );
+
+  const handlePreviewImageLongPress = useCallback(
+    (
+      item: ImagePreviewModalImageActionItem,
+      helpers: ImagePreviewModalLongPressHelpers,
+    ) => {
+      if (activePreviewImageAction !== null) {
+        showPreviewActionToast(
+          helpers.showToast,
+          '正在处理图片，请稍后...',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
+        return;
+      }
+
+      const title = item.title.trim().length > 0 ? item.title : '图片';
+      Alert.alert(`${title}操作`, '请选择要对这张图片执行的操作。', [
+        {
+          text: '保存图片',
+          onPress: () => handleSavePreviewImage(item, helpers.showToast),
+        },
+        {
+          text: '分享图片',
+          onPress: () => handleSharePreviewImage(item, helpers.showToast),
+        },
+        {
+          text: '取消',
+          style: 'cancel',
+        },
+      ]);
+    },
+    [
+      activePreviewImageAction,
+      handleSavePreviewImage,
+      handleSharePreviewImage,
+      showPreviewActionToast,
+    ],
+  );
+
   const handleRequestExit = useCallback(() => {
     if (isVoiceRecording) {
       confirmLeaveWhileRecording(() => {
@@ -2043,6 +2200,7 @@ export default function ReviewSessionPage() {
         interactionMode="zoomable"
         logSource="review_session"
         onClose={handleClosePreview}
+        onImageLongPress={handlePreviewImageLongPress}
       />
 
       {showResultActions ? (
