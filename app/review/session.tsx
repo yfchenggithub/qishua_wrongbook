@@ -1590,18 +1590,18 @@ export default function ReviewSessionPage() {
       const title = item.title.trim().length > 0 ? item.title : '图片';
       Alert.alert(`${title}操作`, '请选择要对这张图片执行的操作。', [
         {
-          text: '保存图片',
-          onPress: () => handleSavePreviewImage(item, helpers.showToast),
-        },
-        {
           text: '分享图片',
           onPress: () => handleSharePreviewImage(item, helpers.showToast),
+        },
+        {
+          text: '保存图片',
+          onPress: () => handleSavePreviewImage(item, helpers.showToast),
         },
         {
           text: '取消',
           style: 'cancel',
         },
-      ]);
+      ], { cancelable: true });
     },
     [
       activePreviewImageAction,
