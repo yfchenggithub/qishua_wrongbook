@@ -102,6 +102,43 @@ export async function loadTodayReviewItem(mistakeId: string): Promise<LoadTodayR
   }
 }
 
+export async function loadTodayReviewItemForDisplay(mistakeId: string): Promise<LoadTodayReviewItemResult> {
+  const normalizedId = typeof mistakeId === 'string' ? mistakeId.trim() : '';
+  if (!normalizedId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 无效。',
+      canSkip: true,
+    };
+  }
+
+  try {
+    const result = await ReviewFlowService.getReviewPageData(normalizedId);
+    if (!result.ok || !result.data) {
+      return {
+        ok: false,
+        errorMessage: toErrorMessage(result.errorMessage),
+        canSkip: result.notFound === true,
+      };
+    }
+
+    return {
+      ok: true,
+      data: result.data,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'loadTodayReviewItemForDisplay failed unexpectedly.', {
+      mistakeId: normalizedId,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: FALLBACK_LOAD_ERROR,
+      canSkip: false,
+    };
+  }
+}
+
 export async function submitTodayReviewResult(input: {
   mistakeId: string;
   reviewIndex: number;
