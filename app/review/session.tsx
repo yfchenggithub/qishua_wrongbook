@@ -2749,7 +2749,7 @@ export default function ReviewSessionPage() {
         }
 
         if (!submitResult.reviewRecordId) {
-          showToast('淇濆瓨澶辫触锛岃閲嶈瘯', 'error', TOAST_DURATION_LONG);
+          showToast('保存失败，请重试', 'error', TOAST_DURATION_LONG);
           return;
         }
 
