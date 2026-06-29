@@ -512,6 +512,67 @@ WHERE id = ?;`,
     }
   },
 
+  async upsertReviewSolutionImageByReviewRecordIdInTransaction(
+    db: SQLite.SQLiteDatabase,
+    mistakeId: string,
+    reviewRecordId: string,
+    uri: string,
+    updatedAt?: string,
+  ): Promise<MistakeImage> {
+    try {
+      const normalizedMistakeId = normalizeRequiredText(mistakeId, 'mistakeId');
+      const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
+      const normalizedUri = normalizeRequiredText(uri, 'uri');
+      const existingRows = await db.getAllAsync<MistakeImage>(
+        `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+WHERE review_record_id = ?
+  AND type = 'review_solution'
+ORDER BY sort_order ASC, created_at ASC;`,
+        normalizedReviewRecordId,
+      );
+      const existing = existingRows.map(mapMistakeImageRow);
+
+      if (existing.length <= 0) {
+        return MistakeImageRepository.createMistakeImageInTransaction(db, {
+          mistake_id: normalizedMistakeId,
+          review_record_id: normalizedReviewRecordId,
+          type: 'review_solution',
+          uri: normalizedUri,
+          sort_order: 0,
+          createdAt: updatedAt,
+        });
+      }
+
+      const primary = existing[0];
+      await db.runAsync(
+        `UPDATE mistake_images
+SET mistake_id = ?, uri = ?, sort_order = ?
+WHERE id = ?;`,
+        normalizedMistakeId,
+        normalizedUri,
+        0,
+        primary.id,
+      );
+
+      for (const staleImage of existing.slice(1)) {
+        await db.runAsync('DELETE FROM mistake_images WHERE id = ?;', staleImage.id);
+      }
+
+      const updated = await getImageByIdInDatabase(db, primary.id);
+      if (!updated) {
+        throw new Error('Failed to load upserted review solution image.');
+      }
+      return updated;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'upsertReviewSolutionImageByReviewRecordIdInTransaction failed.', {
+        mistakeId,
+        reviewRecordId,
+        error,
+      });
+      throw error;
+    }
+  },
+
   async insertMistakeImages(mistakeId: string, images: InsertMistakeImageItem[]): Promise<MistakeImage[]> {
     try {
       await ensureDatabaseReady();
@@ -718,6 +779,28 @@ WHERE review_record_id = ?
       return result.changes;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'deleteImagesByReviewRecordId failed.', { reviewRecordId, error });
+      throw error;
+    }
+  },
+
+  async deleteImagesByReviewRecordIdInTransaction(
+    db: SQLite.SQLiteDatabase,
+    reviewRecordId: string,
+  ): Promise<number> {
+    try {
+      const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
+      const result = await db.runAsync(
+        `DELETE FROM mistake_images
+WHERE review_record_id = ?
+  AND type = 'review_solution';`,
+        normalizedReviewRecordId,
+      );
+      return result.changes;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'deleteImagesByReviewRecordIdInTransaction failed.', {
+        reviewRecordId,
+        error,
+      });
       throw error;
     }
   },

@@ -39,7 +39,7 @@ import {
   TOP_PULL_RELEASE_DISTANCE,
   TOP_PULL_TRIGGER_DISTANCE,
 } from '@/src/constants/edgePullNavigation';
-import type { DetailImageSlot } from '@/src/models/MistakeDetailViewModel';
+import type { DetailImageSlot, DetailReviewRecordItem } from '@/src/models/MistakeDetailViewModel';
 import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
@@ -65,6 +65,7 @@ const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 30 * 60 * 1000;
 const BUTTON_HINT_LIFT_DISTANCE = 4;
+const INLINE_MODULE_FILTER_OPTION_LIMIT = 3;
 
 type ToastType = 'success' | 'info' | 'error';
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -98,7 +99,15 @@ interface ModuleFilterOption {
   count: number;
 }
 
-type SubmittedReviewResultsByMistakeId = Record<string, ReviewResult>;
+interface SubmittedReviewEntry {
+  reviewRecordId: string;
+  reviewIndex: number;
+  result: ReviewResult;
+  solutionImage: LocalImage | null;
+  voiceNote: VoiceNoteEntity | null;
+}
+
+type SubmittedReviewEntriesByMistakeId = Record<string, SubmittedReviewEntry>;
 
 const EMPTY_RESULT_STATS: SessionResultStats = {
   known: 0,
@@ -231,6 +240,16 @@ function getReviewActionSymbol(tone: 'known' | 'fuzzy' | 'unknown'): string {
   return '\u00D7';
 }
 
+function getStatsKeyForReviewResult(result: ReviewResult): SessionResultKey {
+  if (result === 'mastered') {
+    return 'known';
+  }
+  if (result === 'unsure') {
+    return 'fuzzy';
+  }
+  return 'unknown';
+}
+
 function getReviewResultLabel(result: ReviewResult | null | undefined): string {
   if (result === 'wrong') {
     return '不会';
@@ -247,7 +266,7 @@ function getReviewResultLabel(result: ReviewResult | null | undefined): string {
 function getQuestionListStatus(input: {
   item: ReviewSessionQueueItem;
   submittedIds: ReadonlySet<string>;
-  submittedResults: SubmittedReviewResultsByMistakeId;
+  submittedEntries: SubmittedReviewEntriesByMistakeId;
 }): {
   label: string;
   tone: ReviewListStatusTone;
@@ -261,7 +280,7 @@ function getQuestionListStatus(input: {
     };
   }
 
-  const result = input.submittedResults[input.item.id] ?? null;
+  const result = input.submittedEntries[input.item.id]?.result ?? null;
   return {
     label: getReviewResultLabel(result),
     tone: result ?? 'completed',
@@ -275,7 +294,7 @@ function TodayQuestionListSheet({
   items,
   currentMistakeId,
   submittedIds,
-  submittedResults,
+  submittedEntries,
   onClose,
   onSelectItem,
 }: {
@@ -284,7 +303,7 @@ function TodayQuestionListSheet({
   items: ReviewSessionQueueItem[];
   currentMistakeId: string | null;
   submittedIds: ReadonlySet<string>;
-  submittedResults: SubmittedReviewResultsByMistakeId;
+  submittedEntries: SubmittedReviewEntriesByMistakeId;
   onClose: () => void;
   onSelectItem: (item: ReviewSessionQueueItem) => void;
 }) {
@@ -316,7 +335,7 @@ function TodayQuestionListSheet({
               const status = getQuestionListStatus({
                 item,
                 submittedIds,
-                submittedResults,
+                submittedEntries,
               });
               const selected = currentMistakeId === item.id;
               return (
@@ -330,16 +349,33 @@ function TodayQuestionListSheet({
                     selected ? styles.questionListRowSelected : null,
                     pressed ? styles.questionListRowPressed : null,
                   ]}>
+                  <View
+                    style={[
+                      styles.questionListCurrentMarker,
+                      selected ? styles.questionListCurrentMarkerActive : null,
+                    ]}
+                  />
                   <Text
                     numberOfLines={1}
                     maxFontSizeMultiplier={1.1}
-                    style={styles.questionListItemTitle}>
+                    style={[
+                      styles.questionListItemTitle,
+                      selected ? styles.questionListItemTitleSelected : null,
+                    ]}>
                     {item.title}
                   </Text>
+                  {selected ? (
+                    <View style={styles.questionListCurrentBadge}>
+                      <Text numberOfLines={1} style={styles.questionListCurrentBadgeText}>当前</Text>
+                    </View>
+                  ) : null}
                   <Text
                     numberOfLines={1}
                     maxFontSizeMultiplier={1.1}
-                    style={styles.questionListReviewText}>
+                    style={[
+                      styles.questionListReviewText,
+                      selected ? styles.questionListReviewTextSelected : null,
+                    ]}>
                     {`第 ${item.nextReviewIndex} 刷`}
                   </Text>
                   <Text
@@ -358,6 +394,77 @@ function TodayQuestionListSheet({
                               : null,
                     ]}>
                     {status.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ModuleFilterSheet({
+  visible,
+  options,
+  selectedValue,
+  onClose,
+  onSelectOption,
+}: {
+  visible: boolean;
+  options: ModuleFilterOption[];
+  selectedValue: ModuleFilterValue;
+  onClose: () => void;
+  onSelectOption: (value: ModuleFilterValue) => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.questionListOverlay}>
+        <Pressable style={styles.questionListBackdrop} onPress={onClose} />
+        <View style={styles.questionListSheet}>
+          <View style={styles.questionListHandle} />
+          <View style={styles.questionListHeader}>
+            <View style={styles.questionListHeaderTextWrap}>
+              <Text style={styles.questionListTitle}>选择模块</Text>
+              <Text style={styles.questionListSubtitle}>{`共 ${options.length} 个筛选项`}</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭模块选择"
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.questionListCloseButton,
+                pressed ? styles.questionListCloseButtonPressed : null,
+              ]}>
+              <MaterialIcons name="close" size={22} color="#0F172A" />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={styles.moduleFilterSheetScroll}
+            contentContainerStyle={styles.moduleFilterSheetContent}>
+            {options.map((option) => {
+              const selected = selectedValue === option.value;
+              return (
+                <Pressable
+                  key={option.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={`筛选${option.label}模块，共${option.count}道`}
+                  onPress={() => onSelectOption(option.value)}
+                  style={({ pressed }) => [
+                    styles.moduleFilterSheetChip,
+                    selected ? styles.moduleFilterSheetChipSelected : null,
+                    pressed ? styles.moduleFilterChipPressed : null,
+                  ]}>
+                  <Text
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.1}
+                    style={[
+                      styles.moduleFilterChipText,
+                      selected ? styles.moduleFilterChipTextSelected : null,
+                    ]}>
+                    {`${option.label} ${option.count}`}
                   </Text>
                 </Pressable>
               );
@@ -396,6 +503,85 @@ function toReviewRecordVoiceNote(value: VoiceNoteEntity | null): ReviewRecordVoi
     durationMs: value.durationMs,
     sizeBytes: value.sizeBytes,
     createdAt: value.createdAt,
+  };
+}
+
+function isReviewResult(value: unknown): value is ReviewResult {
+  return value === 'mastered' || value === 'unsure' || value === 'wrong';
+}
+
+function getFileNameFromUri(uri: string, fallback: string): string {
+  const withoutQuery = uri.split('?')[0] ?? '';
+  const lastSlashIndex = withoutQuery.lastIndexOf('/');
+  const fileName = lastSlashIndex >= 0 ? withoutQuery.slice(lastSlashIndex + 1) : withoutQuery;
+  return fileName.trim().length > 0 ? fileName : fallback;
+}
+
+function getDirectoryFromUri(uri: string): string {
+  const withoutQuery = uri.split('?')[0] ?? '';
+  const lastSlashIndex = withoutQuery.lastIndexOf('/');
+  return lastSlashIndex >= 0 ? withoutQuery.slice(0, lastSlashIndex) : '';
+}
+
+function toVoiceNoteEntity(value: ReviewRecordVoiceNote | null | undefined): VoiceNoteEntity | null {
+  if (!value) {
+    return null;
+  }
+
+  return {
+    id: value.id,
+    fileUri: value.fileUri,
+    fileName: value.fileName,
+    durationMs: value.durationMs,
+    sizeBytes: value.sizeBytes,
+    createdAt: value.createdAt,
+    updatedAt: value.createdAt,
+  };
+}
+
+function toLocalReviewSolutionImage(
+  record: DetailReviewRecordItem,
+  mistakeId: string,
+): LocalImage | null {
+  const primaryImage =
+    record.solutionImages?.find((item) => item.exists !== false)
+    ?? record.solutionImages?.[0]
+    ?? null;
+  const uri = typeof primaryImage?.uri === 'string'
+    ? primaryImage.uri.trim()
+    : typeof record.solutionImageUri === 'string'
+      ? record.solutionImageUri.trim()
+      : '';
+  if (!uri) {
+    return null;
+  }
+
+  return {
+    id: primaryImage?.id ?? record.solutionImageId ?? `review-solution-${record.id}`,
+    mistakeId,
+    type: 'review_solution',
+    uri,
+    fileName: getFileNameFromUri(uri, `${record.id}.jpg`),
+    directory: getDirectoryFromUri(uri),
+    createdAt: record.createdAt,
+    fileSize: primaryImage?.fileSize ?? null,
+  };
+}
+
+function buildSubmittedReviewEntryFromRecord(
+  record: DetailReviewRecordItem | null | undefined,
+  mistakeId: string,
+): SubmittedReviewEntry | null {
+  if (!record || !isReviewResult(record.result)) {
+    return null;
+  }
+
+  return {
+    reviewRecordId: record.id,
+    reviewIndex: record.reviewIndex,
+    result: record.result,
+    solutionImage: toLocalReviewSolutionImage(record, mistakeId),
+    voiceNote: toVoiceNoteEntity(record.voiceNote ?? null),
   };
 }
 
@@ -479,7 +665,7 @@ function QuestionImageCard({
 
   const providedDimensions = useMemo(
     () => pickSlotImageDimensions(slot),
-    [slot?.height, slot?.imageHeight, slot?.imageWidth, slot?.width],
+    [slot],
   );
 
   const activeDimensions = useMemo(() => {
@@ -867,9 +1053,9 @@ export default function ReviewSessionPage() {
   const [queue, setQueue] = useState<ReviewSessionQueueItem[]>([]);
   const [selectedModuleFilter, setSelectedModuleFilter] = useState<ModuleFilterValue>(null);
   const [submittedMistakeIds, setSubmittedMistakeIds] = useState<Set<string>>(() => new Set());
-  const [submittedReviewResults, setSubmittedReviewResults] = useState<SubmittedReviewResultsByMistakeId>({});
-  const [readonlyMistakeId, setReadonlyMistakeId] = useState<string | null>(null);
+  const [submittedReviewEntries, setSubmittedReviewEntries] = useState<SubmittedReviewEntriesByMistakeId>({});
   const [questionListVisible, setQuestionListVisible] = useState(false);
+  const [moduleFilterSheetVisible, setModuleFilterSheetVisible] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [resultStats, setResultStats] = useState<SessionResultStats>(EMPTY_RESULT_STATS);
   const [currentErrorMessage, setCurrentErrorMessage] = useState<string | null>(null);
@@ -924,12 +1110,18 @@ export default function ReviewSessionPage() {
   const currentIndexRef = useRef(0);
 
   const totalCount = queue.length;
-  const isCompleted =
+  const allTodayItemsSubmitted =
     sessionState === 'ready' && totalCount > 0 && submittedMistakeIds.size >= totalCount;
-  const hasRemaining = sessionState === 'ready' && !isCompleted && currentIndex < totalCount;
+  const isCompleted =
+    allTodayItemsSubmitted && currentIndex >= totalCount;
+  const hasRemaining = sessionState === 'ready' && currentIndex < totalCount;
   const currentQueueItem = hasRemaining ? queue[currentIndex] ?? null : null;
   const currentQueueItemId = currentQueueItem?.id ?? null;
-  const hasUnsubmittedReviewDraft = !!reviewSolutionImage || !!voiceNote || isVoiceRecording;
+  const currentSubmittedReviewEntry = currentQueueItem
+    ? submittedReviewEntries[currentQueueItem.id] ?? null
+    : null;
+  const hasUnsubmittedReviewDraft =
+    !currentSubmittedReviewEntry && (!!reviewSolutionImage || !!voiceNote || isVoiceRecording);
 
   const moduleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
     const moduleCounts = new Map<string, number>();
@@ -959,6 +1151,33 @@ export default function ReviewSessionPage() {
     return options;
   }, [queue]);
 
+  const inlineModuleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
+    if (moduleFilterOptions.length <= INLINE_MODULE_FILTER_OPTION_LIMIT) {
+      return moduleFilterOptions;
+    }
+
+    const selectedOption = moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
+    const inlineOptions: ModuleFilterOption[] = [];
+    const addOption = (option: ModuleFilterOption | null | undefined) => {
+      if (!option || inlineOptions.some((item) => item.key === option.key)) {
+        return;
+      }
+      if (inlineOptions.length < INLINE_MODULE_FILTER_OPTION_LIMIT) {
+        inlineOptions.push(option);
+      }
+    };
+
+    addOption(moduleFilterOptions[0]);
+    addOption(selectedOption);
+    for (const option of moduleFilterOptions.slice(1)) {
+      addOption(option);
+    }
+
+    return inlineOptions;
+  }, [moduleFilterOptions, selectedModuleFilter]);
+
+  const shouldShowModuleFilterMore = moduleFilterOptions.length > inlineModuleFilterOptions.length;
+
   const currentFilterQueue = useMemo(
     () => queue.filter((item) => isQueueItemInModuleFilter(item, selectedModuleFilter)),
     [queue, selectedModuleFilter],
@@ -969,31 +1188,18 @@ export default function ReviewSessionPage() {
     () => currentFilterQueue.filter((item) => submittedMistakeIds.has(item.id)).length,
     [currentFilterQueue, submittedMistakeIds],
   );
-  const currentFilterPendingCount = Math.max(0, currentFilterTotal - currentFilterSubmittedCount);
   const selectedModuleLabel = selectedModuleFilter ?? '全部';
   const moduleFilterHintText =
     selectedModuleFilter === null
       ? `已筛选：显示全部 ${currentFilterTotal} 道今日复做题`
       : `已筛选：仅显示“${selectedModuleFilter}”模块 ${currentFilterTotal} 道复做题`;
-  const isCurrentFilterCompleted =
-    sessionState === 'ready'
-    && !isCompleted
-    && selectedModuleFilter !== null
-    && currentFilterTotal > 0
-    && currentFilterPendingCount <= 0;
   const currentFilterItemIndex = currentQueueItem
     ? currentFilterQueue.findIndex((item) => item.id === currentQueueItem.id)
     : -1;
-  const isReadonlyCompletedItem =
-    !!currentQueueItem
-    && readonlyMistakeId === currentQueueItem.id
-    && submittedMistakeIds.has(currentQueueItem.id);
   const hasActiveReviewItem =
     !!currentQueueItem
-    && !isCurrentFilterCompleted
-    && isQueueItemInModuleFilter(currentQueueItem, selectedModuleFilter)
-    && !submittedMistakeIds.has(currentQueueItem.id);
-  const canShowCurrentReviewContent = !isCurrentFilterCompleted || isReadonlyCompletedItem;
+    && isQueueItemInModuleFilter(currentQueueItem, selectedModuleFilter);
+  const canShowCurrentReviewContent = hasActiveReviewItem;
 
   useEffect(() => {
     currentIndexRef.current = currentIndex;
@@ -1241,7 +1447,7 @@ export default function ReviewSessionPage() {
         return;
       }
 
-      const existingUri = isRerecord ? voiceNote?.fileUri ?? null : null;
+      const existingUri = isRerecord && !currentSubmittedReviewEntry ? voiceNote?.fileUri ?? null : null;
       voiceReplacePendingUriRef.current = existingUri;
 
       const startResult = await VoiceNoteService.startRecording();
@@ -1268,6 +1474,7 @@ export default function ReviewSessionPage() {
     },
     [
       currentErrorMessage,
+      currentSubmittedReviewEntry,
       isLoadingCurrent,
       isSubmitting,
       isVoiceBusy,
@@ -1444,6 +1651,13 @@ export default function ReviewSessionPage() {
 
     setIsVoiceBusy(true);
     await stopVoicePlayback(false);
+    if (currentSubmittedReviewEntry) {
+      setVoiceNote(null);
+      setIsVoicePlaying(false);
+      showToast('\u8bed\u97f3\u8bb2\u89e3\u5df2\u79fb\u9664\uff0c\u91cd\u65b0\u9009\u62e9\u7ed3\u679c\u540e\u4fdd\u5b58', 'info');
+      setIsVoiceBusy(false);
+      return;
+    }
     const deleteResult = await VoiceNoteService.deleteVoiceNote(voiceNote.fileUri);
     if (!deleteResult.ok) {
       showToast(toShortErrorMessage(deleteResult.errorMessage), 'info');
@@ -1455,7 +1669,7 @@ export default function ReviewSessionPage() {
     setIsVoicePlaying(false);
     showToast('语音讲解已删除', 'info');
     setIsVoiceBusy(false);
-  }, [isVoiceBusy, isVoiceRecording, showToast, stopVoicePlayback, voiceNote]);
+  }, [currentSubmittedReviewEntry, isVoiceBusy, isVoiceRecording, showToast, stopVoicePlayback, voiceNote]);
 
   const confirmDeleteVoiceNote = useCallback(() => {
     if (!voiceNote || isVoiceBusy || isVoiceRecording) {
@@ -1568,7 +1782,7 @@ export default function ReviewSessionPage() {
 
         const previousImage = reviewSolutionImage;
         setReviewSolutionImage(saveResult.image);
-        if (previousImage && previousImage.uri !== saveResult.image.uri) {
+        if (!currentSubmittedReviewEntry && previousImage && previousImage.uri !== saveResult.image.uri) {
           void cleanupReviewSolutionImage(previousImage);
         }
         showToast('我的做法已添加', 'success');
@@ -1587,6 +1801,7 @@ export default function ReviewSessionPage() {
       cleanupReviewSolutionImage,
       currentErrorMessage,
       currentQueueItem,
+      currentSubmittedReviewEntry,
       isLoadingCurrent,
       isReviewSolutionImageBusy,
       isSubmitting,
@@ -1605,11 +1820,14 @@ export default function ReviewSessionPage() {
     const imageToDelete = reviewSolutionImage;
     setIsReviewSolutionImageBusy(true);
     setReviewSolutionImage(null);
-    await cleanupReviewSolutionImage(imageToDelete);
+    if (!currentSubmittedReviewEntry) {
+      await cleanupReviewSolutionImage(imageToDelete);
+    }
     setIsReviewSolutionImageBusy(false);
     showToast('我的做法图片已删除', 'info');
   }, [
     cleanupReviewSolutionImage,
+    currentSubmittedReviewEntry,
     isReviewSolutionImageBusy,
     isSubmitting,
     reviewSolutionImage,
@@ -1902,23 +2120,17 @@ export default function ReviewSessionPage() {
       const currentItem = queue[currentIndex] ?? null;
       const keepCurrentIndex =
         currentItem !== null
-        && !submittedMistakeIds.has(currentItem.id)
         && isQueueItemInModuleFilter(currentItem, nextModuleFilter);
       const targetIndex = keepCurrentIndex
         ? currentIndex
         : findPendingReviewIndex(queue, submittedMistakeIds, 0, 'next', nextModuleFilter);
       const fallbackIndex = queue.findIndex((item) => isQueueItemInModuleFilter(item, nextModuleFilter));
       const resolvedTargetIndex = targetIndex ?? (fallbackIndex >= 0 ? fallbackIndex : null);
-      const targetItem = resolvedTargetIndex !== null ? queue[resolvedTargetIndex] ?? null : null;
-      const targetReadonlyMistakeId =
-        targetItem && submittedMistakeIds.has(targetItem.id) ? targetItem.id : null;
-
       runAfterDiscardingDraft(
         '当前题已添加内容但还没有选择结果，切换模块后这些内容不会保存。是否继续？',
         '继续切换',
         () => {
           setSelectedModuleFilter(nextModuleFilter);
-          setReadonlyMistakeId(targetReadonlyMistakeId);
           setCurrentIndex(resolvedTargetIndex ?? totalCount);
           resetEdgePullNavigationState();
         },
@@ -1960,12 +2172,10 @@ export default function ReviewSessionPage() {
         return;
       }
 
-      const isSubmitted = submittedMistakeIds.has(item.id);
       runAfterDiscardingDraft(
         '当前题已添加内容但还没有选择结果，切换题目后这些内容不会保存。是否继续？',
         '继续切换',
         () => {
-          setReadonlyMistakeId(isSubmitted ? item.id : null);
           setCurrentIndex(targetIndex);
           setQuestionListVisible(false);
           resetEdgePullNavigationState();
@@ -1984,7 +2194,6 @@ export default function ReviewSessionPage() {
       runAfterDiscardingDraft,
       sessionState,
       showToast,
-      submittedMistakeIds,
     ],
   );
 
@@ -2031,7 +2240,6 @@ export default function ReviewSessionPage() {
         '继续切题',
         () => {
           currentIndexRef.current = targetIndex;
-          setReadonlyMistakeId(null);
           setCurrentIndex(targetIndex);
           resetEdgePullNavigationState();
         },
@@ -2112,13 +2320,13 @@ export default function ReviewSessionPage() {
       }
 
       setReviewSolutionImage((previousImage) => {
-        if (previousImage && previousImage.uri !== editResult.image.uri) {
+        if (!currentSubmittedReviewEntry && previousImage && previousImage.uri !== editResult.image.uri) {
           void cleanupReviewSolutionImage(previousImage);
         }
         return editResult.image;
       });
       showToast('我的做法已更新', 'success');
-    }, [cleanupReviewSolutionImage, currentQueueItemId, showToast]),
+    }, [cleanupReviewSolutionImage, currentQueueItemId, currentSubmittedReviewEntry, showToast]),
   );
 
   useFocusEffect(
@@ -2193,9 +2401,9 @@ export default function ReviewSessionPage() {
     setQueue([]);
     setSelectedModuleFilter(null);
     setSubmittedMistakeIds(new Set());
-    setSubmittedReviewResults({});
-    setReadonlyMistakeId(null);
+    setSubmittedReviewEntries({});
     setQuestionListVisible(false);
+    setModuleFilterSheetVisible(false);
     setCurrentIndex(0);
     setResultStats(EMPTY_RESULT_STATS);
     setVoiceNote(null);
@@ -2340,18 +2548,8 @@ export default function ReviewSessionPage() {
         'next',
         selectedModuleFilter,
       );
-      setCurrentIndex(nextPendingIndex ?? totalCount);
-      return;
-    }
-
-    if (submittedMistakeIds.has(currentQueueItem.id) && readonlyMistakeId !== currentQueueItem.id) {
-      const nextPendingIndex = findNextPendingReviewIndexAfterSubmit(
-        queue,
-        submittedMistakeIds,
-        currentIndex,
-        selectedModuleFilter,
-      );
-      setCurrentIndex(nextPendingIndex ?? totalCount);
+      const fallbackIndex = queue.findIndex((item) => isQueueItemInModuleFilter(item, selectedModuleFilter));
+      setCurrentIndex(nextPendingIndex ?? (fallbackIndex >= 0 ? fallbackIndex : totalCount));
       return;
     }
 
@@ -2363,23 +2561,54 @@ export default function ReviewSessionPage() {
     setCurrentQuestionSlot(undefined);
 
     const loadCurrent = async () => {
-      const result = readonlyMistakeId === currentQueueItem.id
-        ? await ReviewSessionService.loadTodayReviewItemForDisplay(currentQueueItem.id)
-        : await ReviewSessionService.loadTodayReviewItem(currentQueueItem.id);
+      const submittedEntry = submittedReviewEntries[currentQueueItem.id] ?? null;
+      const result = await ReviewSessionService.loadTodayReviewItem(currentQueueItem.id, {
+        allowSubmitted: submittedEntry !== null,
+      });
       if (requestId !== currentRequestIdRef.current) {
         return;
       }
 
       if (result.ok) {
         const questionSlot = result.data.detail.imageSlots.find((slot) => slot.type === 'question');
+        const submittedRecord = submittedEntry
+          ? result.data.detail.reviewRecords.find((record) => record.id === submittedEntry.reviewRecordId)
+            ?? result.data.detail.reviewRecords.find((record) => record.reviewIndex === submittedEntry.reviewIndex)
+            ?? null
+          : null;
+        const hydratedSubmittedEntry = buildSubmittedReviewEntryFromRecord(
+          submittedRecord,
+          result.data.detail.id,
+        );
+        const effectiveSubmittedEntry = hydratedSubmittedEntry ?? submittedEntry;
         setCurrentMeta({
           mistakeId: result.data.detail.id,
           module: result.data.detail.module,
           title: result.data.detail.title,
-          nextReviewIndex: readonlyMistakeId === currentQueueItem.id
-            ? currentQueueItem.nextReviewIndex
-            : result.data.session.nextReviewIndex,
+          nextReviewIndex: effectiveSubmittedEntry?.reviewIndex ?? result.data.session.nextReviewIndex,
         });
+        if (effectiveSubmittedEntry) {
+          setReviewSolutionImage(effectiveSubmittedEntry.solutionImage);
+          setVoiceNote(effectiveSubmittedEntry.voiceNote);
+        }
+        if (hydratedSubmittedEntry) {
+          setSubmittedReviewEntries((previous) => {
+            const current = previous[currentQueueItem.id] ?? null;
+            const unchanged =
+              current?.reviewRecordId === hydratedSubmittedEntry.reviewRecordId
+              && current.reviewIndex === hydratedSubmittedEntry.reviewIndex
+              && current.result === hydratedSubmittedEntry.result
+              && current.solutionImage?.uri === hydratedSubmittedEntry.solutionImage?.uri
+              && current.voiceNote?.fileUri === hydratedSubmittedEntry.voiceNote?.fileUri;
+            if (unchanged) {
+              return previous;
+            }
+            return {
+              ...previous,
+              [currentQueueItem.id]: hydratedSubmittedEntry,
+            };
+          });
+        }
         setCurrentQuestionSlot(questionSlot);
         setCurrentErrorMessage(null);
         setIsLoadingCurrent(false);
@@ -2404,10 +2633,10 @@ export default function ReviewSessionPage() {
     currentReloadNonce,
     isCompleted,
     queue,
-    readonlyMistakeId,
     selectedModuleFilter,
     sessionState,
     showToast,
+    submittedReviewEntries,
     submittedMistakeIds,
     totalCount,
   ]);
@@ -2416,6 +2645,20 @@ export default function ReviewSessionPage() {
     setResultStats((previous) => ({
       ...previous,
       [statsKey]: previous[statsKey] + 1,
+    }));
+  }, []);
+
+  const adjustStatsForResultChange = useCallback((previousResult: ReviewResult, nextResult: ReviewResult) => {
+    if (previousResult === nextResult) {
+      return;
+    }
+
+    const previousKey = getStatsKeyForReviewResult(previousResult);
+    const nextKey = getStatsKeyForReviewResult(nextResult);
+    setResultStats((previous) => ({
+      ...previous,
+      [previousKey]: Math.max(0, previous[previousKey] - 1),
+      [nextKey]: previous[nextKey] + 1,
     }));
   }, []);
 
@@ -2444,6 +2687,54 @@ export default function ReviewSessionPage() {
 
       setIsSubmitting(true);
       try {
+        const existingSubmittedEntry = submittedReviewEntries[currentQueueItem.id] ?? null;
+        if (existingSubmittedEntry) {
+          const updateResult = await ReviewSessionService.updateTodayReviewResult({
+            mistakeId: currentQueueItem.id,
+            reviewRecordId: existingSubmittedEntry.reviewRecordId,
+            result,
+            solutionImageUri: reviewSolutionImage?.uri ?? null,
+            voiceNote: toReviewRecordVoiceNote(voiceNote),
+          });
+
+          if (!updateResult.ok) {
+            showToast(toShortErrorMessage(updateResult.errorMessage), 'error', TOAST_DURATION_LONG);
+            return;
+          }
+
+          if (
+            existingSubmittedEntry.solutionImage
+            && existingSubmittedEntry.solutionImage.uri !== reviewSolutionImage?.uri
+          ) {
+            void cleanupReviewSolutionImage(existingSubmittedEntry.solutionImage);
+          }
+          if (
+            existingSubmittedEntry.voiceNote
+            && existingSubmittedEntry.voiceNote.fileUri !== voiceNote?.fileUri
+          ) {
+            void VoiceNoteService.deleteVoiceNote(existingSubmittedEntry.voiceNote.fileUri);
+          }
+
+          setSubmittedReviewEntries((previous) => ({
+            ...previous,
+            [currentQueueItem.id]: {
+              ...existingSubmittedEntry,
+              result,
+              solutionImage: reviewSolutionImage,
+              voiceNote,
+            },
+          }));
+          adjustStatsForResultChange(existingSubmittedEntry.result, result);
+          showToast(
+            updateResult.warningMessage
+              ? toShortErrorMessage(updateResult.warningMessage)
+              : '\u5df2\u66f4\u65b0\u672c\u6b21\u590d\u505a\u7ed3\u679c',
+            updateResult.warningMessage ? 'info' : 'success',
+            updateResult.warningMessage ? TOAST_DURATION_LONG : TOAST_DURATION_DEFAULT,
+          );
+          return;
+        }
+
         const submitResult = await ReviewSessionService.submitTodayReviewResult({
           mistakeId: currentQueueItem.id,
           reviewIndex: currentMeta.nextReviewIndex,
@@ -2457,11 +2748,23 @@ export default function ReviewSessionPage() {
           return;
         }
 
+        if (!submitResult.reviewRecordId) {
+          showToast('淇濆瓨澶辫触锛岃閲嶈瘯', 'error', TOAST_DURATION_LONG);
+          return;
+        }
+
         const nextSubmittedMistakeIds = new Set(submittedMistakeIds);
         nextSubmittedMistakeIds.add(currentQueueItem.id);
-        const nextSubmittedReviewResults = {
-          ...submittedReviewResults,
-          [currentQueueItem.id]: result,
+        const submittedEntry: SubmittedReviewEntry = {
+          reviewRecordId: submitResult.reviewRecordId,
+          reviewIndex: currentMeta.nextReviewIndex,
+          result,
+          solutionImage: reviewSolutionImage,
+          voiceNote,
+        };
+        const nextSubmittedReviewEntries = {
+          ...submittedReviewEntries,
+          [currentQueueItem.id]: submittedEntry,
         };
         const isAllSubmitted = nextSubmittedMistakeIds.size >= totalCount;
         const nextPendingIndex = isAllSubmitted
@@ -2483,7 +2786,7 @@ export default function ReviewSessionPage() {
           ) === null;
 
         setSubmittedMistakeIds(nextSubmittedMistakeIds);
-        setSubmittedReviewResults(nextSubmittedReviewResults);
+        setSubmittedReviewEntries(nextSubmittedReviewEntries);
         incrementStats(statsKey);
         if (submitResult.warningMessage) {
           showToast(toShortErrorMessage(submitResult.warningMessage), 'info', TOAST_DURATION_LONG);
@@ -2497,15 +2800,11 @@ export default function ReviewSessionPage() {
             'success',
           );
         }
-        if (isCurrentModuleSubmitted && !isAllSubmitted) {
-          setReadonlyMistakeId(currentQueueItem.id);
-          setCurrentIndex(currentIndex);
-        } else {
-          setReadonlyMistakeId(null);
-          setCurrentIndex(nextPendingIndex ?? totalCount);
+        setCurrentIndex(nextPendingIndex ?? currentIndex);
+        if (nextPendingIndex !== null) {
+          setReviewSolutionImage(null);
+          setVoiceNote(null);
         }
-        setReviewSolutionImage(null);
-        setVoiceNote(null);
         setIsVoicePlaying(false);
         setIsVoiceRecording(false);
         setIsVoiceRecordingPaused(false);
@@ -2529,6 +2828,8 @@ export default function ReviewSessionPage() {
       currentIndex,
       currentMeta,
       currentQueueItem,
+      adjustStatsForResultChange,
+      cleanupReviewSolutionImage,
       incrementStats,
       isCompleted,
       isLoadingCurrent,
@@ -2538,12 +2839,12 @@ export default function ReviewSessionPage() {
       isVoiceBusy,
       isVoiceRecording,
       queue,
-      reviewSolutionImage?.uri,
+      reviewSolutionImage,
       selectedModuleFilter,
       showToast,
       stopVoicePlayback,
+      submittedReviewEntries,
       submittedMistakeIds,
-      submittedReviewResults,
       totalCount,
       voiceNote,
     ],
@@ -2561,7 +2862,6 @@ export default function ReviewSessionPage() {
     sessionState === 'ready'
     && !isCompleted
     && hasActiveReviewItem
-    && !isCurrentFilterCompleted
     && !isLoadingCurrent
     && !currentErrorMessage;
   const actionBarBottomOffset = Math.max(insets.bottom + spacing.xs, spacing.xs);
@@ -2666,11 +2966,8 @@ export default function ReviewSessionPage() {
                 <MaterialIcons name="filter-list" size={20} color="#334155" />
                 <Text style={styles.moduleFilterTitle}>模块筛选</Text>
               </View>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.moduleFilterOptions}>
-                {moduleFilterOptions.map((option) => {
+              <View style={styles.moduleFilterOptions}>
+                {inlineModuleFilterOptions.map((option) => {
                   const selected = selectedModuleFilter === option.value;
                   return (
                     <Pressable
@@ -2695,16 +2992,23 @@ export default function ReviewSessionPage() {
                     </Pressable>
                   );
                 })}
-              </ScrollView>
+                {shouldShowModuleFilterMore ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="查看更多模块"
+                    onPress={() => setModuleFilterSheetVisible(true)}
+                    style={({ pressed }) => [
+                      styles.moduleFilterMoreButton,
+                      pressed ? styles.moduleFilterChipPressed : null,
+                    ]}>
+                    <MaterialIcons name="more-horiz" size={18} color="#334155" />
+                    <Text numberOfLines={1} style={styles.moduleFilterMoreText}>更多</Text>
+                  </Pressable>
+                ) : null}
+              </View>
               <Text style={styles.moduleFilterHint}>{moduleFilterHintText}</Text>
             </CardContainer>
 
-            {isCurrentFilterCompleted && !isReadonlyCompletedItem ? (
-              <CardContainer style={styles.stateCard} padding={spacing.lg}>
-                <Text style={styles.stateTitle}>{`“${selectedModuleLabel}”模块已完成`}</Text>
-                <Text style={styles.stateText}>可以切换到其他模块，或者选择“全部”继续今日复做。</Text>
-              </CardContainer>
-            ) : null}
 
             {canShowCurrentReviewContent ? (
             <CardContainer style={styles.progressCard} padding={spacing.lg}>
@@ -2739,11 +3043,6 @@ export default function ReviewSessionPage() {
             </CardContainer>
             ) : null}
 
-            {isReadonlyCompletedItem && !isLoadingCurrent && !currentErrorMessage ? (
-              <CardContainer style={styles.readonlyHintCard} padding={spacing.md}>
-                <Text style={styles.readonlyHintText}>本题已完成，当前为回看模式，不会重复提交。</Text>
-              </CardContainer>
-            ) : null}
 
             {canShowCurrentReviewContent && isLoadingCurrent ? (
               <CardContainer style={styles.stateCard} padding={spacing.lg}>
@@ -2775,11 +3074,11 @@ export default function ReviewSessionPage() {
               </CardContainer>
             ) : null}
 
-            {canShowCurrentReviewContent && !isReadonlyCompletedItem && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
+            {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
               <QuestionImageCard slot={currentQuestionSlot} onPreview={handleOpenQuestionPreview} />
             ) : null}
 
-            {canShowCurrentReviewContent && !isReadonlyCompletedItem && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
+            {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
               <ReviewSolutionImageCard
                 image={reviewSolutionImage}
                 isBusy={isReviewSolutionImageBusy || isSubmitting || isVoiceRecording || isVoiceBusy}
@@ -2923,9 +3222,20 @@ export default function ReviewSessionPage() {
         items={currentFilterQueue}
         currentMistakeId={currentQueueItemId}
         submittedIds={submittedMistakeIds}
-        submittedResults={submittedReviewResults}
+        submittedEntries={submittedReviewEntries}
         onClose={() => setQuestionListVisible(false)}
         onSelectItem={handleSelectQuestionListItem}
+      />
+
+      <ModuleFilterSheet
+        visible={moduleFilterSheetVisible}
+        options={moduleFilterOptions}
+        selectedValue={selectedModuleFilter}
+        onClose={() => setModuleFilterSheetVisible(false)}
+        onSelectOption={(value) => {
+          setModuleFilterSheetVisible(false);
+          handleSelectModuleFilter(value);
+        }}
       />
 
       <ImagePreviewModal
@@ -3096,8 +3406,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   moduleFilterOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: spacing.sm,
-    paddingRight: spacing.sm,
   },
   moduleFilterChip: {
     minWidth: 92,
@@ -3126,6 +3438,50 @@ const styles = StyleSheet.create({
   moduleFilterChipTextSelected: {
     color: colors.success,
     fontWeight: '800',
+  },
+  moduleFilterMoreButton: {
+    height: 38,
+    minWidth: 86,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: spacing.md,
+  },
+  moduleFilterMoreText: {
+    ...typography.bodySmall,
+    color: '#334155',
+    fontWeight: '800',
+  },
+  moduleFilterSheetScroll: {
+    maxHeight: 420,
+  },
+  moduleFilterSheetContent: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.md,
+  },
+  moduleFilterSheetChip: {
+    minWidth: 96,
+    maxWidth: '48%',
+    height: 40,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  moduleFilterSheetChipSelected: {
+    borderColor: '#22C55E',
+    backgroundColor: '#DCFCE7',
   },
   moduleFilterHint: {
     ...typography.caption,
@@ -3655,17 +4011,6 @@ const styles = StyleSheet.create({
   stateActionButtonLightText: {
     color: colors.textPrimary,
   },
-  readonlyHintCard: {
-    borderRadius: radius.xl,
-    borderColor: '#BFDBFE',
-    backgroundColor: '#EFF6FF',
-  },
-  readonlyHintText: {
-    ...typography.bodySmall,
-    color: '#1D4ED8',
-    fontWeight: '700',
-    textAlign: 'center',
-  },
   questionListOverlay: {
     flex: 1,
     justifyContent: 'flex-end',
@@ -3750,11 +4095,20 @@ const styles = StyleSheet.create({
   },
   questionListRowSelected: {
     borderWidth: 1,
-    borderColor: '#BBF7D0',
-    backgroundColor: '#ECFDF5',
+    borderColor: '#22C55E',
+    backgroundColor: '#DCFCE7',
   },
   questionListRowPressed: {
     opacity: 0.78,
+  },
+  questionListCurrentMarker: {
+    width: 4,
+    height: 28,
+    borderRadius: radius.pill,
+    backgroundColor: 'transparent',
+  },
+  questionListCurrentMarkerActive: {
+    backgroundColor: '#16A34A',
   },
   questionListItemTitle: {
     ...typography.bodySmall,
@@ -3763,12 +4117,32 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  questionListItemTitleSelected: {
+    color: '#065F46',
+  },
+  questionListCurrentBadge: {
+    height: 24,
+    borderRadius: radius.pill,
+    backgroundColor: '#16A34A',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  questionListCurrentBadgeText: {
+    ...typography.caption,
+    color: colors.white,
+    fontWeight: '800',
+  },
   questionListReviewText: {
     ...typography.bodySmall,
     color: '#475569',
     fontWeight: '700',
     width: 58,
     textAlign: 'center',
+  },
+  questionListReviewTextSelected: {
+    color: '#065F46',
+    fontWeight: '800',
   },
   questionListStatusText: {
     ...typography.bodySmall,

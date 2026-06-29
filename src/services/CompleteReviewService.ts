@@ -260,6 +260,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     const nextReviewAt = calculateNextReviewAt(newReviewCount);
     const nowIso = new Date().toISOString();
     let voiceNoteBindingFailed = normalizedInput.voiceNoteDropped;
+    let createdReviewRecordId: string | undefined;
     Logger.info(SERVICE_SCOPE, 'Calculated review progress update in completeReview.', {
       mistakeId: normalizedInput.mistakeId,
       reviewIndex: normalizedInput.reviewIndex,
@@ -284,6 +285,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           reviewRecordId: createdReviewRecord.id,
           reviewIndex: normalizedInput.reviewIndex,
         });
+        createdReviewRecordId = createdReviewRecord.id;
 
         if (normalizedInput.solutionImageUri) {
           await MistakeImageRepository.insertReviewSolutionImagesInTransaction(
@@ -458,6 +460,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     Logger.info(SERVICE_SCOPE, 'completeReview finished successfully.', {
       mistakeId: normalizedInput.mistakeId,
       reviewIndex: normalizedInput.reviewIndex,
+      reviewRecordId: createdReviewRecordId ?? null,
       newReviewCount,
       newStatus,
       nextReviewAt: newStatus === REVIEW_STATUS.MASTERED ? null : nextReviewAt,
@@ -473,6 +476,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     return {
       ok: true,
       mistakeId: normalizedInput.mistakeId,
+      reviewRecordId: createdReviewRecordId,
       reviewIndex: normalizedInput.reviewIndex,
       newReviewCount,
       newStatus,

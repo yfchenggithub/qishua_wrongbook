@@ -25,6 +25,7 @@ export interface CompleteReviewInput {
 export interface CompleteReviewResult {
   ok: boolean;
   mistakeId?: string;
+  reviewRecordId?: string;
   reviewIndex?: number;
   newReviewCount?: number;
   newStatus?: MistakeStatus;

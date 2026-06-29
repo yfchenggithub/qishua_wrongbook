@@ -10,6 +10,7 @@ import { Logger } from '@/src/services/Logger';
 import type * as SQLite from 'expo-sqlite';
 
 const REPO_SCOPE = 'ReviewRecordRepository';
+const REVIEW_RESULT_VALUES: ReviewResult[] = ['mastered', 'unsure', 'wrong'];
 
 const INSERT_REVIEW_RECORD_SQL = `
 INSERT INTO review_records (
@@ -124,6 +125,13 @@ function normalizeRequiredText(value: string | null | undefined, fieldName: stri
   }
 
   return trimmed;
+}
+
+function normalizeRequiredReviewResult(value: ReviewResult): ReviewResult {
+  if (REVIEW_RESULT_VALUES.includes(value)) {
+    return value;
+  }
+  throw new Error('result must be mastered / unsure / wrong.');
 }
 
 function normalizeReviewRecordVoiceNote(
@@ -553,6 +561,41 @@ FROM review_records;`,
       };
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createReviewRecordInTransaction failed.', { input, error });
+      throw error;
+    }
+  },
+
+  async updateReviewRecordResultInTransaction(
+    db: SQLite.SQLiteDatabase,
+    reviewRecordId: string,
+    result: ReviewResult,
+  ): Promise<boolean> {
+    try {
+      const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
+      const normalizedResult = normalizeRequiredReviewResult(result);
+
+      const updateResult = await db.runAsync(
+        `UPDATE review_records
+SET result = ?
+WHERE id = ?;`,
+        normalizedResult,
+        normalizedReviewRecordId,
+      );
+
+      if (updateResult.changes <= 0) {
+        Logger.warn(REPO_SCOPE, 'updateReviewRecordResultInTransaction skipped because review_record was not found.', {
+          reviewRecordId: normalizedReviewRecordId,
+        });
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateReviewRecordResultInTransaction failed.', {
+        reviewRecordId,
+        result,
+        error,
+      });
       throw error;
     }
   },

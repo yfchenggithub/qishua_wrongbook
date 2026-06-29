@@ -13,6 +13,7 @@ import type * as SQLite from 'expo-sqlite';
 const REPO_SCOPE = 'MistakeRepository';
 const DEFAULT_SUBJECT = 'math';
 const DEFAULT_DIFFICULTY = 3;
+const REVIEW_RESULT_VALUES: ReviewResult[] = ['mastered', 'unsure', 'wrong'];
 
 const INSERT_MISTAKE_SQL = `
 INSERT INTO mistakes (
@@ -101,6 +102,12 @@ export interface UpdateReviewProgressInTransactionParams {
   nextReviewAt?: string | null;
   lastReviewAt?: string | null;
   lastReviewResult?: ReviewResult | null;
+  updatedAt: string;
+}
+
+export interface UpdateLastReviewResultInTransactionParams {
+  mistakeId: string;
+  lastReviewResult: ReviewResult | null;
   updatedAt: string;
 }
 
@@ -242,6 +249,16 @@ function normalizeRequiredModule(value: string): string {
     throw new Error('module must be a non-empty string.');
   }
   return normalized;
+}
+
+function normalizeReviewResultOrNull(value: ReviewResult | null): ReviewResult | null {
+  if (value === null) {
+    return null;
+  }
+  if (REVIEW_RESULT_VALUES.includes(value)) {
+    return value;
+  }
+  throw new Error('lastReviewResult must be mastered / unsure / wrong / null.');
 }
 
 function parseQuestionNoFromTitle(title: string | null | undefined): number | null {
@@ -992,6 +1009,34 @@ WHERE id = ? AND review_count = ? AND status = ?;`,
       return result.changes;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'updateReviewProgressInTransaction failed.', { params, error });
+      throw error;
+    }
+  },
+
+  async updateLastReviewResultInTransaction(
+    db: SQLite.SQLiteDatabase,
+    params: UpdateLastReviewResultInTransactionParams,
+  ): Promise<number> {
+    try {
+      const normalizedMistakeId = typeof params.mistakeId === 'string' ? params.mistakeId.trim() : '';
+      if (!normalizedMistakeId) {
+        throw new Error('mistakeId must be a non-empty string.');
+      }
+
+      const updatedAt = normalizeIsoDateTime(params.updatedAt, 'updatedAt');
+      const lastReviewResult = normalizeReviewResultOrNull(params.lastReviewResult);
+      const result = await db.runAsync(
+        `UPDATE mistakes
+SET last_review_result = ?, updated_at = ?
+WHERE id = ?;`,
+        lastReviewResult,
+        updatedAt,
+        normalizedMistakeId,
+      );
+
+      return result.changes;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateLastReviewResultInTransaction failed.', { params, error });
       throw error;
     }
   },
