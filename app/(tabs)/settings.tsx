@@ -25,7 +25,7 @@ import { Logger } from '@/src/services/Logger';
 import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
 import * as BackupService from '@/src/services/backup/BackupService';
 import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
-import type { BackupManifest, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
+import type { BackupManifest, BackupProgressEvent, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
 import { clearPrintEnhanceImageCache } from '@/src/services/export/PrintEnhanceCacheService';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
@@ -68,6 +68,13 @@ type DevEntry = {
   title: string;
   description: string;
   href: DevRoute;
+};
+
+type GeneratedBackupInfo = {
+  fileUri: string;
+  fileName: string;
+  fileSizeBytes: number | null;
+  createdAt: string;
 };
 
 type ExportImageModeOption = {
@@ -450,6 +457,9 @@ export default function SettingsScreen() {
   const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
   const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
   const [isBackingUp, setIsBackingUp] = useState(false);
+  const [backupProgress, setBackupProgress] = useState<BackupProgressEvent | null>(null);
+  const [generatedBackupInfo, setGeneratedBackupInfo] = useState<GeneratedBackupInfo | null>(null);
+  const [isResavingBackup, setIsResavingBackup] = useState(false);
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -807,10 +817,26 @@ export default function SettingsScreen() {
     }
 
     setIsBackingUp(true);
+    setBackupProgress(null);
+    setGeneratedBackupInfo(null);
+    const backupStartedAt = Date.now();
+    let backupSessionId = '';
     Logger.info(PAGE_SCOPE, 'Start backup flow from settings.', { reason: 'manual' });
     try {
-      showToast('正在整理备份文件…', 'info', TOAST_DURATION_LONG);
-      const result = await BackupService.createBackup({ reason: 'manual' });
+      showToast('正在准备备份…', 'info', TOAST_DURATION_LONG);
+      const result = await BackupService.createBackup({
+        reason: 'manual',
+        onProgress: (event) => {
+          backupSessionId = event.backupSessionId;
+          setBackupProgress(event);
+        },
+      });
+      setGeneratedBackupInfo({
+        fileUri: result.fileUri,
+        fileName: result.fileName,
+        fileSizeBytes: result.fileSizeBytes,
+        createdAt: result.manifest.createdAt,
+      });
       try {
         const persistedHistory = await BackupHistoryService.saveLastBackupAt(result.manifest.createdAt);
         setLastBackupAt(persistedHistory.lastBackupAt);
@@ -821,11 +847,28 @@ export default function SettingsScreen() {
         });
         setLastBackupAt(result.manifest.createdAt);
       }
+      setBackupProgress({
+        backupSessionId: backupSessionId || 'backup-share',
+        stage: 'share',
+        message: '正在打开保存位置…',
+        current: 1,
+        total: 1,
+        elapsedSeconds: Math.max(0, Math.floor((Date.now() - backupStartedAt) / 1000)),
+      });
       await BackupService.shareBackup(result.fileUri);
+      setBackupProgress({
+        backupSessionId: backupSessionId || 'backup-success',
+        stage: 'success',
+        message: '备份文件已生成',
+        current: 1,
+        total: 1,
+        elapsedSeconds: Math.max(0, Math.floor((Date.now() - backupStartedAt) / 1000)),
+      });
       showToast('备份文件已生成，请保存到安全位置。', 'success', TOAST_DURATION_LONG);
     } catch (error) {
       const errorName = error instanceof Error ? error.name : 'UnknownError';
       const errorMessage = error instanceof Error ? error.message : String(error);
+      setBackupProgress(null);
       Logger.error(PAGE_SCOPE, 'Backup flow failed from settings.', {
         errorName,
         errorMessage,
@@ -844,7 +887,7 @@ export default function SettingsScreen() {
 
       Alert.alert(
         '备份当前数据？',
-        '将导出所有错题、复做记录和图片。备份文件可以保存到微信、网盘或文件管理器中。',
+        '将导出所有错题、复做记录、图片和语音讲解。题目较多时会需要一些时间，备份过程中请不要关闭 App。',
         [
           { text: '取消', style: 'cancel' },
           {
@@ -872,6 +915,34 @@ export default function SettingsScreen() {
       showToast('备份功能暂不可用，请稍后重试', 'warning');
     }
   }, [isBackingUp, showToast, startBackupToFile]);
+
+  const handleReSaveBackupFile = useCallback(async () => {
+    if (!generatedBackupInfo || isBackingUp || isInspectingBackup || isRestoring || isResavingBackup) {
+      return;
+    }
+
+    setIsResavingBackup(true);
+    try {
+      showToast('正在重新打开保存面板…', 'info', TOAST_DURATION_LONG);
+      await BackupService.shareBackup(generatedBackupInfo.fileUri);
+      showToast('请在系统面板中保存备份文件。', 'success', TOAST_DURATION_LONG);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to re-save generated backup file.', {
+        fileName: generatedBackupInfo.fileName,
+        error,
+      });
+      Alert.alert('重新保存失败', '备份文件可能已被系统清理，请重新生成一份备份。');
+    } finally {
+      setIsResavingBackup(false);
+    }
+  }, [
+    generatedBackupInfo,
+    isBackingUp,
+    isInspectingBackup,
+    isResavingBackup,
+    isRestoring,
+    showToast,
+  ]);
 
   const handleConfirmRestore = useCallback(
     async (params: {
@@ -1746,6 +1817,40 @@ export default function SettingsScreen() {
     isExportingWorksheet && worksheetExportProgress.total > 0
       ? `已处理 ${worksheetExportProgress.current} / ${worksheetExportProgress.total} 题 · 用时 ${formatElapsedSeconds(worksheetExportProgress.elapsedSeconds)}`
       : '';
+  const backupProgressMessage = backupProgress?.message.trim() ?? '';
+  const backupButtonText = isBackingUp
+    ? (backupProgressMessage || '正在整理备份文件…')
+    : (isRestoring || isInspectingBackup)
+      ? '正在恢复数据…'
+      : '备份到文件';
+  const backupProgressPercent = backupProgress
+    ? backupProgress.stage === 'success'
+      ? 1
+      : backupProgress.stage === 'package'
+        ? 0.92
+      : backupProgress.total > 0
+        ? Math.max(0, Math.min(1, backupProgress.current / backupProgress.total))
+        : 0
+    : 0;
+  const shouldShowBackupProgress = isBackingUp || backupProgress?.stage === 'success';
+  const backupProgressHeadline = backupProgressMessage || '备份会包含错题、复做记录、图片和语音讲解。';
+  const backupProgressDetailText = backupProgress
+    ? backupProgress.stage === 'package'
+      ? `正在生成压缩包 · 用时 ${formatElapsedSeconds(backupProgress.elapsedSeconds)}`
+      : backupProgress.total > 0 && backupProgress.stage !== 'share' && backupProgress.stage !== 'success'
+      ? `已处理 ${backupProgress.current} / ${backupProgress.total} · 用时 ${formatElapsedSeconds(backupProgress.elapsedSeconds)}`
+      : `用时 ${formatElapsedSeconds(backupProgress.elapsedSeconds)}`
+    : '';
+  const generatedBackupMetaText = generatedBackupInfo
+    ? `已生成：${generatedBackupInfo.fileName} · ${
+        generatedBackupInfo.fileSizeBytes === null
+          ? '大小暂未统计'
+          : formatStorageSize(generatedBackupInfo.fileSizeBytes)
+      }`
+    : '';
+  const canReSaveGeneratedBackup =
+    generatedBackupInfo !== null && !isBackingUp && !isInspectingBackup && !isRestoring && !isResavingBackup;
+  const reSaveBackupButtonText = isResavingBackup ? '正在打开保存面板…' : '重新保存备份文件';
   const selectedExportImageModeOption = useMemo(
     () =>
       EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)
@@ -1949,7 +2054,7 @@ export default function SettingsScreen() {
 
   const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages || isClearingPrintEnhanceCache;
   const isRestoreBusy = isInspectingBackup || isRestoring;
-  const isBackupBusy = isBackingUp || isRestoreBusy;
+  const isBackupBusy = isBackingUp || isRestoreBusy || isResavingBackup;
   const isExportImageModeBusy =
     isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving;
   const isReminderBusy = isReminderLoading || isReminderSwitchBusy || isReminderTimeBusy;
@@ -2032,7 +2137,7 @@ export default function SettingsScreen() {
               <View style={styles.backupActionRow}>
                 <Pressable
                   accessibilityLabel={
-                    isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'
+                    isBackingUp ? backupButtonText : isRestoreBusy ? '正在恢复数据…' : '备份到文件'
                   }
                   accessibilityRole="button"
                   disabled={isBackupBusy}
@@ -2048,7 +2153,7 @@ export default function SettingsScreen() {
                     <Text
                       numberOfLines={2}
                       style={[styles.actionButtonText, styles.actionButtonTextGreen, styles.backupActionText]}>
-                      {isBackingUp ? '正在整理备份文件…' : isRestoreBusy ? '正在恢复数据…' : '备份到文件'}
+                      {backupButtonText}
                     </Text>
                   </View>
                 </Pressable>
@@ -2075,6 +2180,49 @@ export default function SettingsScreen() {
                   </View>
                 </Pressable>
               </View>
+              {shouldShowBackupProgress ? (
+                <View style={styles.backupProgressWrap}>
+                  <Text style={styles.backupProgressHeadline}>{backupProgressHeadline}</Text>
+                  {backupProgressDetailText ? (
+                    <Text style={styles.exportProgressMetaText}>{backupProgressDetailText}</Text>
+                  ) : null}
+                  {generatedBackupInfo ? (
+                    <View style={styles.backupGeneratedRow}>
+                      <MaterialIcons color="#238B49" name="insert-drive-file" size={16} />
+                      <Text numberOfLines={2} style={styles.backupGeneratedText}>
+                        {generatedBackupMetaText}
+                      </Text>
+                    </View>
+                  ) : null}
+                  <View style={styles.exportProgressTrack}>
+                    <View
+                      style={[
+                        styles.exportProgressFill,
+                        { width: `${Math.round(backupProgressPercent * 100)}%` },
+                      ]}
+                    />
+                  </View>
+                  {generatedBackupInfo ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="重新保存备份文件"
+                      disabled={!canReSaveGeneratedBackup}
+                      onPress={() => {
+                        void handleReSaveBackupFile();
+                      }}
+                      style={({ pressed }) => [
+                        styles.backupReSaveButton,
+                        pressed && canReSaveGeneratedBackup ? styles.backupReSaveButtonPressed : null,
+                        !canReSaveGeneratedBackup ? styles.disabledButton : null,
+                      ]}>
+                      <MaterialIcons color="#238B49" name="ios-share" size={17} />
+                      <Text numberOfLines={1} style={styles.backupReSaveButtonText}>
+                        {reSaveBackupButtonText}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
               <View style={styles.backupHintRow}>
                 <MaterialIcons color="#2A9D50" name="verified-user" size={16} />
                 <Text style={styles.backupHintText}>选择之前导出的七刷备份文件，恢复到当前设备。</Text>
@@ -2827,6 +2975,56 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     textAlign: 'center',
     lineHeight: 20,
+  },
+  backupProgressWrap: {
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#D7EAD9',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  backupProgressHeadline: {
+    ...typography.bodySmall,
+    color: '#238B49',
+    fontWeight: '800',
+    lineHeight: 20,
+  },
+  backupGeneratedRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  backupGeneratedText: {
+    ...typography.caption,
+    color: '#4B5563',
+    fontWeight: '700',
+    lineHeight: 18,
+    flex: 1,
+    minWidth: 0,
+  },
+  backupReSaveButton: {
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#72C490',
+    backgroundColor: '#F1FAF4',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  backupReSaveButtonPressed: {
+    opacity: 0.82,
+  },
+  backupReSaveButtonText: {
+    ...typography.bodySmall,
+    color: '#238B49',
+    fontWeight: '800',
+    flexShrink: 1,
   },
   actionButtonGreen: {
     borderColor: '#72C490',

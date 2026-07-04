@@ -19,6 +19,7 @@ import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { Logger } from '@/src/services/Logger';
+import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
@@ -28,6 +29,7 @@ const UPCOMING_DAYS = 3;
 const TODAY_QUEUE_PREVIEW_COUNT = 5;
 const TOAST_DURATION_DEFAULT = 2200;
 const TOAST_DURATION_LONG = 3200;
+const BACKUP_STALE_DAYS = 7;
 
 type ToastType = 'success' | 'info' | 'error';
 
@@ -105,6 +107,66 @@ function buildHomeHintText(status: HomeStatus): string {
     return '今天任务已完成，保持节奏即可';
   }
   return '今天无需复做，按计划等待下一次到期';
+}
+
+function formatBackupCreatedAt(isoDateTime: string): string {
+  const date = new Date(isoDateTime);
+  if (Number.isNaN(date.getTime())) {
+    return isoDateTime;
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+    date.getDate(),
+  ).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(
+    date.getMinutes(),
+  ).padStart(2, '0')}`;
+}
+
+function getBackupAgeDays(lastBackupAt: string | null): number | null {
+  if (!lastBackupAt) {
+    return null;
+  }
+
+  const parsed = new Date(lastBackupAt);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+
+  return Math.max(0, Math.floor((Date.now() - parsed.getTime()) / (24 * 60 * 60 * 1000)));
+}
+
+function buildBackupSafetyCopy(lastBackupAt: string | null): {
+  title: string;
+  description: string;
+  meta: string;
+  isWarning: boolean;
+} {
+  const backupAgeDays = getBackupAgeDays(lastBackupAt);
+  if (!lastBackupAt || backupAgeDays === null) {
+    return {
+      title: '本机数据还没有备份',
+      description: '错题、复做记录和图片只保存在本机，换手机或卸载前请先备份。',
+      meta: '上次备份：未备份',
+      isWarning: true,
+    };
+  }
+
+  const formattedBackupAt = formatBackupCreatedAt(lastBackupAt);
+  if (backupAgeDays >= BACKUP_STALE_DAYS) {
+    return {
+      title: '建议更新备份',
+      description: `离上次备份已 ${backupAgeDays} 天，新增错题后建议导出一份备份文件。`,
+      meta: `上次备份：${formattedBackupAt}`,
+      isWarning: true,
+    };
+  }
+
+  return {
+    title: '本机数据已备份',
+    description: '错题数据仍只保存在本机，重要内容建议定期备份到安全位置。',
+    meta: `上次备份：${formattedBackupAt}`,
+    isWarning: false,
+  };
 }
 
 function ThumbnailPlaceholder() {
@@ -290,6 +352,8 @@ export default function TodayScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [exportMode, setExportMode] = useState<PrintEnhanceMode | null>(null);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [isBackupSafetyExpanded, setIsBackupSafetyExpanded] = useState(false);
   const [isStartingSession, setIsStartingSession] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
@@ -301,6 +365,12 @@ export default function TodayScreen() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
 
   const loadHomeData = useCallback(async (mode: 'initial' | 'refresh') => {
     const requestId = requestIdRef.current + 1;
@@ -352,6 +422,16 @@ export default function TodayScreen() {
     }
   }, []);
 
+  const loadBackupHistory = useCallback(async () => {
+    try {
+      const history = await BackupHistoryService.loadBackupHistoryState();
+      setLastBackupAt(history.lastBackupAt);
+    } catch (error) {
+      Logger.warn(PAGE_SCOPE, 'Failed to load backup history on home screen.', { error });
+      setLastBackupAt(null);
+    }
+  }, []);
+
   const handleRetry = useCallback(() => {
     void loadHomeData('refresh');
   }, [loadHomeData]);
@@ -362,8 +442,9 @@ export default function TodayScreen() {
       hasFocusedRef.current = true;
       void loadHomeData(mode);
       void loadExportMode();
+      void loadBackupHistory();
       return undefined;
-    }, [loadExportMode, loadHomeData]),
+    }, [loadBackupHistory, loadExportMode, loadHomeData]),
   );
 
   const hideToast = useCallback(() => {
@@ -463,6 +544,18 @@ export default function TodayScreen() {
     ],
     [summary.todayCompletedStats.mastered, summary.todayCompletedStats.total, summary.todayCompletedStats.unsure, summary.todayCompletedStats.wrong],
   );
+
+  const backupSafetyCopy = useMemo(() => buildBackupSafetyCopy(lastBackupAt), [lastBackupAt]);
+  const shouldShowBackupSafetyCard = summary.hasAnyMistake;
+
+  const handleOpenBackupSettings = useCallback(() => {
+    router.push('/settings' as never);
+  }, [router]);
+
+  const handleToggleBackupSafetyExpanded = useCallback(() => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setIsBackupSafetyExpanded((prev) => !prev);
+  }, []);
 
   const handleOpenDetail = useCallback(
     (id: string) => {
@@ -692,6 +785,89 @@ export default function TodayScreen() {
       <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
       <BrandHeader title={todayMock.brand.title} subtitle={todayMock.brand.subtitle} />
 
+      {shouldShowBackupSafetyCard ? (
+        <CardContainer
+          style={[
+            styles.backupSafetyCard,
+            backupSafetyCopy.isWarning ? styles.backupSafetyCardWarning : styles.backupSafetyCardOk,
+          ]}
+          padding={spacing.sm}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${isBackupSafetyExpanded ? '收起' : '展开'}本机数据安全，${backupSafetyCopy.meta}`}
+            onPress={handleToggleBackupSafetyExpanded}
+            style={({ pressed }) => [
+              styles.backupSafetyToggle,
+              pressed ? styles.backupSafetyPressablePressed : null,
+            ]}>
+              <View
+                style={[
+                  styles.backupSafetyCompactIcon,
+                  backupSafetyCopy.isWarning ? styles.backupSafetyIconWarning : styles.backupSafetyIconOk,
+                ]}>
+                <MaterialIcons
+                  name={backupSafetyCopy.isWarning ? 'security' : 'verified-user'}
+                  size={20}
+                  color={backupSafetyCopy.isWarning ? '#B7791F' : colors.success}
+                />
+              </View>
+              <View style={styles.backupSafetyCompactText}>
+                <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.backupSafetyEyebrow}>
+                  本机数据安全
+                </Text>
+                <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.backupSafetyMetaText}>
+                  {backupSafetyCopy.meta}
+                </Text>
+              </View>
+              <View style={styles.backupSafetyChevronButton}>
+                <MaterialIcons
+                  name={isBackupSafetyExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+                  size={24}
+                  color={backupSafetyCopy.isWarning ? '#9A5B00' : colors.success}
+                />
+              </View>
+          </Pressable>
+          {isBackupSafetyExpanded ? (
+            <View style={styles.backupSafetyExpandedBody}>
+              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.backupSafetyTitle}>
+                {backupSafetyCopy.title}
+              </Text>
+              <Text numberOfLines={2} maxFontSizeMultiplier={1.1} style={styles.backupSafetyDescription}>
+                {backupSafetyCopy.description}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="去设置页备份"
+                onPress={handleOpenBackupSettings}
+                style={({ pressed }) => [
+                  styles.backupSafetyActionPill,
+                  backupSafetyCopy.isWarning
+                    ? styles.backupSafetyActionPillWarning
+                    : styles.backupSafetyActionPillOk,
+                  pressed ? styles.backupSafetyPressablePressed : null,
+                ]}>
+                <Text
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.1}
+                  style={[
+                    styles.backupSafetyActionText,
+                    backupSafetyCopy.isWarning
+                      ? styles.backupSafetyActionTextWarning
+                      : styles.backupSafetyActionTextOk,
+                  ]}>
+                  去备份
+                </Text>
+                <MaterialIcons
+                  name="chevron-right"
+                  size={16}
+                  color={backupSafetyCopy.isWarning ? '#9A5B00' : colors.success}
+                />
+              </Pressable>
+            </View>
+          ) : null}
+        </CardContainer>
+      ) : null}
+
       <CardContainer style={styles.taskSummaryCard} padding={spacing.lg}>
         <Text style={styles.taskCaption}>今日任务</Text>
         <View style={styles.taskDueRow}>
@@ -875,6 +1051,120 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     paddingBottom: layout.bottomTabHeight,
     gap: spacing.lg,
+  },
+  backupSafetyPressablePressed: {
+    opacity: 0.9,
+  },
+  backupSafetyCard: {
+    borderRadius: radius.lg,
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  backupSafetyCardWarning: {
+    borderColor: '#F3DAA2',
+    backgroundColor: '#FFFDF8',
+  },
+  backupSafetyCardOk: {
+    borderColor: colors.successBorder,
+    backgroundColor: '#FBFFFC',
+  },
+  backupSafetyToggle: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  backupSafetyCompactIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  backupSafetyIconWarning: {
+    borderColor: '#E7C36A',
+    backgroundColor: '#FFF4D6',
+  },
+  backupSafetyIconOk: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  backupSafetyCompactText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  backupSafetyChevronButton: {
+    width: 34,
+    height: 34,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  backupSafetyExpandedBody: {
+    marginTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: '#DDEFE2',
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  backupSafetyEyebrow: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+  },
+  backupSafetyTitle: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  backupSafetyActionPill: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.xs,
+    minHeight: 30,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    flexShrink: 0,
+  },
+  backupSafetyActionPillWarning: {
+    borderColor: '#E7C36A',
+    backgroundColor: '#FFF4D6',
+  },
+  backupSafetyActionPillOk: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  backupSafetyActionText: {
+    ...typography.caption,
+    fontWeight: '800',
+  },
+  backupSafetyActionTextWarning: {
+    color: '#9A5B00',
+  },
+  backupSafetyActionTextOk: {
+    color: colors.success,
+  },
+  backupSafetyDescription: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    lineHeight: 20,
+  },
+  backupSafetyMetaText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
+    flex: 1,
+    minWidth: 0,
   },
   taskSummaryCard: {
     backgroundColor: colors.successBg,

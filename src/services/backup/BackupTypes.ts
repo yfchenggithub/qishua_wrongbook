@@ -81,12 +81,33 @@ export interface BackupCreateResult {
   warnings: string[];
 }
 
+export type BackupProgressStage =
+  | 'starting'
+  | 'collect_db'
+  | 'collect_images'
+  | 'collect_voice'
+  | 'package'
+  | 'share'
+  | 'success';
+
+export interface BackupProgressEvent {
+  backupSessionId: string;
+  stage: BackupProgressStage;
+  message: string;
+  current: number;
+  total: number;
+  elapsedSeconds: number;
+}
+
 export interface CreateBackupOptions {
   reason: 'manual' | 'before_restore';
+  onProgress?: (event: BackupProgressEvent) => void;
 }
 
 export interface CreateBackupServiceResult {
   fileUri: string;
+  fileName: string;
+  fileSizeBytes: number | null;
   manifest: BackupManifest;
 }
 

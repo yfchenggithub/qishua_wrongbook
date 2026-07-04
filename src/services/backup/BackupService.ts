@@ -45,6 +45,8 @@ import {
   type BackupImageArchiveFile,
   type BackupManifest,
   type BackupMistakeImageRecord,
+  type BackupProgressEvent,
+  type BackupProgressStage,
   type BackupVoiceNoteRecord,
   type CreateBackupOptions,
   type CreateBackupServiceResult,
@@ -82,6 +84,8 @@ const VOICE_NOTES_DIR_NAME = 'voice-notes';
 const SUPPORTED_SCHEMA_VERSIONS = [DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
+const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
+const BACKUP_PROGRESS_RENDER_DELAY_MS = 0;
 
 const INSERT_MISTAKE_SQL = `
 INSERT INTO mistakes (
@@ -175,6 +179,13 @@ type RestoreImageMaterializedResult = {
   skippedCount: number;
   errorCount: number;
 };
+
+type BackupProgressEmitter = (
+  stage: BackupProgressStage,
+  message: string,
+  current?: number,
+  total?: number,
+) => void;
 
 type RestoreVoiceMaterializedResult = {
   resolvedVoiceNotesByReviewRecordId: Map<string, ReviewRecordVoiceNote>;
@@ -379,6 +390,12 @@ function resolveVoiceSourceFileForBackup(voiceNote: ReviewRecordVoiceNote): File
   }
 
   return null;
+}
+
+async function yieldToBackupProgressFrame(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, BACKUP_PROGRESS_RENDER_DELAY_MS);
+  });
 }
 
 export function mapImageUriForRestore(image: BackupMistakeImageRecord): string {
@@ -689,13 +706,33 @@ type CollectVoiceArtifactsResult = {
 
 async function collectImageArtifacts(
   mistakeImages: Awaited<ReturnType<typeof listAllMistakeImages>>,
+  emitProgress?: BackupProgressEmitter,
 ): Promise<CollectImageArtifactsResult> {
   const backupMistakeImages: BackupMistakeImageRecord[] = [];
   const archiveImages: BackupImageArchiveFile[] = [];
   const warnings: string[] = [];
   let copiedImageCount = 0;
+  const totalImages = mistakeImages.length;
 
-  for (const image of mistakeImages) {
+  emitProgress?.(
+    'collect_images',
+    totalImages > 0 ? `正在整理图片 0 / ${totalImages}` : '没有需要整理的图片',
+    0,
+    totalImages,
+  );
+
+  for (let index = 0; index < mistakeImages.length; index += 1) {
+    const image = mistakeImages[index];
+    const current = index + 1;
+    const shouldEmitImageProgress =
+      current === 1 ||
+      current % BACKUP_IMAGE_PROGRESS_INTERVAL === 0 ||
+      totalImages - current < BACKUP_IMAGE_PROGRESS_INTERVAL;
+
+    if (shouldEmitImageProgress) {
+      emitProgress?.('collect_images', `正在整理图片 ${current} / ${totalImages}`, index, totalImages);
+    }
+
     const sourceUri = normalizeOptionalText(image.uri);
     const backupRelativePath = mapImageUriForBackup(image.id, sourceUri);
 
@@ -732,6 +769,10 @@ async function collectImageArtifacts(
       warnings.push(
         `IMAGE_MISSING:imageId=${image.id},mistakeId=${image.mistake_id},type=${image.type},error=${errorName}`,
       );
+    }
+
+    if (shouldEmitImageProgress) {
+      emitProgress?.('collect_images', `已整理图片 ${current} / ${totalImages}`, current, totalImages);
     }
   }
 
@@ -831,13 +872,27 @@ function validateBackupVoiceNotesPayload(raw: unknown): {
 
 async function collectVoiceArtifacts(
   reviewRecords: Awaited<ReturnType<typeof listAllReviewRecords>>,
+  emitProgress?: BackupProgressEmitter,
 ): Promise<CollectVoiceArtifactsResult> {
   const backupVoiceNotes: BackupVoiceNoteRecord[] = [];
   const archiveVoiceFiles: BackupImageArchiveFile[] = [];
   const warnings: string[] = [];
   let copiedVoiceFileCount = 0;
+  const voiceReviewRecords = reviewRecords.filter((reviewRecord) =>
+    normalizeReviewRecordVoiceNoteForBackup(reviewRecord.voice_note ?? null) !== null,
+  );
+  const totalVoiceFiles = voiceReviewRecords.length;
 
-  for (const reviewRecord of reviewRecords) {
+  emitProgress?.(
+    'collect_voice',
+    totalVoiceFiles > 0 ? `正在整理语音讲解 0 / ${totalVoiceFiles}` : '没有需要整理的语音讲解',
+    0,
+    totalVoiceFiles,
+  );
+
+  for (let index = 0; index < voiceReviewRecords.length; index += 1) {
+    const reviewRecord = voiceReviewRecords[index];
+    const current = index + 1;
     const normalizedVoiceNote = normalizeReviewRecordVoiceNoteForBackup(reviewRecord.voice_note ?? null);
     if (!normalizedVoiceNote) {
       continue;
@@ -852,6 +907,13 @@ async function collectVoiceArtifacts(
 
     let sizeBytes = normalizedVoiceNote.sizeBytes;
     let updatedAt = normalizedVoiceNote.createdAt;
+
+    emitProgress?.(
+      'collect_voice',
+      `正在读取语音讲解 ${current} / ${totalVoiceFiles}`,
+      index,
+      totalVoiceFiles,
+    );
 
     try {
       const sourceFile = resolveVoiceSourceFileForBackup(normalizedVoiceNote);
@@ -892,6 +954,13 @@ async function collectVoiceArtifacts(
       createdAt: normalizedVoiceNote.createdAt,
       updatedAt,
     });
+
+    emitProgress?.(
+      'collect_voice',
+      `已整理语音讲解 ${current} / ${totalVoiceFiles}`,
+      current,
+      totalVoiceFiles,
+    );
   }
 
   return {
@@ -1823,11 +1892,13 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
   const sessionId = buildSessionId('backup');
   const startedAt = Date.now();
   const reason = options?.reason ?? 'manual';
+  const emitProgress = createBackupProgressEmitter(sessionId, startedAt, options?.onProgress);
   const context: BackupCollectContext = {
     counts: { ...EMPTY_COUNTS },
     warningCount: 0,
   };
 
+  emitProgress('starting', '正在准备备份...', 0, 0);
   logBackupEvent('backup_start', sessionId, 0, {
     counts: context.counts,
     warningCount: context.warningCount,
@@ -1835,6 +1906,7 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
   });
 
   try {
+    emitProgress('collect_db', '正在读取错题、图片和复做记录...', 0, 0);
     const [mistakes, mistakeImages, reviewRecords] = await Promise.all([
       listAllMistakes(),
       listAllMistakeImages(),
@@ -1847,14 +1919,20 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       mistakeImages: mistakeImages.length,
       reviewRecords: reviewRecords.length,
     };
+    emitProgress(
+      'collect_db',
+      `已读取 ${mistakes.length} 道错题、${mistakeImages.length} 张图片、${reviewRecords.length} 条复做记录`,
+      mistakes.length + mistakeImages.length + reviewRecords.length,
+      mistakes.length + mistakeImages.length + reviewRecords.length,
+    );
     logBackupEvent('backup_collect_db_done', sessionId, Date.now() - startedAt, {
       counts: context.counts,
       warningCount: context.warningCount,
       reason,
     });
 
-    const imageArtifacts = await collectImageArtifacts(mistakeImages);
-    const voiceArtifacts = await collectVoiceArtifacts(reviewRecords);
+    const imageArtifacts = await collectImageArtifacts(mistakeImages, emitProgress);
+    const voiceArtifacts = await collectVoiceArtifacts(reviewRecords, emitProgress);
     const backupWarnings = [...imageArtifacts.warnings, ...voiceArtifacts.warnings];
     context.warningCount = backupWarnings.length;
     context.counts = {
@@ -1888,6 +1966,14 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       },
     };
 
+    const packageFileCount = imageArtifacts.archiveImages.length + voiceArtifacts.archiveVoiceFiles.length;
+    emitProgress(
+      'package',
+      `正在生成备份文件（图片 ${imageArtifacts.archiveImages.length} 张，语音 ${voiceArtifacts.archiveVoiceFiles.length} 条）`,
+      0,
+      0,
+    );
+    await yieldToBackupProgressFrame();
     const packaged = await zipAdapter.createBackupPackage({
       fileName: buildBackupFileName(),
       manifest,
@@ -1896,6 +1982,7 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       voiceNotes: voiceArtifacts.backupVoiceNotes,
       voiceFiles: voiceArtifacts.archiveVoiceFiles,
     });
+    emitProgress('success', '备份文件已生成', packageFileCount, packageFileCount);
 
     logBackupEvent('backup_package_created', sessionId, Date.now() - startedAt, {
       counts: context.counts,
@@ -1903,8 +1990,16 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       reason,
     });
 
+    const packagedFileInfo = new File(packaged.fileUri).info();
+    const fileSizeBytes =
+      typeof packagedFileInfo.size === 'number' && Number.isFinite(packagedFileInfo.size)
+        ? packagedFileInfo.size
+        : null;
+
     return {
       fileUri: packaged.fileUri,
+      fileName: packaged.fileName,
+      fileSizeBytes,
       manifest,
     };
   } catch (error) {
@@ -2649,4 +2744,34 @@ export async function restoreFromBackupPackage(options: {
     restoreSessionId: options.restoreSessionId,
     fileShortInfo: options.fileShortInfo,
   });
+}
+
+function createBackupProgressEmitter(
+  backupSessionId: string,
+  startedAt: number,
+  onProgress?: CreateBackupOptions['onProgress'],
+): BackupProgressEmitter {
+  return (
+    stage: BackupProgressStage,
+    message: string,
+    current = 0,
+    total = 0,
+  ) => {
+    if (!onProgress) {
+      return;
+    }
+
+    const normalizedCurrent = Number.isFinite(current) ? Math.max(0, Math.floor(current)) : 0;
+    const normalizedTotal = Number.isFinite(total) ? Math.max(0, Math.floor(total)) : 0;
+    const event: BackupProgressEvent = {
+      backupSessionId,
+      stage,
+      message,
+      current: normalizedTotal > 0 ? Math.min(normalizedCurrent, normalizedTotal) : normalizedCurrent,
+      total: normalizedTotal,
+      elapsedSeconds: Math.max(0, Math.floor((Date.now() - startedAt) / 1000)),
+    };
+
+    onProgress(event);
+  };
 }

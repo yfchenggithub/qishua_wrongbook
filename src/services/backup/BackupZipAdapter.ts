@@ -91,8 +91,8 @@ export class FflateBackupZipAdapter implements BackupZipAdapter {
 
     const entries = buildArchiveEntries(input);
 
-    // The backup package uses a zipped container with a custom ".qsbk" extension.
-    const archiveBytes = zipSync(entries, { level: 6 });
+    // Images and voice notes are already compressed; storing entries avoids long JS-thread stalls.
+    const archiveBytes = zipSync(entries, { level: 0 });
     const backupDir = ensureCacheBackupDir();
     const file = new File(backupDir, normalizedFileName);
     file.create({ intermediates: true, overwrite: true });
