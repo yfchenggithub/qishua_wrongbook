@@ -50,6 +50,11 @@ export interface UpcomingReviewPlanDay {
   items: UpcomingReviewPlanItem[];
 }
 
+export interface MistakeModuleCount {
+  module: string;
+  count: number;
+}
+
 export interface HomeTaskSummary {
   hasAnyMistake: boolean;
   todayDueCount: number;
@@ -321,6 +326,29 @@ export async function getMistakeListStats(): Promise<{
     return mappedStats;
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getMistakeListStats failed.', error);
+    throw error;
+  }
+}
+
+export async function getMistakeModuleCounts(filter: MistakeListFilter): Promise<MistakeModuleCount[]> {
+  try {
+    Logger.info(SERVICE_SCOPE, 'Start loading mistake module counts.', {
+      segment: filter.segment,
+      keywordPreview: toKeywordPreview(filter.keyword),
+    });
+    const options = buildListQueryOptions({
+      ...filter,
+      module: null,
+    });
+    const moduleCounts = await MistakeRepository.countMistakesByModule(options);
+    Logger.info(SERVICE_SCOPE, 'Loaded mistake module counts successfully.', {
+      segment: filter.segment,
+      keywordPreview: toKeywordPreview(filter.keyword),
+      count: moduleCounts.length,
+    });
+    return moduleCounts;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'getMistakeModuleCounts failed.', { filter, error });
     throw error;
   }
 }

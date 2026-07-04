@@ -41,6 +41,8 @@ export type TodayWorksheetExportResult = {
   message: string;
   exportedCount: number;
   fileUri?: string;
+  fileUris?: string[];
+  pdfPartCount?: number;
 };
 
 export type ExportTodayWorksheetOptions = {
@@ -64,12 +66,18 @@ function formatCountSuffix(count: number): string {
   return `${safe}题`;
 }
 
-function buildSuccessMessage(count: number): string {
+function buildSuccessMessage(count: number, pdfPartCount?: number): string {
+  const safePdfPartCount = toSafeCount(pdfPartCount);
+  if (safePdfPartCount > 1) {
+    return `今日练习卷已生成（${formatCountSuffix(count)}，${safePdfPartCount}个 PDF）`;
+  }
   return `今日练习卷已生成（${formatCountSuffix(count)}）`;
 }
 
-function buildShareUnavailableMessage(count: number): string {
-  return `已生成${formatCountSuffix(count)}练习卷，但当前设备不支持分享。请到文件管理器查看导出 PDF。`;
+function buildShareUnavailableMessage(count: number, pdfPartCount?: number): string {
+  const safePdfPartCount = toSafeCount(pdfPartCount);
+  const pdfText = safePdfPartCount > 1 ? `${safePdfPartCount}个 PDF` : 'PDF';
+  return `已生成${formatCountSuffix(count)}练习卷（${pdfText}），但当前设备不支持分享。请到文件管理器查看导出 PDF。`;
 }
 
 function buildFailedMessageFromPdfResult(
@@ -78,7 +86,7 @@ function buildFailedMessageFromPdfResult(
 ): string {
   const countForMessage = toSafeCount(result.exportedCount ?? fallbackCount);
   if (result.reason === 'share_unavailable') {
-    return buildShareUnavailableMessage(countForMessage);
+    return buildShareUnavailableMessage(countForMessage, result.pdfPartCount);
   }
   if (result.reason === 'busy') {
     return MESSAGE_BUSY;
@@ -238,9 +246,11 @@ export async function exportTodayWorksheet(
       const exportedCount = toSafeCount(result.exportedCount);
       return {
         outcome: 'success',
-        message: buildSuccessMessage(exportedCount),
+        message: buildSuccessMessage(exportedCount, result.pdfPartCount),
         exportedCount,
         fileUri: result.fileUri,
+        fileUris: result.fileUris,
+        pdfPartCount: result.pdfPartCount,
       };
     }
 
@@ -257,6 +267,8 @@ export async function exportTodayWorksheet(
         message,
         exportedCount,
         fileUri: result.fileUri,
+        fileUris: result.fileUris,
+        pdfPartCount: result.pdfPartCount,
       };
     }
 
@@ -273,6 +285,8 @@ export async function exportTodayWorksheet(
         message,
         exportedCount,
         fileUri: result.fileUri,
+        fileUris: result.fileUris,
+        pdfPartCount: result.pdfPartCount,
       };
     }
 
@@ -293,6 +307,8 @@ export async function exportTodayWorksheet(
       message,
       exportedCount,
       fileUri: result.fileUri,
+      fileUris: result.fileUris,
+      pdfPartCount: result.pdfPartCount,
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to export today worksheet.', { error });

@@ -44,7 +44,7 @@ export type UseTodayWorksheetExportOptions = {
   printEnhanceConcurrency?: PrintEnhanceConcurrency;
   printEnhancePerformanceProfile?: PrintEnhancePerformanceProfile;
   showToast: (message: string, type?: ExportToastType, duration?: number) => void;
-  onSuccess: (fileUri: string) => void;
+  onSuccess: (fileUri: string, fileUris: string[]) => void;
   onEmpty?: () => void;
 };
 
@@ -81,6 +81,19 @@ function toSafeCount(value: number | null | undefined): number {
     return 0;
   }
   return Math.max(0, Math.floor(value));
+}
+
+function normalizeFileUris(fileUri: string, fileUris: string[] | null | undefined): string[] {
+  const normalizedList = Array.isArray(fileUris)
+    ? fileUris
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item) => item.length > 0)
+    : [];
+  const normalizedPrimary = typeof fileUri === 'string' ? fileUri.trim() : '';
+  if (normalizedList.length > 0) {
+    return normalizedList;
+  }
+  return normalizedPrimary ? [normalizedPrimary] : [];
 }
 
 async function resolvePrintEnhanceSettings(
@@ -311,6 +324,7 @@ export function useTodayWorksheetExport(
       const durationMs = Math.max(0, Date.now() - startedAt);
       if (result.outcome === 'success') {
         const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
+        const pdfUris = normalizeFileUris(pdfUri, result.fileUris);
         if (!pdfUri) {
           Logger.warn(scope, 'export_pdf_failed', {
             errorName: 'EmptyPdfUri',
@@ -327,6 +341,7 @@ export function useTodayWorksheetExport(
           total: result.exportedCount,
           durationMs,
           filePath: pdfUri,
+          fileCount: pdfUris.length,
         });
         if (isMountedRef.current) {
           setProgress((prev) => ({
@@ -335,7 +350,7 @@ export function useTodayWorksheetExport(
             current: prev.total > 0 ? prev.total : prev.current,
           }));
         }
-        onSuccess(pdfUri);
+        onSuccess(pdfUri, pdfUris);
         return;
       }
 

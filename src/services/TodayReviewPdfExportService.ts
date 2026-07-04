@@ -37,6 +37,7 @@ const PDF_MIME_TYPE = 'application/pdf';
 const PDF_FILE_PREFIX = 'qishua_today_review';
 const DEFAULT_EXPORT_PRINT_ENHANCE_MODE: PrintEnhanceMode = DEFAULT_PRINT_ENHANCE_MODE;
 const SUSPICIOUS_PDF_SIZE_BYTES = 4 * 1024;
+const EXPORT_ITEMS_PER_PDF_FILE = 40;
 const A4_WIDTH_MM = 210;
 const A4_HEIGHT_MM = 297;
 const PDF_PAGE_MARGIN_MM = 12;
@@ -91,7 +92,9 @@ export type ExportTodayReviewPdfResult =
   | {
       success: true;
       fileUri: string;
+      fileUris: string[];
       exportedCount: number;
+      pdfPartCount: number;
     }
   | {
       success: false;
@@ -99,6 +102,8 @@ export type ExportTodayReviewPdfResult =
       message: string;
       exportedCount?: number;
       fileUri?: string;
+      fileUris?: string[];
+      pdfPartCount?: number;
     };
 
 export type ShareTodayReviewPdfResult =
@@ -278,10 +283,37 @@ function resolveBaseDate(date?: string): Date {
   return new Date();
 }
 
-function buildExportFileName(dateString: string, exportedAt = new Date()): string {
+function buildExportFileName(
+  dateString: string,
+  exportedAt = new Date(),
+  partIndex?: number,
+  partCount?: number,
+): string {
   const safeDate = normalizeOptionalText(dateString) ?? toDateOnlyString(exportedAt);
-  const uniqueStamp = Date.now();
-  return `${PDF_FILE_PREFIX}_${safeDate}_${uniqueStamp}.pdf`;
+  const safePartCount = typeof partCount === 'number' && Number.isFinite(partCount)
+    ? Math.max(1, Math.floor(partCount))
+    : 1;
+  const safePartIndex = typeof partIndex === 'number' && Number.isFinite(partIndex)
+    ? Math.max(1, Math.floor(partIndex))
+    : 1;
+  const partSuffix = safePartCount > 1
+    ? `_part${String(Math.min(safePartIndex, safePartCount)).padStart(2, '0')}-of-${String(safePartCount).padStart(2, '0')}`
+    : '';
+  const uniqueStamp = exportedAt.getTime();
+  return `${PDF_FILE_PREFIX}_${safeDate}${partSuffix}_${uniqueStamp}.pdf`;
+}
+
+function getExportItemsPerPdfFile(): number {
+  return Math.max(1, Math.floor(EXPORT_ITEMS_PER_PDF_FILE));
+}
+
+function chunkExportItems(items: TodayReviewExportItem[], chunkSize: number): TodayReviewExportItem[][] {
+  const safeChunkSize = Math.max(1, Math.floor(chunkSize));
+  const chunks: TodayReviewExportItem[][] = [];
+  for (let start = 0; start < items.length; start += safeChunkSize) {
+    chunks.push(items.slice(start, start + safeChunkSize));
+  }
+  return chunks;
 }
 
 function getFileSizeBytes(uri: string): number | null {
@@ -324,20 +356,35 @@ function summarizeExportItems(items: TodayReviewExportItem[]): {
   }));
 }
 
-function buildFallbackPdfHtml(items: TodayReviewExportItem[], dateString: string): string {
+function buildFallbackPdfHtml(
+  items: TodayReviewPdfRenderItem[],
+  dateString: string,
+  totalCount = items.length,
+  questionNumberOffset = 0,
+): string {
   const cardsHtml = items
     .map((item, index) => {
-      const module = escapeHtml(toDisplayText(item.module, '-'));
-      const title = escapeHtml(toDisplayText(item.title, '-'));
-      const progress = escapeHtml(formatProgressText(item));
-      const dueDate = escapeHtml(formatDueDateText(item.dueDate));
+      const module = escapeHtml(toDisplayText(item.raw.module, '-'));
+      const title = escapeHtml(toDisplayText(item.raw.title, '-'));
+      const progress = escapeHtml(formatProgressText(item.raw));
+      const dueDate = escapeHtml(formatDueDateText(item.raw.dueDate));
+      const questionImageSrc = item.questionImageSrc ? escapeHtml(item.questionImageSrc) : null;
+      const questionImageBlock = questionImageSrc
+        ? `<img class="question-image" src="${questionImageSrc}" alt="题目图片" />`
+        : '<div class="question-placeholder">题目图片暂时无法加载</div>';
       return `
         <section class="card">
-          <h2>第 ${index + 1} 题</h2>
+          <h2>第 ${questionNumberOffset + index + 1} 题</h2>
           <p>模块：${module}</p>
           <p>标题：${title}</p>
           <p>进度：${progress}</p>
           <p>到期日：${dueDate}</p>
+          <div class="question-box">
+            <div class="question-label">我的题目：</div>
+            <div class="question-image-wrap">
+              ${questionImageBlock}
+            </div>
+          </div>
           <div class="answer-box">我的解答：</div>
         </section>
       `;
@@ -350,7 +397,7 @@ function buildFallbackPdfHtml(items: TodayReviewExportItem[], dateString: string
       <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>今日练习卷（降级模板）</title>
+        <title>今日练习卷</title>
         <style>
           @page { size: A4; margin: 14mm; }
           body { margin: 0; color: #111; font-family: "Microsoft YaHei", Arial, sans-serif; }
@@ -359,12 +406,17 @@ function buildFallbackPdfHtml(items: TodayReviewExportItem[], dateString: string
           .card { border: 1px solid #d8d8d8; border-radius: 8px; padding: 12px; margin-bottom: 10px; page-break-inside: avoid; }
           .card h2 { margin: 0 0 8px 0; font-size: 18px; }
           .card p { margin: 4px 0; font-size: 14px; }
+          .question-box { margin-top: 8px; }
+          .question-label { margin-bottom: 6px; font-size: 14px; font-weight: 700; color: #333; }
+          .question-image-wrap { border: 1px dashed #d0d0d0; border-radius: 6px; padding: 8px; min-height: 80px; }
+          .question-image { display: block; width: 100%; max-height: 520px; object-fit: contain; }
+          .question-placeholder { color: #888; font-size: 13px; }
           .answer-box { margin-top: 8px; min-height: 120px; border: 1px dashed #b8b8b8; border-radius: 6px; padding: 8px; color: #666; }
         </style>
       </head>
       <body>
         <h1 class="sheet-title">七刷错题本 · 今日复做练习卷</h1>
-        <p class="sheet-meta">日期：${escapeHtml(dateString)} · 共 ${items.length} 道题（降级模板）</p>
+        <p class="sheet-meta">日期：${escapeHtml(dateString)} · 共 ${totalCount} 道题</p>
         ${cardsHtml}
       </body>
     </html>
@@ -658,7 +710,7 @@ function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): s
         <span class="problem-meta-item">难度：${difficultyText}</span>
         <span class="problem-meta-item">到期日：${dueDate}</span>
       </div>
-      <div class="problem-label">题目：</div>
+      <div class="problem-label">我的题目：</div>
       <div class="problem-image-wrap">
         ${questionImageBlock}
       </div>
@@ -816,7 +868,7 @@ function buildAutoQuestionImageHtml(item: TodayReviewPdfRenderItem, layout: Ques
     : `<div class="image-fallback">&#39064;&#30446;&#22270;&#29255;&#26242;&#26102;&#26080;&#27861;&#21152;&#36733;</div>`;
 
   return `
-    <div class="problem-label">&#39064;&#30446;&#65306;</div>
+    <div class="problem-label">&#25105;&#30340;&#39064;&#30446;&#65306;</div>
     <div class="problem-image-wrap">
       ${imageBlock}
     </div>
@@ -943,6 +995,8 @@ function buildPdfHtml(
   items: TodayReviewPdfRenderItem[],
   dateString: string,
   imageFilterCss: string | null,
+  totalCount = items.length,
+  questionNumberOffset = 0,
   onPageProgress?: (progress: BuildItemsProgress) => void,
 ): string {
   const total = items.length;
@@ -950,7 +1004,7 @@ function buildPdfHtml(
 
   for (let index = 0; index < total; index += 1) {
     const item = items[index];
-    pageHtmlList.push(buildAutoWorksheetPageHtml(item, index, total, dateString));
+    pageHtmlList.push(buildAutoWorksheetPageHtml(item, questionNumberOffset + index, totalCount, dateString));
     if (onPageProgress) {
       onPageProgress({
         current: index + 1,
@@ -1493,151 +1547,235 @@ export async function exportTodayReviewPdf(
       current: 0,
       total: exportItems.length,
     });
-    const processStartedAt = Date.now();
-    const renderResult = await buildRenderItems(
-      exportItems,
-      activePrintEnhanceMode,
-      activeClearPrintStrength,
-      activePerformanceProfile,
-      activeEnhanceConcurrency,
-      ({ current, total }) => {
-        reportExportProgress(onProgress, {
-          stage: 'process_images',
-          current,
-          total,
-        });
-      },
-    );
-    stageTiming.processImagesMs = Math.max(0, Date.now() - processStartedAt);
-    processImageMetrics.processedImageItemCount = renderResult.processMetrics.processedImageItemCount;
-    processImageMetrics.enhanceDurationTotalMs = renderResult.processMetrics.enhanceDurationTotalMs;
-    processImageMetrics.base64ReadDurationTotalMs = renderResult.processMetrics.base64ReadDurationTotalMs;
-    processImageMetrics.base64ReadAttemptTotalCount = renderResult.processMetrics.base64ReadAttemptTotalCount;
-    processImageMetrics.enhanceDurationMaxMs = renderResult.processMetrics.enhanceDurationMaxMs;
-    processImageMetrics.base64ReadDurationMaxMs = renderResult.processMetrics.base64ReadDurationMaxMs;
-    temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
-    const renderItemCount = renderResult.renderItems.length;
-    const withImageDataCount = renderResult.renderItems.filter((item) => item.questionImageSrc !== null).length;
-    const withoutImageDataCount = Math.max(0, renderItemCount - withImageDataCount);
-    Logger.info(SERVICE_SCOPE, 'export_pdf_render_items_summary', {
-      renderItemCount,
-      withImageDataCount,
-      withoutImageDataCount,
-      temporaryEnhancedCount: renderResult.temporaryEnhancedUris.length,
+    const itemsPerPdfFile = getExportItemsPerPdfFile();
+    const pdfItemChunks = chunkExportItems(exportItems, itemsPerPdfFile);
+    const pdfPartCount = pdfItemChunks.length;
+    const exportRunStartedAt = new Date();
+    const exportedFileUris: string[] = [];
+    const exportedPdfSizeBytesList: (number | null)[] = [];
+    let processedItemOffset = 0;
+    Logger.info(SERVICE_SCOPE, 'export_pdf_batch_plan', {
+      itemCount: exportItems.length,
+      itemsPerPdfFile,
+      pdfPartCount,
     });
-    const buildHtmlStartedAt = Date.now();
-    const html = buildPdfHtml(
-      renderResult.renderItems,
-      dateString,
-      imageFilterCss,
-      ({ current, total }) => {
+
+    for (let partIndex = 0; partIndex < pdfItemChunks.length; partIndex += 1) {
+      const partItems = pdfItemChunks[partIndex];
+      const partNumber = partIndex + 1;
+      const partProgressLabel = pdfPartCount > 1 ? `（第 ${partNumber}/${pdfPartCount} 个 PDF）` : '';
+      const processStartedAt = Date.now();
+      const renderResult = await buildRenderItems(
+        partItems,
+        activePrintEnhanceMode,
+        activeClearPrintStrength,
+        activePerformanceProfile,
+        activeEnhanceConcurrency,
+        ({ current }) => {
+          const globalCurrent = processedItemOffset + current;
+          reportExportProgress(onProgress, {
+            stage: 'process_images',
+            current: globalCurrent,
+            total: exportItems.length,
+            itemCount: exportItems.length,
+            message: pdfPartCount > 1
+              ? `处理图片 ${Math.max(0, Math.min(globalCurrent, exportItems.length))} / ${exportItems.length}${partProgressLabel}`
+              : undefined,
+          });
+        },
+      );
+      stageTiming.processImagesMs += Math.max(0, Date.now() - processStartedAt);
+      processImageMetrics.processedImageItemCount += renderResult.processMetrics.processedImageItemCount;
+      processImageMetrics.enhanceDurationTotalMs += renderResult.processMetrics.enhanceDurationTotalMs;
+      processImageMetrics.base64ReadDurationTotalMs += renderResult.processMetrics.base64ReadDurationTotalMs;
+      processImageMetrics.base64ReadAttemptTotalCount += renderResult.processMetrics.base64ReadAttemptTotalCount;
+      processImageMetrics.enhanceDurationMaxMs = Math.max(
+        processImageMetrics.enhanceDurationMaxMs,
+        renderResult.processMetrics.enhanceDurationMaxMs,
+      );
+      processImageMetrics.base64ReadDurationMaxMs = Math.max(
+        processImageMetrics.base64ReadDurationMaxMs,
+        renderResult.processMetrics.base64ReadDurationMaxMs,
+      );
+      temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
+      const renderItemCount = renderResult.renderItems.length;
+      const withImageDataCount = renderResult.renderItems.filter((item) => item.questionImageSrc !== null).length;
+      const withoutImageDataCount = Math.max(0, renderItemCount - withImageDataCount);
+      Logger.info(SERVICE_SCOPE, 'export_pdf_render_items_summary', {
+        partNumber,
+        pdfPartCount,
+        questionNumberStart: processedItemOffset + 1,
+        questionNumberEnd: processedItemOffset + partItems.length,
+        renderItemCount,
+        withImageDataCount,
+        withoutImageDataCount,
+        temporaryEnhancedCount: renderResult.temporaryEnhancedUris.length,
+      });
+      const buildHtmlStartedAt = Date.now();
+      const html = buildPdfHtml(
+        renderResult.renderItems,
+        dateString,
+        imageFilterCss,
+        exportItems.length,
+        processedItemOffset,
+        ({ current }) => {
+          const globalCurrent = processedItemOffset + current;
+          reportExportProgress(onProgress, {
+            stage: 'generate_pdf',
+            current: globalCurrent,
+            total: exportItems.length,
+            itemCount: exportItems.length,
+            message: pdfPartCount > 1
+              ? `生成 PDF 页面 ${Math.max(0, Math.min(globalCurrent, exportItems.length))} / ${exportItems.length}${partProgressLabel}`
+              : undefined,
+          });
+        },
+      );
+      stageTiming.buildHtmlMs += Math.max(0, Date.now() - buildHtmlStartedAt);
+      Logger.info(SERVICE_SCOPE, 'export_pdf_html_built', {
+        partNumber,
+        pdfPartCount,
+        htmlLength: html.length,
+        pageMarkerCount: countWorksheetPagesInHtml(html),
+      });
+
+      let generatedPdfUri = '';
+      try {
         reportExportProgress(onProgress, {
           stage: 'generate_pdf',
-          current,
-          total,
-        });
-      },
-    );
-    stageTiming.buildHtmlMs = Math.max(0, Date.now() - buildHtmlStartedAt);
-    Logger.info(SERVICE_SCOPE, 'export_pdf_html_built', {
-      htmlLength: html.length,
-      pageMarkerCount: countWorksheetPagesInHtml(html),
-    });
-
-    let generatedPdfUri = '';
-    try {
-      reportExportProgress(onProgress, {
-        stage: 'generate_pdf',
-        current: exportItems.length,
-        total: exportItems.length,
-        message: '正在生成练习卷 PDF...',
-      });
-      const printStartedAt = Date.now();
-      const printResult = await Print.printToFileAsync({
-        html,
-        width: 595,
-        height: 842,
-      });
-      generatedPdfUri = printResult.uri;
-      stageTiming.printPdfMs = Math.max(0, Date.now() - printStartedAt);
-      const generatedPdfSizeBytes = getFileSizeBytes(generatedPdfUri);
-      Logger.info(SERVICE_SCOPE, 'export_pdf_generated_file', {
-        generatedPdfUriPreview: toSafeUriPreview(generatedPdfUri),
-        generatedPdfSizeBytes,
-      });
-
-      if (
-        exportItems.length > 0
-        && generatedPdfSizeBytes !== null
-        && generatedPdfSizeBytes > 0
-        && generatedPdfSizeBytes < SUSPICIOUS_PDF_SIZE_BYTES
-      ) {
-        Logger.warn(SERVICE_SCOPE, 'Generated PDF is suspiciously small, retry with fallback html.', {
-          generatedPdfSizeBytes,
-          thresholdBytes: SUSPICIOUS_PDF_SIZE_BYTES,
+          current: processedItemOffset + partItems.length,
+          total: exportItems.length,
           itemCount: exportItems.length,
+          message: pdfPartCount > 1
+            ? `正在生成练习卷 PDF${partProgressLabel}...`
+            : '正在生成练习卷 PDF...',
         });
-        const fallbackHtml = buildFallbackPdfHtml(exportItems, dateString);
-        const fallbackPrintStartedAt = Date.now();
-        const fallbackPrintResult = await Print.printToFileAsync({
-          html: fallbackHtml,
+        const printStartedAt = Date.now();
+        const printResult = await Print.printToFileAsync({
+          html,
           width: 595,
           height: 842,
         });
-        generatedPdfUri = fallbackPrintResult.uri;
-        stageTiming.printPdfMs += Math.max(0, Date.now() - fallbackPrintStartedAt);
-        Logger.info(SERVICE_SCOPE, 'export_pdf_fallback_generated_file', {
+        generatedPdfUri = printResult.uri;
+        stageTiming.printPdfMs += Math.max(0, Date.now() - printStartedAt);
+        const generatedPdfSizeBytes = getFileSizeBytes(generatedPdfUri);
+        Logger.info(SERVICE_SCOPE, 'export_pdf_generated_file', {
+          partNumber,
+          pdfPartCount,
           generatedPdfUriPreview: toSafeUriPreview(generatedPdfUri),
-          generatedPdfSizeBytes: getFileSizeBytes(generatedPdfUri),
-          fallbackHtmlLength: fallbackHtml.length,
+          generatedPdfSizeBytes,
         });
+
+        if (
+          partItems.length > 0
+          && generatedPdfSizeBytes !== null
+          && generatedPdfSizeBytes > 0
+          && generatedPdfSizeBytes < SUSPICIOUS_PDF_SIZE_BYTES
+        ) {
+          Logger.warn(SERVICE_SCOPE, 'Generated PDF is suspiciously small, retry with fallback html.', {
+            partNumber,
+            pdfPartCount,
+            generatedPdfSizeBytes,
+            thresholdBytes: SUSPICIOUS_PDF_SIZE_BYTES,
+            itemCount: partItems.length,
+          });
+          const fallbackHtml = buildFallbackPdfHtml(
+            renderResult.renderItems,
+            dateString,
+            exportItems.length,
+            processedItemOffset,
+          );
+          const fallbackPrintStartedAt = Date.now();
+          const fallbackPrintResult = await Print.printToFileAsync({
+            html: fallbackHtml,
+            width: 595,
+            height: 842,
+          });
+          generatedPdfUri = fallbackPrintResult.uri;
+          stageTiming.printPdfMs += Math.max(0, Date.now() - fallbackPrintStartedAt);
+          Logger.info(SERVICE_SCOPE, 'export_pdf_fallback_generated_file', {
+            partNumber,
+            pdfPartCount,
+            generatedPdfUriPreview: toSafeUriPreview(generatedPdfUri),
+            generatedPdfSizeBytes: getFileSizeBytes(generatedPdfUri),
+            fallbackHtmlLength: fallbackHtml.length,
+          });
+        }
+      } catch (error) {
+        exportOutcome = 'generate_failed';
+        exportFailureReason = 'print_to_file_failed';
+        Logger.error(SERVICE_SCOPE, 'Failed to generate export PDF with expo-print.', {
+          date: options?.date ?? null,
+          partNumber,
+          pdfPartCount,
+          itemCount: partItems.length,
+          stageTiming,
+          error,
+        });
+        return {
+          success: false,
+          reason: 'generate_failed',
+          message: FALLBACK_EXPORT_ERROR_MESSAGE,
+          exportedCount: processedItemOffset,
+          fileUri: exportedFileUris[0],
+          fileUris: exportedFileUris,
+          pdfPartCount,
+        };
       }
-    } catch (error) {
-      exportOutcome = 'generate_failed';
-      exportFailureReason = 'print_to_file_failed';
-      Logger.error(SERVICE_SCOPE, 'Failed to generate export PDF with expo-print.', {
-        date: options?.date ?? null,
+
+      const exportFileName = buildExportFileName(dateString, exportRunStartedAt, partNumber, pdfPartCount);
+      reportExportProgress(onProgress, {
+        stage: 'save_pdf',
+        current: processedItemOffset + partItems.length,
+        total: exportItems.length,
         itemCount: exportItems.length,
-        stageTiming,
-        error,
+        message: pdfPartCount > 1
+          ? `正在保存 PDF ${partNumber} / ${pdfPartCount}...`
+          : undefined,
       });
-      return {
-        success: false,
-        reason: 'generate_failed',
-        message: FALLBACK_EXPORT_ERROR_MESSAGE,
-        exportedCount: exportItems.length,
-      };
+      const saveStartedAt = Date.now();
+      const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
+      stageTiming.savePdfMs += Math.max(0, Date.now() - saveStartedAt);
+      exportedFileUris.push(exportedFileUri);
+      exportFileUriPreview = toSafeUriPreview(exportedFileUri);
+      const exportedPdfSizeBytes = getFileSizeBytes(exportedFileUri);
+      exportedPdfSizeBytesList.push(exportedPdfSizeBytes);
+      Logger.info(SERVICE_SCOPE, 'export_pdf_part_saved', {
+        partNumber,
+        pdfPartCount,
+        questionNumberStart: processedItemOffset + 1,
+        questionNumberEnd: processedItemOffset + partItems.length,
+        fileUriPreview: exportFileUriPreview,
+        exportedPdfSizeBytes,
+      });
+      processedItemOffset += partItems.length;
+      await yieldToUiFrame();
     }
 
-    const exportFileName = buildExportFileName(dateString);
-    reportExportProgress(onProgress, {
-      stage: 'save_pdf',
-      current: exportItems.length,
-      total: exportItems.length,
-    });
-    const saveStartedAt = Date.now();
-    const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
-    stageTiming.savePdfMs = Math.max(0, Date.now() - saveStartedAt);
-    exportFileUriPreview = toSafeUriPreview(exportedFileUri);
-    const exportedPdfSizeBytes = getFileSizeBytes(exportedFileUri);
+    const exportedFileUri = exportedFileUris[0] ?? '';
     exportOutcome = 'success';
     Logger.info(SERVICE_SCOPE, 'Today review PDF exported successfully.', {
       date: dateString,
       exportedCount: exportItems.length,
-      fileUriPreview: exportFileUriPreview,
-      exportedPdfSizeBytes,
+      pdfPartCount,
+      itemsPerPdfFile,
+      fileUriPreview: toSafeUriPreview(exportedFileUri),
+      fileUriPreviews: exportedFileUris.map(toSafeUriPreview),
+      exportedPdfSizeBytesList,
       printEnhanceMode: activePrintEnhanceMode,
       clearPrintStrength: activeClearPrintStrength,
       performanceProfile: activePerformanceProfile,
       enhanceConcurrency: activeEnhanceConcurrency,
       configuredEnhanceConcurrency,
-      enhancedImageCount: renderResult.temporaryEnhancedUris.length,
+      enhancedImageCount: temporaryEnhancedUris.length,
     });
 
     return {
       success: true,
       fileUri: exportedFileUri,
+      fileUris: exportedFileUris,
       exportedCount: exportItems.length,
+      pdfPartCount,
     };
   } catch (error) {
     exportOutcome = 'unknown';

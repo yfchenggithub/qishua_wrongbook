@@ -71,6 +71,11 @@ export interface MistakeStats {
   dueToday: number;
 }
 
+export interface MistakeModuleCount {
+  module: string;
+  count: number;
+}
+
 export interface TodayReviewQueueQuery {
   todayStartIso: string;
   todayEndIso: string;
@@ -119,6 +124,11 @@ type MistakeStatsRow = {
 };
 
 type CountRow = {
+  total: number | null;
+};
+
+type ModuleCountRow = {
+  module: string | null;
   total: number | null;
 };
 
@@ -653,6 +663,37 @@ FROM mistakes${conditions.whereSql};`,
       return Number(row?.total ?? 0);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'countMistakes failed.', { options, error });
+      throw error;
+    }
+  },
+
+  async countMistakesByModule(options?: ListMistakesOptions): Promise<MistakeModuleCount[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const conditions = buildListConditions(options);
+
+      const rows = await db.getAllAsync<ModuleCountRow>(
+        `SELECT module, COUNT(*) AS total
+FROM mistakes${conditions.whereSql}
+GROUP BY module
+ORDER BY total DESC, module ASC;`,
+        ...conditions.bindParams,
+      );
+
+      return rows.reduce<MistakeModuleCount[]>((moduleCounts, row) => {
+        const moduleName = normalizeModuleFilter(row.module);
+        if (!moduleName) {
+          return moduleCounts;
+        }
+        moduleCounts.push({
+          module: moduleName,
+          count: Number(row.total ?? 0),
+        });
+        return moduleCounts;
+      }, []);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'countMistakesByModule failed.', { options, error });
       throw error;
     }
   },

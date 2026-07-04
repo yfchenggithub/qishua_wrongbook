@@ -548,14 +548,16 @@ export default function SettingsScreen() {
     printEnhanceConcurrency: exportEnhanceConcurrency,
     printEnhancePerformanceProfile: exportEnhancePerformanceProfile,
     showToast,
-    onSuccess: (pdfUri: string) => {
+    onSuccess: (pdfUri: string, pdfUris: string[]) => {
       Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
         pdfUri,
+        pdfFileCount: pdfUris.length,
       });
       router.push({
         pathname: '/pdf-preview',
         params: {
           pdfUri,
+          pdfUris: JSON.stringify(pdfUris),
         },
       } as never);
     },

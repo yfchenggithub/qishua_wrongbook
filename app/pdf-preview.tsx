@@ -24,6 +24,43 @@ function normalizePdfUri(value: string | string[] | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeParamText(value: string | string[] | undefined): string | null {
+  if (Array.isArray(value)) {
+    const first = value.find((item) => typeof item === 'string' && item.trim().length > 0);
+    return first ? first.trim() : null;
+  }
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizePdfUriList(
+  value: string | string[] | undefined,
+  fallbackUri: string | null,
+): string[] {
+  const fallbackList = fallbackUri ? [fallbackUri] : [];
+  const rawValue = normalizeParamText(value);
+  if (!rawValue) {
+    return fallbackList;
+  }
+
+  try {
+    const parsed = JSON.parse(rawValue);
+    if (Array.isArray(parsed)) {
+      const normalizedList = parsed
+        .map((item) => (typeof item === 'string' ? item.trim() : ''))
+        .filter((item) => item.length > 0);
+      return normalizedList.length > 0 ? normalizedList : fallbackList;
+    }
+  } catch {
+    // Keep compatibility with older routes that only pass pdfUri.
+  }
+
+  return fallbackList;
+}
+
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -76,8 +113,15 @@ function readPdfFileInfo(uri: string): { exists: boolean; sizeBytes: number | nu
 export default function PdfPreviewScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const params = useLocalSearchParams<{ pdfUri?: string | string[] }>();
-  const pdfUri = useMemo(() => normalizePdfUri(params.pdfUri), [params.pdfUri]);
+  const params = useLocalSearchParams<{ pdfUri?: string | string[]; pdfUris?: string | string[] }>();
+  const primaryPdfUri = useMemo(() => normalizePdfUri(params.pdfUri), [params.pdfUri]);
+  const pdfUris = useMemo(
+    () => normalizePdfUriList(params.pdfUris, primaryPdfUri),
+    [params.pdfUris, primaryPdfUri],
+  );
+  const [selectedPdfIndex, setSelectedPdfIndex] = useState(0);
+  const pdfPartCount = pdfUris.length;
+  const pdfUri = pdfUris[selectedPdfIndex] ?? primaryPdfUri;
   const source = useMemo(
     () => (pdfUri ? { uri: pdfUri, cache: false as const } : null),
     [pdfUri],
@@ -93,6 +137,12 @@ export default function PdfPreviewScreen() {
   const [isOpeningExternally, setIsOpeningExternally] = useState(false);
 
   useEffect(() => {
+    if (selectedPdfIndex >= pdfUris.length && pdfUris.length > 0) {
+      setSelectedPdfIndex(0);
+    }
+  }, [pdfUris.length, selectedPdfIndex]);
+
+  useEffect(() => {
     if (!pdfUri) {
       setLoadError('未找到可预览的 PDF 文件。');
       setIsLoading(false);
@@ -102,14 +152,18 @@ export default function PdfPreviewScreen() {
     const fileInfo = readPdfFileInfo(pdfUri);
     setLoadError(null);
     setIsLoading(true);
+    setPageCount(null);
+    setCurrentPage(1);
     Logger.info(PAGE_SCOPE, 'pdf_preview_load_start', {
       pdfUriPreview: toSafeUriPreview(pdfUri),
       attempt: previewKey + 1,
+      pdfPartNumber: selectedPdfIndex + 1,
+      pdfPartCount,
       sourceCache: false,
       fileExists: fileInfo.exists,
       fileSizeBytes: fileInfo.sizeBytes,
     });
-  }, [pdfUri, previewKey]);
+  }, [pdfPartCount, pdfUri, previewKey, selectedPdfIndex]);
 
   const handleRetry = useCallback(() => {
     setLoadError(null);
@@ -119,6 +173,14 @@ export default function PdfPreviewScreen() {
     setPreviewKey((prev) => prev + 1);
   }, []);
 
+  const handlePreviousPdf = useCallback(() => {
+    setSelectedPdfIndex((prev) => Math.max(0, prev - 1));
+  }, []);
+
+  const handleNextPdf = useCallback(() => {
+    setSelectedPdfIndex((prev) => Math.min(Math.max(0, pdfPartCount - 1), prev + 1));
+  }, [pdfPartCount]);
+
   const handleOpenWithOtherApp = useCallback(async () => {
     if (!pdfUri || isOpeningExternally) {
       return;
@@ -126,6 +188,8 @@ export default function PdfPreviewScreen() {
 
     Logger.info(PAGE_SCOPE, 'pdf_preview_open_with_other_app_click', {
       pdfUri,
+      pdfPartNumber: selectedPdfIndex + 1,
+      pdfPartCount,
     });
     setIsOpeningExternally(true);
     try {
@@ -133,12 +197,16 @@ export default function PdfPreviewScreen() {
       if (result.success) {
         Logger.info(PAGE_SCOPE, 'pdf_preview_open_with_other_app_success', {
           pdfUri,
+          pdfPartNumber: selectedPdfIndex + 1,
+          pdfPartCount,
         });
         return;
       }
 
       Logger.warn(PAGE_SCOPE, 'pdf_preview_open_with_other_app_failed', {
         pdfUri,
+        pdfPartNumber: selectedPdfIndex + 1,
+        pdfPartCount,
         reason: result.reason,
         message: result.message,
       });
@@ -146,13 +214,15 @@ export default function PdfPreviewScreen() {
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'pdf_preview_open_with_other_app_failed', {
         pdfUri,
+        pdfPartNumber: selectedPdfIndex + 1,
+        pdfPartCount,
         error,
       });
       Alert.alert('无法打开 PDF', '无法打开 PDF，请尝试分享后用其他应用查看');
     } finally {
       setIsOpeningExternally(false);
     }
-  }, [isOpeningExternally, pdfUri]);
+  }, [isOpeningExternally, pdfPartCount, pdfUri, selectedPdfIndex]);
 
   const handleSharePdf = useCallback(async () => {
     if (!pdfUri || isSharing || isPrinting) {
@@ -161,6 +231,8 @@ export default function PdfPreviewScreen() {
 
     Logger.info(PAGE_SCOPE, 'pdf_preview_share_click', {
       pdfUri,
+      pdfPartNumber: selectedPdfIndex + 1,
+      pdfPartCount,
     });
     setIsSharing(true);
     try {
@@ -168,6 +240,8 @@ export default function PdfPreviewScreen() {
       if (result.success) {
         Logger.info(PAGE_SCOPE, 'pdf_preview_share_success', {
           pdfUri,
+          pdfPartNumber: selectedPdfIndex + 1,
+          pdfPartCount,
         });
         return;
       }
@@ -178,6 +252,8 @@ export default function PdfPreviewScreen() {
 
       Logger.warn(PAGE_SCOPE, 'pdf_preview_share_failed', {
         pdfUri,
+        pdfPartNumber: selectedPdfIndex + 1,
+        pdfPartCount,
         reason: result.reason,
         message: result.message,
       });
@@ -185,13 +261,15 @@ export default function PdfPreviewScreen() {
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'pdf_preview_share_failed', {
         pdfUri,
+        pdfPartNumber: selectedPdfIndex + 1,
+        pdfPartCount,
         error,
       });
       Alert.alert('分享失败', '分享失败，请稍后重试');
     } finally {
       setIsSharing(false);
     }
-  }, [isPrinting, isSharing, pdfUri]);
+  }, [isPrinting, isSharing, pdfPartCount, pdfUri, selectedPdfIndex]);
 
   const handlePrintPdf = useCallback(async () => {
     if (!pdfUri || isPrinting || isSharing) {
@@ -200,6 +278,8 @@ export default function PdfPreviewScreen() {
 
     Logger.info(PAGE_SCOPE, 'pdf_preview_print_click', {
       pdfUri,
+      pdfPartNumber: selectedPdfIndex + 1,
+      pdfPartCount,
     });
     setIsPrinting(true);
     try {
@@ -208,17 +288,21 @@ export default function PdfPreviewScreen() {
       });
       Logger.info(PAGE_SCOPE, 'pdf_preview_print_success', {
         pdfUri,
+        pdfPartNumber: selectedPdfIndex + 1,
+        pdfPartCount,
       });
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'pdf_preview_print_failed', {
         pdfUri,
+        pdfPartNumber: selectedPdfIndex + 1,
+        pdfPartCount,
         error,
       });
       Alert.alert('打印失败', '无法打开打印面板，请稍后重试');
     } finally {
       setIsPrinting(false);
     }
-  }, [isPrinting, isSharing, pdfUri]);
+  }, [isPrinting, isSharing, pdfPartCount, pdfUri, selectedPdfIndex]);
 
   return (
     <SafeAreaView edges={['bottom']} style={styles.pageRoot}>
@@ -238,6 +322,8 @@ export default function PdfPreviewScreen() {
               Logger.info(PAGE_SCOPE, 'pdf_preview_load_success', {
                 pageCount: numberOfPages,
                 pdfUriPreview: toSafeUriPreview(pdfUri),
+                pdfPartNumber: selectedPdfIndex + 1,
+                pdfPartCount,
                 fileExists: fileInfo.exists,
                 fileSizeBytes: fileInfo.sizeBytes,
               });
@@ -246,6 +332,8 @@ export default function PdfPreviewScreen() {
               setCurrentPage(page);
               Logger.info(PAGE_SCOPE, 'pdf_preview_page_changed', {
                 currentPage: page,
+                pdfPartNumber: selectedPdfIndex + 1,
+                pdfPartCount,
               });
             }}
             onError={(error) => {
@@ -256,6 +344,8 @@ export default function PdfPreviewScreen() {
               Logger.warn(PAGE_SCOPE, 'pdf_preview_load_failed', {
                 error: message,
                 pdfUriPreview: toSafeUriPreview(pdfUri),
+                pdfPartNumber: selectedPdfIndex + 1,
+                pdfPartCount,
                 fileExists: fileInfo.exists,
                 fileSizeBytes: fileInfo.sizeBytes,
               });
@@ -286,6 +376,31 @@ export default function PdfPreviewScreen() {
       </View>
 
       <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+        {pdfPartCount > 1 ? (
+          <View style={styles.partSwitcher}>
+            <Pressable
+              disabled={selectedPdfIndex <= 0 || isSharing || isPrinting}
+              onPress={handlePreviousPdf}
+              style={[
+                styles.partNavButton,
+                (selectedPdfIndex <= 0 || isSharing || isPrinting) && styles.buttonDisabled,
+              ]}>
+              <Text style={styles.partNavButtonText}>{'上一份'}</Text>
+            </Pressable>
+            <Text style={styles.partIndicator}>
+              {'第'} {selectedPdfIndex + 1} / {pdfPartCount} {'份'}
+            </Text>
+            <Pressable
+              disabled={selectedPdfIndex >= pdfPartCount - 1 || isSharing || isPrinting}
+              onPress={handleNextPdf}
+              style={[
+                styles.partNavButton,
+                (selectedPdfIndex >= pdfPartCount - 1 || isSharing || isPrinting) && styles.buttonDisabled,
+              ]}>
+              <Text style={styles.partNavButtonText}>{'下一份'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
         {!loadError ? (
           isLoading ? (
             <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
@@ -303,7 +418,7 @@ export default function PdfPreviewScreen() {
                     (isSharing || isPrinting || !pdfUri) && styles.buttonDisabled,
                   ]}>
                   <Text style={styles.primaryButtonText}>
-                    {isSharing ? '分享中...' : '分享 PDF'}
+                    {isSharing ? '分享中...' : pdfPartCount > 1 ? '分享本份 PDF' : '分享 PDF'}
                   </Text>
                 </Pressable>
                 <Pressable
@@ -311,7 +426,7 @@ export default function PdfPreviewScreen() {
                   onPress={() => void handlePrintPdf()}
                   style={[styles.secondaryWideButton, (isPrinting || isSharing || !pdfUri) && styles.buttonDisabled]}>
                   <Text style={styles.secondaryButtonText}>
-                    {isPrinting ? '打印中...' : '打印'}
+                    {isPrinting ? '打印中...' : pdfPartCount > 1 ? '打印本份' : '打印'}
                   </Text>
                 </Pressable>
               </View>
@@ -341,7 +456,7 @@ export default function PdfPreviewScreen() {
                 onPress={() => void handleSharePdf()}
                 style={[styles.secondaryWideButton, (isSharing || isPrinting || !pdfUri) && styles.buttonDisabled]}>
                 <Text style={styles.secondaryButtonText}>
-                  {isSharing ? '分享中...' : '分享 PDF'}
+                  {isSharing ? '分享中...' : pdfPartCount > 1 ? '分享本份 PDF' : '分享 PDF'}
                 </Text>
               </Pressable>
               <Pressable
@@ -349,7 +464,7 @@ export default function PdfPreviewScreen() {
                 onPress={() => void handlePrintPdf()}
                 style={[styles.secondaryWideButton, (isPrinting || isSharing || !pdfUri) && styles.buttonDisabled]}>
                 <Text style={styles.secondaryButtonText}>
-                  {isPrinting ? '打印中...' : '打印'}
+                  {isPrinting ? '打印中...' : pdfPartCount > 1 ? '打印本份' : '打印'}
                 </Text>
               </Pressable>
             </View>
@@ -434,6 +549,35 @@ const styles = StyleSheet.create({
   rowButtons: {
     flexDirection: 'row',
     gap: spacing.sm,
+  },
+  partSwitcher: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  partNavButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  partNavButtonText: {
+    ...typography.caption,
+    color: '#1F2937',
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  partIndicator: {
+    flex: 1,
+    ...typography.caption,
+    color: '#475569',
+    fontWeight: '700',
+    textAlign: 'center',
   },
   primaryButton: {
     minHeight: 48,

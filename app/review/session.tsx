@@ -97,6 +97,7 @@ interface ModuleFilterOption {
   value: ModuleFilterValue;
   label: string;
   count: number;
+  remainingCount: number;
 }
 
 interface SubmittedReviewEntry {
@@ -202,6 +203,44 @@ function isQueueItemInModuleFilter(
     return true;
   }
   return normalizeModuleFilterValue(item.module) === moduleFilter;
+}
+
+function formatModuleFilterOptionText(option: ModuleFilterOption): string {
+  if (option.count <= 0) {
+    return option.label;
+  }
+  if (option.remainingCount <= 0) {
+    return `${option.label} \u5df2\u5b8c\u6210`;
+  }
+  return `${option.label} \u5269${option.remainingCount}/${option.count}`;
+}
+
+function formatModuleFilterAccessibilityLabel(option: ModuleFilterOption): string {
+  if (option.count <= 0) {
+    return `\u7b5b\u9009${option.label}\u6a21\u5757`;
+  }
+  if (option.remainingCount <= 0) {
+    return `\u7b5b\u9009${option.label}\u6a21\u5757\uff0c\u5df2\u5b8c\u6210\uff0c\u5171${option.count}\u9053`;
+  }
+  return `\u7b5b\u9009${option.label}\u6a21\u5757\uff0c\u5269${option.remainingCount}\u9053\uff0c\u5171${option.count}\u9053`;
+}
+
+function formatModuleFilterHint(option: ModuleFilterOption | null, selectedModuleFilter: ModuleFilterValue): string {
+  if (!option) {
+    return selectedModuleFilter === null
+      ? '\u5df2\u7b5b\u9009\uff1a\u663e\u793a\u5168\u90e8\u4eca\u65e5\u590d\u505a\u9898'
+      : `\u5df2\u7b5b\u9009\uff1a\u4ec5\u663e\u793a\u201c${selectedModuleFilter}\u201d\u6a21\u5757\u590d\u505a\u9898`;
+  }
+
+  if (option.remainingCount <= 0) {
+    return selectedModuleFilter === null
+      ? `\u5df2\u7b5b\u9009\uff1a\u5168\u90e8\u5df2\u5b8c\u6210\uff0c\u5171 ${option.count} \u9053\u4eca\u65e5\u590d\u505a\u9898`
+      : `\u5df2\u7b5b\u9009\uff1a\u201c${selectedModuleFilter}\u201d\u6a21\u5757\u5df2\u5b8c\u6210\uff0c\u5171 ${option.count} \u9053\u590d\u505a\u9898`;
+  }
+
+  return selectedModuleFilter === null
+    ? `\u5df2\u7b5b\u9009\uff1a\u5168\u90e8\u5269 ${option.remainingCount}/${option.count} \u9053\u4eca\u65e5\u590d\u505a\u9898`
+    : `\u5df2\u7b5b\u9009\uff1a\u201c${selectedModuleFilter}\u201d\u6a21\u5757\u5269 ${option.remainingCount}/${option.count} \u9053\u590d\u505a\u9898`;
 }
 
 function isCancelLikeMessage(input?: string): boolean {
@@ -450,7 +489,7 @@ function ModuleFilterSheet({
                 <Pressable
                   key={option.key}
                   accessibilityRole="button"
-                  accessibilityLabel={`筛选${option.label}模块，共${option.count}道`}
+                  accessibilityLabel={formatModuleFilterAccessibilityLabel(option)}
                   onPress={() => onSelectOption(option.value)}
                   style={({ pressed }) => [
                     styles.moduleFilterSheetChip,
@@ -464,7 +503,7 @@ function ModuleFilterSheet({
                       styles.moduleFilterChipText,
                       selected ? styles.moduleFilterChipTextSelected : null,
                     ]}>
-                    {`${option.label} ${option.count}`}
+                    {formatModuleFilterOptionText(option)}
                   </Text>
                 </Pressable>
               );
@@ -1124,10 +1163,19 @@ export default function ReviewSessionPage() {
     !currentSubmittedReviewEntry && (!!reviewSolutionImage || !!voiceNote || isVoiceRecording);
 
   const moduleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
-    const moduleCounts = new Map<string, number>();
+    const moduleCounts = new Map<string, { count: number; remainingCount: number }>();
+    let allRemainingCount = 0;
     for (const item of queue) {
       const moduleName = normalizeModuleFilterValue(item.module);
-      moduleCounts.set(moduleName, (moduleCounts.get(moduleName) ?? 0) + 1);
+      const previous = moduleCounts.get(moduleName) ?? { count: 0, remainingCount: 0 };
+      const isRemaining = !submittedMistakeIds.has(item.id);
+      if (isRemaining) {
+        allRemainingCount += 1;
+      }
+      moduleCounts.set(moduleName, {
+        count: previous.count + 1,
+        remainingCount: previous.remainingCount + (isRemaining ? 1 : 0),
+      });
     }
 
     const options: ModuleFilterOption[] = [
@@ -1136,20 +1184,22 @@ export default function ReviewSessionPage() {
         value: null,
         label: '全部',
         count: queue.length,
+        remainingCount: allRemainingCount,
       },
     ];
 
-    for (const [moduleName, count] of moduleCounts) {
+    for (const [moduleName, stats] of moduleCounts) {
       options.push({
         key: `module:${moduleName}`,
         value: moduleName,
         label: moduleName,
-        count,
+        count: stats.count,
+        remainingCount: stats.remainingCount,
       });
     }
 
     return options;
-  }, [queue]);
+  }, [queue, submittedMistakeIds]);
 
   const inlineModuleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
     if (moduleFilterOptions.length <= INLINE_MODULE_FILTER_OPTION_LIMIT) {
@@ -1189,10 +1239,12 @@ export default function ReviewSessionPage() {
     [currentFilterQueue, submittedMistakeIds],
   );
   const selectedModuleLabel = selectedModuleFilter ?? '全部';
-  const moduleFilterHintText =
-    selectedModuleFilter === null
-      ? `已筛选：显示全部 ${currentFilterTotal} 道今日复做题`
-      : `已筛选：仅显示“${selectedModuleFilter}”模块 ${currentFilterTotal} 道复做题`;
+  const selectedModuleFilterOption =
+    moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
+  const moduleFilterHintText = formatModuleFilterHint(
+    selectedModuleFilterOption,
+    selectedModuleFilter,
+  );
   const currentFilterItemIndex = currentQueueItem
     ? currentFilterQueue.findIndex((item) => item.id === currentQueueItem.id)
     : -1;
@@ -2973,7 +3025,7 @@ export default function ReviewSessionPage() {
                     <Pressable
                       key={option.key}
                       accessibilityRole="button"
-                      accessibilityLabel={`筛选${option.label}模块，共${option.count}道`}
+                      accessibilityLabel={formatModuleFilterAccessibilityLabel(option)}
                       onPress={() => handleSelectModuleFilter(option.value)}
                       style={({ pressed }) => [
                         styles.moduleFilterChip,
@@ -2987,7 +3039,7 @@ export default function ReviewSessionPage() {
                           styles.moduleFilterChipText,
                           selected ? styles.moduleFilterChipTextSelected : null,
                         ]}>
-                        {`${option.label} ${option.count}`}
+                        {formatModuleFilterOptionText(option)}
                       </Text>
                     </Pressable>
                   );
@@ -3412,7 +3464,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   moduleFilterChip: {
-    minWidth: 92,
+    minWidth: 116,
     height: 38,
     borderRadius: radius.pill,
     borderWidth: 1,
@@ -3468,7 +3520,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
   },
   moduleFilterSheetChip: {
-    minWidth: 96,
+    minWidth: 118,
     maxWidth: '48%',
     height: 40,
     borderRadius: radius.pill,
