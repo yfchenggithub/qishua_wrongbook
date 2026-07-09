@@ -47,6 +47,12 @@ import type { DetailImageSlot, DetailReviewRecordItem } from '@/src/models/Mista
 import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import {
+  MusicBottomSheet,
+  MusicEntryButton,
+  MusicMiniPlayer,
+  useMusicInterruption,
+} from '@/src/music';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewDraftImageEditService from '@/src/services/ReviewDraftImageEditService';
@@ -1090,6 +1096,7 @@ function ReviewSolutionImageCard({
 export default function ReviewSessionPage() {
   const router = useRouter();
   const navigation = useNavigation();
+  const { pauseForInterruption, resumeAfterInterruption } = useMusicInterruption();
   const { initialMistakeId } = useLocalSearchParams<{
     initialMistakeId?: string | string[];
   }>();
@@ -1133,6 +1140,7 @@ export default function ReviewSessionPage() {
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
   const [reviewTextNote, setReviewTextNote] = useState('');
   const [isReviewTextEditorVisible, setIsReviewTextEditorVisible] = useState(false);
+  const [musicSheetVisible, setMusicSheetVisible] = useState(false);
   const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
   const [isReviewSolutionImageBusy, setIsReviewSolutionImageBusy] = useState(false);
   const [actionBarHeight, setActionBarHeight] = useState(0);
@@ -1157,6 +1165,7 @@ export default function ReviewSessionPage() {
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceReplacePendingUriRef = useRef<string | null>(null);
   const voiceStopInProgressRef = useRef(false);
+  const voiceMusicInterruptionActiveRef = useRef(false);
   const allowNextLeaveRef = useRef(false);
   const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
   const currentIndexRef = useRef(0);
@@ -1484,17 +1493,34 @@ export default function ReviewSessionPage() {
     }
   }, []);
 
+  const beginVoiceMusicInterruption = useCallback(() => {
+    if (voiceMusicInterruptionActiveRef.current) {
+      return;
+    }
+    voiceMusicInterruptionActiveRef.current = true;
+    pauseForInterruption();
+  }, [pauseForInterruption]);
+
+  const endVoiceMusicInterruption = useCallback(() => {
+    if (!voiceMusicInterruptionActiveRef.current) {
+      return;
+    }
+    voiceMusicInterruptionActiveRef.current = false;
+    void resumeAfterInterruption();
+  }, [resumeAfterInterruption]);
+
   const stopVoicePlayback = useCallback(
     async (showErrorToast = false) => {
       clearVoicePlaybackResetTimer();
       setIsVoicePlaying(false);
 
       const stopResult = await VoiceNoteService.stopPlaying();
+      endVoiceMusicInterruption();
       if (!stopResult.ok && showErrorToast) {
         showToast(toShortErrorMessage(stopResult.errorMessage), 'error', TOAST_DURATION_LONG);
       }
     },
-    [clearVoicePlaybackResetTimer, showToast],
+    [clearVoicePlaybackResetTimer, endVoiceMusicInterruption, showToast],
   );
 
   const startVoiceRecording = useCallback(
@@ -1522,8 +1548,11 @@ export default function ReviewSessionPage() {
       const existingUri = isRerecord && !currentSubmittedReviewEntry ? voiceNote?.fileUri ?? null : null;
       voiceReplacePendingUriRef.current = existingUri;
 
+      await stopVoicePlayback(false);
+      beginVoiceMusicInterruption();
       const startResult = await VoiceNoteService.startRecording();
       if (!startResult.ok) {
+        endVoiceMusicInterruption();
         voiceReplacePendingUriRef.current = null;
         Logger.warn(PAGE_SCOPE, 'start_recording', {
           granted: true,
@@ -1535,7 +1564,6 @@ export default function ReviewSessionPage() {
         return;
       }
 
-      await stopVoicePlayback(false);
       setIsVoiceRecording(true);
       setIsVoiceRecordingPaused(false);
       setRecordingElapsedMs(0);
@@ -1551,6 +1579,8 @@ export default function ReviewSessionPage() {
       isSubmitting,
       isVoiceBusy,
       isVoiceRecording,
+      beginVoiceMusicInterruption,
+      endVoiceMusicInterruption,
       stopVoicePlayback,
       showToast,
       voiceNote?.fileUri,
@@ -1607,6 +1637,7 @@ export default function ReviewSessionPage() {
       voiceStopInProgressRef.current = true;
       setIsVoiceBusy(true);
       const saveResult = await VoiceNoteService.stopAndSaveRecording();
+      endVoiceMusicInterruption();
       const replaceUri = voiceReplacePendingUriRef.current;
 
       voiceReplacePendingUriRef.current = null;
@@ -1657,7 +1688,7 @@ export default function ReviewSessionPage() {
       setIsVoiceBusy(false);
       voiceStopInProgressRef.current = false;
     },
-    [isVoiceBusy, isVoiceRecording, showToast],
+    [endVoiceMusicInterruption, isVoiceBusy, isVoiceRecording, showToast],
   );
 
   const playVoiceNote = useCallback(async () => {
@@ -1671,8 +1702,10 @@ export default function ReviewSessionPage() {
     }
 
     setIsVoiceBusy(true);
+    beginVoiceMusicInterruption();
     const playResult = await VoiceNoteService.playVoiceNote(voiceNote.fileUri);
     if (!playResult.ok) {
+      endVoiceMusicInterruption();
       showToast(toShortErrorMessage(playResult.errorMessage), 'error', TOAST_DURATION_LONG);
       setIsVoiceBusy(false);
       return;
@@ -1683,10 +1716,13 @@ export default function ReviewSessionPage() {
     voicePlaybackResetTimerRef.current = setTimeout(() => {
       setIsVoicePlaying(false);
       voicePlaybackResetTimerRef.current = null;
+      endVoiceMusicInterruption();
     }, Math.max(voiceNote.durationMs + VOICE_PLAYBACK_END_BUFFER_MS, 1000));
     setIsVoiceBusy(false);
   }, [
     clearVoicePlaybackResetTimer,
+    beginVoiceMusicInterruption,
+    endVoiceMusicInterruption,
     isVoiceBusy,
     isVoicePlaying,
     isVoiceRecording,
@@ -1785,8 +1821,6 @@ export default function ReviewSessionPage() {
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
 
-    await stopVoicePlayback(false);
-
     if (shouldDiscardRecording) {
       const discardResult = await VoiceNoteService.stopAndDiscardRecording();
       if (!discardResult.ok) {
@@ -1795,6 +1829,8 @@ export default function ReviewSessionPage() {
         });
       }
     }
+
+    await stopVoicePlayback(false);
 
     if (voiceNoteToDelete?.fileUri) {
       const deleteVoiceResult = await VoiceNoteService.deleteVoiceNote(voiceNoteToDelete.fileUri);
@@ -2531,7 +2567,7 @@ export default function ReviewSessionPage() {
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
     clearVoicePlaybackResetTimer();
-    void VoiceNoteService.stopAndDiscardRecording();
+    void VoiceNoteService.stopAndDiscardRecording().finally(endVoiceMusicInterruption);
 
     try {
       const todayQueue = await ReviewSessionService.getTodayReviewSessionQueue();
@@ -2564,7 +2600,7 @@ export default function ReviewSessionPage() {
       setSessionErrorMessage('读取今日复做队列失败，请稍后重试。');
       setSessionState('error');
     }
-  }, [clearVoicePlaybackResetTimer, routeInitialMistakeId]);
+  }, [clearVoicePlaybackResetTimer, endVoiceMusicInterruption, routeInitialMistakeId]);
 
   useEffect(() => {
     void loadQueue();
@@ -2579,8 +2615,9 @@ export default function ReviewSessionPage() {
       clearVoicePlaybackResetTimer();
       void VoiceNoteService.stopPlaying();
       void VoiceNoteService.stopAndDiscardRecording();
+      endVoiceMusicInterruption();
     },
-    [clearVoicePlaybackResetTimer],
+    [clearVoicePlaybackResetTimer, endVoiceMusicInterruption],
   );
 
   useEffect(() => {
@@ -2625,7 +2662,7 @@ export default function ReviewSessionPage() {
       voiceReplacePendingUriRef.current = null;
       voiceStopInProgressRef.current = false;
       clearVoicePlaybackResetTimer();
-      void VoiceNoteService.stopAndDiscardRecording();
+      void VoiceNoteService.stopAndDiscardRecording().finally(endVoiceMusicInterruption);
       return;
     }
 
@@ -2642,9 +2679,15 @@ export default function ReviewSessionPage() {
     voiceReplacePendingUriRef.current = null;
     voiceStopInProgressRef.current = false;
     clearVoicePlaybackResetTimer();
-    void stopVoicePlayback(false);
-    void VoiceNoteService.stopAndDiscardRecording();
-  }, [clearVoicePlaybackResetTimer, currentQueueItemId, stopVoicePlayback]);
+    void VoiceNoteService.stopAndDiscardRecording().finally(() => {
+      void stopVoicePlayback(false);
+    });
+  }, [
+    clearVoicePlaybackResetTimer,
+    currentQueueItemId,
+    endVoiceMusicInterruption,
+    stopVoicePlayback,
+  ]);
 
   useEffect(() => {
     if (!currentQueueItem || sessionState !== 'ready' || isCompleted) {
@@ -3037,13 +3080,16 @@ export default function ReviewSessionPage() {
           <Text style={styles.exitButtonText}>退出今日复做</Text>
         </Pressable>
 
-        <BrandHeader
-          title="今日复做"
-          subtitle=""
-          style={styles.brandHeader}
-          titleStyle={styles.brandHeaderTitle}
-          subtitleStyle={styles.brandHeaderSubtitleHidden}
-        />
+        <View style={styles.headerRow}>
+          <BrandHeader
+            title="今日复做"
+            subtitle=""
+            style={styles.brandHeader}
+            titleStyle={styles.brandHeaderTitle}
+            subtitleStyle={styles.brandHeaderSubtitleHidden}
+          />
+          <MusicEntryButton onPress={() => setMusicSheetVisible(true)} />
+        </View>
 
         {sessionState === 'loading' ? (
           <CardContainer style={styles.stateCard} padding={spacing.lg}>
@@ -3393,6 +3439,10 @@ export default function ReviewSessionPage() {
               </CardContainer>
             ) : null}
 
+            {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
+              <MusicMiniPlayer onOpen={() => setMusicSheetVisible(true)} />
+            ) : null}
+
           </>
         ) : null}
       </ScreenContainer>
@@ -3444,6 +3494,11 @@ export default function ReviewSessionPage() {
         onClose={handleCloseReviewTextEditor}
         onSave={handleSaveReviewTextDraft}
         saveLabel="完成"
+      />
+
+      <MusicBottomSheet
+        visible={musicSheetVisible}
+        onClose={() => setMusicSheetVisible(false)}
       />
 
       {showResultActions ? (
@@ -3548,7 +3603,14 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     backgroundColor: 'transparent',
   },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+  },
   brandHeader: {
+    flex: 1,
     gap: spacing.xs,
   },
   brandHeaderTitle: {

@@ -58,6 +58,7 @@ import type {
 } from '@/src/models/MistakeDetailViewModel';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import { useMusicInterruption } from '@/src/music';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
@@ -1148,6 +1149,7 @@ export default function MistakeDetailScreen() {
   const router = useRouter();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { pauseForInterruption, resumeAfterInterruption } = useMusicInterruption();
   const { id, switchFrom } = useLocalSearchParams<{
     id?: string | string[];
     switchFrom?: string | string[];
@@ -1201,6 +1203,7 @@ export default function MistakeDetailScreen() {
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voiceStopInProgressRef = useRef(false);
+  const voiceMusicInterruptionActiveRef = useRef(false);
   const isScrollDraggingRef = useRef(false);
   const lastScrollYRef = useRef(0);
   const maxScrollYRef = useRef(0);
@@ -1432,12 +1435,29 @@ export default function MistakeDetailScreen() {
     }
   }, []);
 
+  const beginVoiceMusicInterruption = useCallback(() => {
+    if (voiceMusicInterruptionActiveRef.current) {
+      return;
+    }
+    voiceMusicInterruptionActiveRef.current = true;
+    pauseForInterruption();
+  }, [pauseForInterruption]);
+
+  const endVoiceMusicInterruption = useCallback(() => {
+    if (!voiceMusicInterruptionActiveRef.current) {
+      return;
+    }
+    voiceMusicInterruptionActiveRef.current = false;
+    void resumeAfterInterruption();
+  }, [resumeAfterInterruption]);
+
   const stopVoicePlayback = useCallback(
     async (showErrorToast = false) => {
       clearVoicePlaybackResetTimer();
       setActiveVoiceRecordId(null);
 
       const stopResult = await VoiceNoteService.stopPlaying();
+      endVoiceMusicInterruption();
       if (!stopResult.ok) {
         Logger.warn(PAGE_SCOPE, 'Failed to stop detail review voice playback.', {
           errorMessage: stopResult.errorMessage ?? null,
@@ -1447,7 +1467,7 @@ export default function MistakeDetailScreen() {
         }
       }
     },
-    [clearVoicePlaybackResetTimer, showToast],
+    [clearVoicePlaybackResetTimer, endVoiceMusicInterruption, showToast],
   );
 
   const clearVoiceRecordingState = useCallback(() => {
@@ -1461,10 +1481,12 @@ export default function MistakeDetailScreen() {
   const discardVoiceRecording = useCallback(async () => {
     if (!activeVoiceRecordingRecordId) {
       clearVoiceRecordingState();
+      endVoiceMusicInterruption();
       return true;
     }
 
     const discardResult = await VoiceNoteService.stopAndDiscardRecording();
+    endVoiceMusicInterruption();
     if (!discardResult.ok) {
       Logger.warn(PAGE_SCOPE, 'Failed to discard detail review voice recording.', {
         reviewRecordId: activeVoiceRecordingRecordId,
@@ -1476,7 +1498,11 @@ export default function MistakeDetailScreen() {
 
     clearVoiceRecordingState();
     return true;
-  }, [activeVoiceRecordingRecordId, clearVoiceRecordingState]);
+  }, [
+    activeVoiceRecordingRecordId,
+    clearVoiceRecordingState,
+    endVoiceMusicInterruption,
+  ]);
 
   const confirmLeaveWhileRecording = useCallback(
     (onContinue: () => void) => {
@@ -2036,8 +2062,10 @@ export default function MistakeDetailScreen() {
         return;
       }
 
+      beginVoiceMusicInterruption();
       const startResult = await VoiceNoteService.startRecording();
       if (!startResult.ok) {
+        endVoiceMusicInterruption();
         Logger.warn(PAGE_SCOPE, 'start_recording', {
           granted: true,
           ok: false,
@@ -2057,6 +2085,8 @@ export default function MistakeDetailScreen() {
     },
     [
       activeVoiceRecordingRecordId,
+      beginVoiceMusicInterruption,
+      endVoiceMusicInterruption,
       isVoicePlaybackBusy,
       isVoiceRecordingBusy,
       showToast,
@@ -2084,6 +2114,7 @@ export default function MistakeDetailScreen() {
       setIsVoiceRecordingBusy(true);
 
       const saveResult = await VoiceNoteService.stopAndSaveRecording();
+      endVoiceMusicInterruption();
       const boundReviewRecordId = record.id;
       setActiveVoiceRecordingRecordId(null);
       setRecordingElapsedMs(0);
@@ -2151,6 +2182,7 @@ export default function MistakeDetailScreen() {
     },
     [
       activeVoiceRecordingRecordId,
+      endVoiceMusicInterruption,
       isVoiceRecordingBusy,
       refreshDetail,
       showToast,
@@ -2206,8 +2238,10 @@ export default function MistakeDetailScreen() {
         });
       }
 
+      beginVoiceMusicInterruption();
       const playResult = await VoiceNoteService.playVoiceNote(fileUri);
       if (!playResult.ok) {
+        endVoiceMusicInterruption();
         setActiveVoiceRecordId(null);
         const isFileMissing = playResult.errorMessage?.includes('语音文件不存在');
         if (isFileMissing) {
@@ -2228,6 +2262,7 @@ export default function MistakeDetailScreen() {
       voicePlaybackResetTimerRef.current = setTimeout(() => {
         setActiveVoiceRecordId((current) => (current === record.id ? null : current));
         voicePlaybackResetTimerRef.current = null;
+        endVoiceMusicInterruption();
       }, Math.max(voiceNote.durationMs + VOICE_PLAYBACK_END_BUFFER_MS, 1000));
 
       setIsVoicePlaybackBusy(false);
@@ -2235,7 +2270,9 @@ export default function MistakeDetailScreen() {
     [
       activeVoiceRecordingRecordId,
       activeVoiceRecordId,
+      beginVoiceMusicInterruption,
       clearVoicePlaybackResetTimer,
+      endVoiceMusicInterruption,
       isVoicePlaybackBusy,
       showToast,
       stopVoicePlayback,
@@ -2521,10 +2558,16 @@ export default function MistakeDetailScreen() {
         setActiveVoiceRecordId(null);
         setIsVoicePlaybackBusy(false);
         clearVoiceRecordingState();
-        void VoiceNoteService.stopPlaying();
-        void VoiceNoteService.stopAndDiscardRecording();
+        void Promise.all([
+          VoiceNoteService.stopPlaying(),
+          VoiceNoteService.stopAndDiscardRecording(),
+        ]).finally(endVoiceMusicInterruption);
       };
-    }, [clearVoicePlaybackResetTimer, clearVoiceRecordingState]),
+    }, [
+      clearVoicePlaybackResetTimer,
+      clearVoiceRecordingState,
+      endVoiceMusicInterruption,
+    ]),
   );
 
   useEffect(
@@ -2543,10 +2586,12 @@ export default function MistakeDetailScreen() {
       }
       voiceRecordingStartedAtRef.current = null;
       voiceStopInProgressRef.current = false;
-      void VoiceNoteService.stopPlaying();
-      void VoiceNoteService.stopAndDiscardRecording();
+      void Promise.all([
+        VoiceNoteService.stopPlaying(),
+        VoiceNoteService.stopAndDiscardRecording(),
+      ]).finally(endVoiceMusicInterruption);
     },
-    [],
+    [endVoiceMusicInterruption],
   );
 
   useEffect(() => {

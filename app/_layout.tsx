@@ -9,6 +9,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { initDatabase } from '@/src/db';
+import { MusicProvider } from '@/src/music';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 
@@ -116,17 +117,19 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-          <Stack>
-            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-            <Stack.Screen name="mistake/[id]" options={{ headerShown: false }} />
-            <Stack.Screen name="mistake/[id]/image-edit" options={{ headerShown: false }} />
-            <Stack.Screen name="review/session" options={{ headerShown: false }} />
-            <Stack.Screen name="pdf-preview" options={{ title: '今日练习卷 PDF' }} />
-            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-          </Stack>
-          <StatusBar style="auto" />
-        </ThemeProvider>
+        <MusicProvider>
+          <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+            <Stack>
+              <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+              <Stack.Screen name="mistake/[id]" options={{ headerShown: false }} />
+              <Stack.Screen name="mistake/[id]/image-edit" options={{ headerShown: false }} />
+              <Stack.Screen name="review/session" options={{ headerShown: false }} />
+              <Stack.Screen name="pdf-preview" options={{ title: '今日练习卷 PDF' }} />
+              <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            </Stack>
+            <StatusBar style="auto" />
+          </ThemeProvider>
+        </MusicProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
