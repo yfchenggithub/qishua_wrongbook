@@ -204,7 +204,6 @@ function SwipeZoomImageStage({
   useEffect(() => {
     setImageFailed(false);
     setIntrinsicSize(null);
-    setContainerSizeState({ width: 0, height: 0 });
 
     scale.value = MIN_SCALE;
     pinchStartScale.value = MIN_SCALE;
