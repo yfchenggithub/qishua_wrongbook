@@ -11,11 +11,9 @@ export type UpsertReviewRecordTextParams = {
   note: string;
 };
 
-export type UpsertReviewRecordTextResult = {
-  ok: boolean;
-  note?: string;
-  errorMessage?: string;
-};
+export type UpsertReviewRecordTextResult =
+  | { ok: true; note: string | null }
+  | { ok: false; errorMessage: string };
 
 function normalizeRequiredText(value: string | null | undefined): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -41,9 +39,6 @@ export async function upsertReviewRecordText(
   if (!reviewRecordId) {
     return { ok: false, errorMessage: '复做记录 id 不能为空。' };
   }
-  if (!note) {
-    return { ok: false, errorMessage: '文本讲解不能为空。' };
-  }
   if (note.length > REVIEW_TEXT_NOTE_MAX_LENGTH) {
     return {
       ok: false,
@@ -61,7 +56,11 @@ export async function upsertReviewRecordText(
     }
 
     const updated = await withDatabaseTransaction((db) =>
-      ReviewRecordRepository.updateReviewRecordNoteInTransaction(db, reviewRecordId, note),
+      ReviewRecordRepository.updateReviewRecordNoteInTransaction(
+        db,
+        reviewRecordId,
+        note.length > 0 ? note : null,
+      ),
     );
     if (!updated) {
       return { ok: false, errorMessage: '复做记录不存在，请刷新后重试。' };
@@ -72,7 +71,7 @@ export async function upsertReviewRecordText(
       reviewRecordId,
       noteLength: note.length,
     });
-    return { ok: true, note };
+    return { ok: true, note: note.length > 0 ? note : null };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'upsertReviewRecordText failed.', {
       mistakeId,

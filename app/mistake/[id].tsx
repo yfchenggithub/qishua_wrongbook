@@ -32,6 +32,8 @@ import {
   ScreenContainer,
   SectionTitle,
   StatusPill,
+  TextNoteEditorModal,
+  TextNotePreview,
 } from '@/src/components';
 import { useMistakeDetailImages } from '@/src/hooks/useMistakeDetailImages';
 import {
@@ -80,8 +82,6 @@ const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
 const TOAST_DURATION_SHORT = 1400;
 const TITLE_DOUBLE_TAP_WINDOW_MS = 280;
-const NOTE_DOUBLE_TAP_WINDOW_MS = 300;
-const NOTE_SAVE_DEBOUNCE_MS = 800;
 const NOTE_MAX_LENGTH = MistakeDetailService.MISTAKE_DETAIL_NOTE_MAX_LENGTH;
 const NOTE_PLACEHOLDER = '点击输入备注，记录你的思考或重点...';
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
@@ -617,6 +617,7 @@ function ReviewRecordCard({
   isTextActionDisabled = false,
   onAddImage,
   onAddText,
+  onOpenText,
   onPreview,
   onOpenImageActions,
   onToggleVoicePlayback,
@@ -634,6 +635,7 @@ function ReviewRecordCard({
   isTextActionDisabled?: boolean;
   onAddImage?: (record: DetailReviewRecordItem) => void;
   onAddText?: (record: DetailReviewRecordItem) => void;
+  onOpenText?: (record: DetailReviewRecordItem) => void;
   onPreview?: (targetImageId: string) => void;
   onOpenImageActions?: (record: DetailReviewRecordItem) => void;
   onToggleVoicePlayback?: (record: DetailReviewRecordItem) => void;
@@ -731,12 +733,19 @@ function ReviewRecordCard({
         {reviewTextNote ? (
           <View style={styles.reviewRecordTextNote}>
             <View style={styles.reviewRecordTextNoteHeader}>
-              <MaterialIcons name="edit-note" size={16} color="#7C3AED" />
-              <Text style={styles.reviewRecordTextNoteLabel}>文字讲解</Text>
+              <View style={styles.reviewRecordTextNoteHeaderTitle}>
+                <MaterialIcons name="edit-note" size={16} color="#7C3AED" />
+                <Text style={styles.reviewRecordTextNoteLabel}>文字讲解</Text>
+              </View>
             </View>
-            <Text selectable style={styles.reviewRecordTextNoteContent}>
-              {reviewTextNote}
-            </Text>
+            <TextNotePreview
+              value={reviewTextNote}
+              emptyText="未添加文本讲解"
+              maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+              accessibilityLabel={`第 ${record.reviewIndex} 刷文字讲解`}
+              onOpen={() => onOpenText?.(record)}
+              textStyle={styles.reviewRecordTextNoteContent}
+            />
           </View>
         ) : (
           <View style={styles.reviewRecordTextEmptyRow}>
@@ -1159,9 +1168,8 @@ export default function MistakeDetailScreen() {
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [noteInput, setNoteInput] = useState('');
-  const [isNoteFocused, setIsNoteFocused] = useState(false);
-  const [isNoteEditing, setIsNoteEditing] = useState(false);
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
+  const [noteModalMessage, setNoteModalMessage] = useState<string | null>(null);
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isDeletingMistake, setIsDeletingMistake] = useState(false);
   const [customModules, setCustomModules] = useState<CustomModule[]>([]);
@@ -1176,7 +1184,6 @@ export default function MistakeDetailScreen() {
   const [metadataEditorMessage, setMetadataEditorMessage] = useState<string | null>(null);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
   const [reviewTextEditorRecordId, setReviewTextEditorRecordId] = useState<string | null>(null);
-  const [reviewTextDraft, setReviewTextDraft] = useState('');
   const [reviewTextEditorMessage, setReviewTextEditorMessage] = useState<string | null>(null);
   const [isSavingReviewText, setIsSavingReviewText] = useState(false);
   const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
@@ -1191,13 +1198,6 @@ export default function MistakeDetailScreen() {
   const browseRequestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const noteSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const noteInputRef = useRef<TextInput | null>(null);
-  const lastNoteReadTapAtRef = useRef(0);
-  const latestNoteInputRef = useRef('');
-  const syncedNoteInputRef = useRef('');
-  const syncedNoteMistakeIdRef = useRef<string | null>(null);
-  const lastNoteSaveFailedValueRef = useRef<string | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const voiceStopInProgressRef = useRef(false);
@@ -1324,13 +1324,6 @@ export default function MistakeDetailScreen() {
     [hideToast, toastOpacity, toastTranslateY],
   );
 
-  const clearNoteSaveTimer = useCallback(() => {
-    if (noteSaveTimerRef.current) {
-      clearTimeout(noteSaveTimerRef.current);
-      noteSaveTimerRef.current = null;
-    }
-  }, []);
-
   const loadModuleOptionsForPicker = useCallback(async () => {
     setIsModuleOptionsLoading(true);
     setModulePickerMessage(null);
@@ -1368,132 +1361,69 @@ export default function MistakeDetailScreen() {
     }
   }, [routeId]);
 
-  const handleSaveNote = useCallback(
-    async (nextValue?: string) => {
-      if (state.kind !== 'success' || isSavingNote) {
-        return;
-      }
-
-      const rawNextNote = typeof nextValue === 'string' ? nextValue : latestNoteInputRef.current;
-      const normalizedNextNote = normalizeNoteDraft(rawNextNote);
-      const normalizedCurrentNote = normalizeNoteDraft(state.detail.note ?? null);
-      if (normalizedNextNote === normalizedCurrentNote) {
-        return;
-      }
-
-      setIsSavingNote(true);
-      try {
-        const result = await MistakeDetailService.updateMistakeNote({
-          mistakeId: state.detail.id,
-          note: normalizedNextNote.length > 0 ? normalizedNextNote : null,
-        });
-
-        if (!result.ok || !result.detail) {
-          lastNoteSaveFailedValueRef.current = normalizedNextNote;
-          showToast(result.errorMessage ?? '备注保存失败，请重试。', 'error');
-          return;
-        }
-
-        const updatedDetail = result.detail;
-        lastNoteSaveFailedValueRef.current = null;
-        setState((current) => {
-          if (current.kind !== 'success' || current.detail.id !== updatedDetail.id) {
-            return current;
-          }
-          return {
-            kind: 'success',
-            detail: updatedDetail,
-          };
-        });
-      } catch (error) {
-        lastNoteSaveFailedValueRef.current = normalizedNextNote;
-        Logger.error(PAGE_SCOPE, 'Unexpected error while updating note.', {
-          routeId,
-          error,
-        });
-        showToast(
-          error instanceof Error ? error.message : '备注保存失败，请重试。',
-          'error',
-        );
-      } finally {
-        setIsSavingNote(false);
-      }
-    },
-    [isSavingNote, routeId, showToast, state],
-  );
-
-  const handleChangeNote = useCallback((value: string) => {
-    const nextValue = clampNoteDraft(value);
-    latestNoteInputRef.current = nextValue;
-    const normalizedNextValue = normalizeNoteDraft(nextValue);
-    if (lastNoteSaveFailedValueRef.current !== normalizedNextValue) {
-      lastNoteSaveFailedValueRef.current = null;
-    }
-    setNoteInput(nextValue);
-  }, []);
-
-  const handleNoteBlur = useCallback(() => {
-    setIsNoteFocused(false);
-    clearNoteSaveTimer();
-    void handleSaveNote(latestNoteInputRef.current);
-  }, [clearNoteSaveTimer, handleSaveNote]);
-
-  const handleStartNoteEdit = useCallback(() => {
-    if (isDeletingMistake) {
+  const handleOpenNoteModal = useCallback(() => {
+    if (state.kind !== 'success' || isDeletingMistake) {
       return;
     }
-
-    setIsNoteModalVisible(false);
-    setIsNoteEditing(true);
-  }, [isDeletingMistake]);
-
-  const handleFinishNoteEdit = useCallback(() => {
-    setIsNoteEditing(false);
-    setIsNoteFocused(false);
-    noteInputRef.current?.blur();
-    clearNoteSaveTimer();
-    void handleSaveNote(latestNoteInputRef.current);
-  }, [clearNoteSaveTimer, handleSaveNote]);
-
-  const handleToggleNoteEdit = useCallback(() => {
-    if (isNoteEditing) {
-      handleFinishNoteEdit();
-      return;
-    }
-
-    handleStartNoteEdit();
-  }, [handleFinishNoteEdit, handleStartNoteEdit, isNoteEditing]);
-
-  const handlePressNoteRead = useCallback(() => {
-    if (isNoteEditing) {
-      return;
-    }
-
-    const now = Date.now();
-    if (now - lastNoteReadTapAtRef.current <= NOTE_DOUBLE_TAP_WINDOW_MS) {
-      lastNoteReadTapAtRef.current = 0;
-      setIsNoteModalVisible(true);
-      return;
-    }
-
-    lastNoteReadTapAtRef.current = now;
-  }, [isNoteEditing]);
+    setNoteInput(clampNoteDraft(state.detail.note ?? ''));
+    setNoteModalMessage(null);
+    setIsNoteModalVisible(true);
+  }, [isDeletingMistake, state]);
 
   const handleCloseNoteModal = useCallback(() => {
-    setIsNoteModalVisible(false);
-  }, []);
-
-  const handleClearNote = useCallback(() => {
-    if (!isNoteEditing || isSavingNote) {
+    if (isSavingNote) {
       return;
     }
+    if (state.kind === 'success') {
+      setNoteInput(clampNoteDraft(state.detail.note ?? ''));
+    }
+    setNoteModalMessage(null);
+    setIsNoteModalVisible(false);
+  }, [isSavingNote, state]);
 
-    clearNoteSaveTimer();
-    lastNoteSaveFailedValueRef.current = null;
-    latestNoteInputRef.current = '';
-    setNoteInput('');
-    void handleSaveNote('');
-  }, [clearNoteSaveTimer, handleSaveNote, isNoteEditing, isSavingNote]);
+  const handleSaveNote = useCallback(async (value: string): Promise<boolean> => {
+    if (state.kind !== 'success' || isSavingNote) {
+      return false;
+    }
+
+    const normalizedNextNote = normalizeNoteDraft(value);
+    const normalizedCurrentNote = normalizeNoteDraft(state.detail.note ?? null);
+    if (normalizedNextNote === normalizedCurrentNote) {
+      return true;
+    }
+
+    setIsSavingNote(true);
+    setNoteModalMessage(null);
+    try {
+      const result = await MistakeDetailService.updateMistakeNote({
+        mistakeId: state.detail.id,
+        note: normalizedNextNote.length > 0 ? normalizedNextNote : null,
+      });
+
+      if (!result.ok || !result.detail) {
+        const message = result.errorMessage ?? '备注保存失败，请重试。';
+        setNoteModalMessage(message);
+        showToast(message, 'error');
+        return false;
+      }
+
+      setState({ kind: 'success', detail: result.detail });
+      setNoteInput(clampNoteDraft(result.detail.note ?? ''));
+      showToast('备注已保存', 'success');
+      return true;
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Unexpected error while updating note.', {
+        routeId,
+        error,
+      });
+      const message = error instanceof Error ? error.message : '备注保存失败，请重试。';
+      setNoteModalMessage(message);
+      showToast(message, 'error');
+      return false;
+    } finally {
+      setIsSavingNote(false);
+    }
+  }, [isSavingNote, routeId, showToast, state]);
 
   const clearVoicePlaybackResetTimer = useCallback(() => {
     if (voicePlaybackResetTimerRef.current) {
@@ -2329,7 +2259,6 @@ export default function MistakeDetailScreen() {
       }
 
       setReviewTextEditorRecordId(record.id);
-      setReviewTextDraft(typeof record.note === 'string' ? record.note : '');
       setReviewTextEditorMessage(null);
     },
     [
@@ -2346,23 +2275,18 @@ export default function MistakeDetailScreen() {
       return;
     }
     setReviewTextEditorRecordId(null);
-    setReviewTextDraft('');
     setReviewTextEditorMessage(null);
   }, [isSavingReviewText]);
 
-  const handleSaveReviewText = useCallback(async () => {
+  const handleSaveReviewText = useCallback(async (value: string): Promise<boolean> => {
     if (state.kind !== 'success' || !reviewTextEditorRecordId || isSavingReviewText) {
-      return;
+      return false;
     }
 
-    const note = reviewTextDraft.trim();
-    if (!note) {
-      setReviewTextEditorMessage('请输入文本讲解。');
-      return;
-    }
+    const note = value.trim();
     if (note.length > REVIEW_TEXT_NOTE_MAX_LENGTH) {
       setReviewTextEditorMessage(`文本讲解不能超过 ${REVIEW_TEXT_NOTE_MAX_LENGTH} 字。`);
-      return;
+      return false;
     }
 
     const targetRecord = state.detail.reviewRecords.find(
@@ -2370,7 +2294,7 @@ export default function MistakeDetailScreen() {
     );
     if (!targetRecord) {
       setReviewTextEditorMessage('复做记录不存在，请刷新后重试。');
-      return;
+      return false;
     }
 
     setIsSavingReviewText(true);
@@ -2381,10 +2305,10 @@ export default function MistakeDetailScreen() {
       note,
     });
 
-    if (!saveResult.ok || !saveResult.note) {
+    if (!saveResult.ok) {
       setReviewTextEditorMessage(saveResult.errorMessage ?? '文本讲解保存失败，请重试。');
       setIsSavingReviewText(false);
-      return;
+      return false;
     }
 
     const savedNote = saveResult.note;
@@ -2403,13 +2327,11 @@ export default function MistakeDetailScreen() {
       };
     });
     setIsSavingReviewText(false);
-    setReviewTextEditorRecordId(null);
-    setReviewTextDraft('');
     setReviewTextEditorMessage(null);
-    showToast('文本讲解已保存', 'success');
+    showToast(savedNote ? '文本讲解已保存' : '文本讲解已清空', 'success');
+    return true;
   }, [
     isSavingReviewText,
-    reviewTextDraft,
     reviewTextEditorRecordId,
     showToast,
     state,
@@ -2615,10 +2537,6 @@ export default function MistakeDetailScreen() {
         clearTimeout(titleTapTimerRef.current);
         titleTapTimerRef.current = null;
       }
-      if (noteSaveTimerRef.current) {
-        clearTimeout(noteSaveTimerRef.current);
-        noteSaveTimerRef.current = null;
-      }
       if (voicePlaybackResetTimerRef.current) {
         clearTimeout(voicePlaybackResetTimerRef.current);
         voicePlaybackResetTimerRef.current = null;
@@ -2632,10 +2550,6 @@ export default function MistakeDetailScreen() {
   );
 
   useEffect(() => {
-    latestNoteInputRef.current = noteInput;
-  }, [noteInput]);
-
-  useEffect(() => {
     if (state.kind !== 'success') {
       return;
     }
@@ -2647,66 +2561,19 @@ export default function MistakeDetailScreen() {
 
   useEffect(() => {
     if (state.kind !== 'success') {
-      clearNoteSaveTimer();
-      latestNoteInputRef.current = '';
-      syncedNoteInputRef.current = '';
-      syncedNoteMistakeIdRef.current = null;
       setNoteInput('');
-      setIsNoteEditing(false);
-      setIsNoteFocused(false);
       setIsNoteModalVisible(false);
-      lastNoteSaveFailedValueRef.current = null;
+      setNoteModalMessage(null);
       return;
     }
 
-    if (isNoteEditing || isNoteFocused || isSavingNote) {
+    if (isNoteModalVisible || isSavingNote) {
       return;
     }
 
     const nextNoteInput = state.detail.note ?? '';
-    const previousSyncedNoteInput = syncedNoteInputRef.current;
-    const isSameMistake = syncedNoteMistakeIdRef.current === state.detail.id;
-    const isLocalNoteDirty =
-      isSameMistake
-      && normalizeNoteDraft(noteInput) !== normalizeNoteDraft(previousSyncedNoteInput);
-
-    syncedNoteInputRef.current = nextNoteInput;
-    syncedNoteMistakeIdRef.current = state.detail.id;
-    if (isLocalNoteDirty) {
-      return;
-    }
-
-    latestNoteInputRef.current = nextNoteInput;
     setNoteInput((current) => (current === nextNoteInput ? current : nextNoteInput));
-    lastNoteSaveFailedValueRef.current = null;
-  }, [clearNoteSaveTimer, isNoteEditing, isNoteFocused, isSavingNote, noteInput, state]);
-
-  useEffect(() => {
-    if (state.kind !== 'success' || isSavingNote) {
-      return;
-    }
-
-    const normalizedNoteInput = normalizeNoteDraft(noteInput);
-    const normalizedCurrentNote = normalizeNoteDraft(state.detail.note ?? null);
-    if (normalizedNoteInput === normalizedCurrentNote) {
-      lastNoteSaveFailedValueRef.current = null;
-      return;
-    }
-
-    if (lastNoteSaveFailedValueRef.current === normalizedNoteInput) {
-      return;
-    }
-
-    clearNoteSaveTimer();
-    noteSaveTimerRef.current = setTimeout(() => {
-      noteSaveTimerRef.current = null;
-      void handleSaveNote(latestNoteInputRef.current);
-    }, NOTE_SAVE_DEBOUNCE_MS);
-
-    return () => {
-      clearNoteSaveTimer();
-    };
-  }, [clearNoteSaveTimer, handleSaveNote, isSavingNote, noteInput, state]);
+  }, [isNoteModalVisible, isSavingNote, state]);
 
   const detailSlots = state.kind === 'success' ? state.detail.imageSlots : [];
 
@@ -2761,8 +2628,6 @@ export default function MistakeDetailScreen() {
   }, [browseContext.ids, browseContext.mode, state]);
   const isStartDetailReviewDisabled = isDeleteMistakeDisabled;
   const hasNoteContent = normalizeNoteDraft(noteInput).length > 0;
-  const noteReadText = hasNoteContent ? noteInput : '暂无备注';
-  const isNoteClearDisabled = !isNoteEditing || isSavingNote || noteInput.length <= 0;
   const currentModule = state.kind === 'success' ? state.detail.module : null;
   const modulePickerOptions = useMemo(
     () => buildDetailModulePickerOptions(customModules, existingMistakeModules, currentModule),
@@ -3532,11 +3397,6 @@ export default function MistakeDetailScreen() {
     state.kind === 'success' && reviewTextEditorRecordId
       ? state.detail.reviewRecords.find((record) => record.id === reviewTextEditorRecordId) ?? null
       : null;
-  const canSaveReviewText =
-    !isSavingReviewText
-    && reviewTextDraft.trim().length > 0
-    && reviewTextDraft.length <= REVIEW_TEXT_NOTE_MAX_LENGTH;
-
   return (
     <View style={styles.pageRoot}>
       <Animated.View
@@ -3738,115 +3598,34 @@ export default function MistakeDetailScreen() {
                   <Text style={styles.noteTitleText}>备注</Text>
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel={isNoteEditing ? '完成备注编辑' : '编辑备注'}
+                    accessibilityLabel="编辑备注"
                     disabled={isDeletingMistake}
-                    onPress={handleToggleNoteEdit}
+                    onPress={handleOpenNoteModal}
                     style={({ pressed }) => [
                       styles.noteEditIconWrap,
-                      isNoteEditing && styles.noteEditIconWrapActive,
                       pressed && !isDeletingMistake && styles.noteEditIconWrapPressed,
                       isDeletingMistake && styles.noteEditIconWrapDisabled,
                     ]}>
                     <MaterialIcons
                       name="edit"
                       size={20}
-                      color={isNoteEditing ? colors.success : colors.textMuted}
+                      color={colors.textMuted}
                     />
                   </Pressable>
                 </View>
 
-                {isNoteEditing ? (
-                  <>
-                    <View style={[
-                      styles.noteInputBox,
-                      isNoteFocused && styles.noteInputBoxFocused,
-                    ]}>
-                      <TextInput
-                        ref={noteInputRef}
-                        value={noteInput}
-                        onChangeText={handleChangeNote}
-                        editable={!isDeletingMistake}
-                        placeholder={NOTE_PLACEHOLDER}
-                        placeholderTextColor={colors.textMuted}
-                        multiline
-                        autoFocus
-                        maxLength={NOTE_MAX_LENGTH}
-                        numberOfLines={4}
-                        scrollEnabled
-                        textAlignVertical="top"
-                        style={styles.noteInput}
-                        onFocus={() => {
-                          setIsNoteFocused(true);
-                        }}
-                        onBlur={handleNoteBlur}
-                      />
-                      <Text style={styles.noteCounterText}>
-                        {noteInput.length}/{NOTE_MAX_LENGTH}
-                      </Text>
-                    </View>
-
-                    <View style={styles.noteFooterRow}>
-                      <View style={styles.noteSaveStatusRow}>
-                        {isSavingNote ? (
-                          <ActivityIndicator size="small" color={colors.success} />
-                        ) : (
-                          <MaterialIcons name="check-circle" size={16} color={colors.success} />
-                        )}
-                        <Text style={styles.noteSaveStatusText}>
-                          {isSavingNote ? '备注保存中...' : '备注将自动保存'}
-                        </Text>
-                      </View>
-
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="清空备注"
-                        disabled={isNoteClearDisabled}
-                        onPress={handleClearNote}
-                        style={({ pressed }) => [
-                          styles.noteClearButton,
-                          pressed && !isNoteClearDisabled && styles.noteClearButtonPressed,
-                          isNoteClearDisabled && styles.noteClearButtonDisabled,
-                        ]}>
-                        <MaterialIcons
-                          name="delete-outline"
-                          size={16}
-                          color={isNoteClearDisabled ? colors.textMuted : colors.textSecondary}
-                        />
-                        <Text
-                          style={[
-                            styles.noteClearButtonText,
-                            isNoteClearDisabled && styles.noteClearButtonTextDisabled,
-                          ]}>
-                          清空
-                        </Text>
-                      </Pressable>
-                    </View>
-                  </>
-                ) : (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="备注内容，双击查看全部"
-                    onPress={handlePressNoteRead}
-                    style={({ pressed }) => [
-                      styles.noteReadBox,
-                      pressed && styles.noteReadBoxPressed,
-                    ]}>
-                    <Text
-                      numberOfLines={4}
-                      style={[
-                        styles.noteReadText,
-                        !hasNoteContent && styles.noteReadPlaceholderText,
-                      ]}>
-                      {noteReadText}
-                    </Text>
-                    <View style={styles.noteReadFooterRow}>
-                      <Text style={styles.noteReadHintText}>双击查看全部</Text>
-                      <Text style={styles.noteReadCounterText}>
-                        {noteInput.length}/{NOTE_MAX_LENGTH}
-                      </Text>
-                    </View>
-                  </Pressable>
-                )}
+                <TextNotePreview
+                  value={hasNoteContent ? noteInput : ''}
+                  emptyText="暂无备注"
+                  maxLength={NOTE_MAX_LENGTH}
+                  accessibilityLabel="错题备注"
+                  disabled={isDeletingMistake}
+                  onOpen={handleOpenNoteModal}
+                  style={styles.noteReadBox}
+                  textStyle={styles.noteReadText}
+                  emptyTextStyle={styles.noteReadPlaceholderText}
+                  numberOfLines={2}
+                />
               </View>
             </CardContainer>
 
@@ -3977,6 +3756,7 @@ export default function MistakeDetailScreen() {
                         openReviewImagePickerActionSheet(targetRecord, 'add');
                       }}
                       onAddText={handleOpenReviewTextEditor}
+                      onOpenText={handleOpenReviewTextEditor}
                       onPreview={openImageBrowser}
                       onOpenImageActions={handleOpenReviewImageActions}
                       onToggleVoicePlayback={(targetRecord) => {
@@ -4013,160 +3793,36 @@ export default function MistakeDetailScreen() {
         </ScreenContainer>
       </Animated.View>
 
-      <Modal
+      <TextNoteEditorModal
         visible={isNoteModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCloseNoteModal}>
-        <View
-          style={[
-            styles.noteModalOverlay,
-            {
-              paddingTop: Math.max(insets.top + spacing.xl, spacing.xxl),
-              paddingBottom: Math.max(insets.bottom + spacing.xl, spacing.xxl),
-            },
-          ]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="关闭备注大窗口"
-            style={styles.noteModalBackdrop}
-            onPress={handleCloseNoteModal}
-          />
-          <View style={styles.noteModalCard}>
-            <View style={styles.noteModalHeaderRow}>
-              <View style={styles.noteModalTitleWrap}>
-                <Text style={styles.noteModalTitle}>备注</Text>
-                <Text style={styles.noteModalSubtitle}>
-                  {noteInput.length}/{NOTE_MAX_LENGTH}
-                </Text>
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="关闭备注大窗口"
-                onPress={handleCloseNoteModal}
-                style={({ pressed }) => [
-                  styles.noteModalCloseButton,
-                  pressed && styles.noteModalCloseButtonPressed,
-                ]}>
-                <MaterialIcons name="close" size={22} color={colors.textPrimary} />
-              </Pressable>
-            </View>
-            <ScrollView
-              style={styles.noteModalScroll}
-              contentContainerStyle={styles.noteModalScrollContent}>
-              <Text
-                selectable
-                style={[
-                  styles.noteModalText,
-                  !hasNoteContent && styles.noteReadPlaceholderText,
-                ]}>
-                {noteReadText}
-              </Text>
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+        title="错题备注"
+        value={noteInput}
+        maxLength={NOTE_MAX_LENGTH}
+        placeholder={NOTE_PLACEHOLDER}
+        busy={isSavingNote}
+        errorMessage={noteModalMessage}
+        onDraftChange={() => {
+          setNoteModalMessage(null);
+        }}
+        onClose={handleCloseNoteModal}
+        onSave={handleSaveNote}
+      />
 
-      <Modal
+      <TextNoteEditorModal
         visible={reviewTextEditorRecordId !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCloseReviewTextEditor}>
-        <View
-          style={[
-            styles.reviewTextModalOverlay,
-            {
-              paddingTop: Math.max(insets.top + spacing.xl, spacing.xxl),
-              paddingBottom: Math.max(insets.bottom + spacing.xl, spacing.xxl),
-            },
-          ]}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="关闭补充文本讲解"
-            style={styles.reviewTextModalBackdrop}
-            onPress={handleCloseReviewTextEditor}
-          />
-          <View style={styles.reviewTextModalCard}>
-            <View style={styles.reviewTextModalHeader}>
-              <View style={styles.reviewTextModalHeaderTextWrap}>
-                <Text style={styles.reviewTextModalTitle}>补充文本讲解</Text>
-                <Text style={styles.reviewTextModalSubtitle}>
-                  {activeReviewTextRecord
-                    ? `第 ${activeReviewTextRecord.reviewIndex} 刷 · ${reviewTextDraft.length}/${REVIEW_TEXT_NOTE_MAX_LENGTH}`
-                    : `${reviewTextDraft.length}/${REVIEW_TEXT_NOTE_MAX_LENGTH}`}
-                </Text>
-              </View>
-              {isSavingReviewText ? <ActivityIndicator size="small" color="#7C3AED" /> : null}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="关闭补充文本讲解"
-                disabled={isSavingReviewText}
-                onPress={handleCloseReviewTextEditor}
-                style={({ pressed }) => [
-                  styles.reviewTextModalCloseButton,
-                  pressed && !isSavingReviewText && styles.reviewTextModalButtonPressed,
-                  isSavingReviewText && styles.reviewTextModalButtonDisabled,
-                ]}>
-                <MaterialIcons name="close" size={22} color={colors.textPrimary} />
-              </Pressable>
-            </View>
-
-            <TextInput
-              accessibilityLabel="文本讲解内容"
-              autoFocus
-              editable={!isSavingReviewText}
-              maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
-              multiline
-              onChangeText={(value) => {
-                setReviewTextDraft(value);
-                if (reviewTextEditorMessage) {
-                  setReviewTextEditorMessage(null);
-                }
-              }}
-              placeholder="写下本次复做的关键条件、解题思路和易错点……"
-              placeholderTextColor={colors.textMuted}
-              style={styles.reviewTextModalInput}
-              textAlignVertical="top"
-              value={reviewTextDraft}
-            />
-
-            {reviewTextEditorMessage ? (
-              <Text style={styles.reviewTextModalMessage}>{reviewTextEditorMessage}</Text>
-            ) : null}
-
-            <View style={styles.reviewTextModalFooter}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="取消补充文本"
-                disabled={isSavingReviewText}
-                onPress={handleCloseReviewTextEditor}
-                style={({ pressed }) => [
-                  styles.reviewTextModalSecondaryButton,
-                  pressed && !isSavingReviewText && styles.reviewTextModalButtonPressed,
-                  isSavingReviewText && styles.reviewTextModalButtonDisabled,
-                ]}>
-                <Text style={styles.reviewTextModalSecondaryButtonText}>取消</Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="保存文本讲解"
-                disabled={!canSaveReviewText}
-                onPress={() => {
-                  void handleSaveReviewText();
-                }}
-                style={({ pressed }) => [
-                  styles.reviewTextModalPrimaryButton,
-                  pressed && canSaveReviewText && styles.reviewTextModalButtonPressed,
-                  !canSaveReviewText && styles.reviewTextModalButtonDisabled,
-                ]}>
-                <Text style={styles.reviewTextModalPrimaryButtonText}>
-                  {isSavingReviewText ? '保存中...' : '保存'}
-                </Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
+        title="文字讲解"
+        subtitle={activeReviewTextRecord ? `第 ${activeReviewTextRecord.reviewIndex} 刷` : undefined}
+        value={typeof activeReviewTextRecord?.note === 'string' ? activeReviewTextRecord.note : ''}
+        maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+        placeholder="写下本次复做的关键条件、解题思路和易错点……"
+        busy={isSavingReviewText}
+        errorMessage={reviewTextEditorMessage}
+        onDraftChange={() => {
+          setReviewTextEditorMessage(null);
+        }}
+        onClose={handleCloseReviewTextEditor}
+        onSave={handleSaveReviewText}
+      />
 
       <DetailModulePickerModal
         visible={isModulePickerVisible}
@@ -4499,23 +4155,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  noteEditIconWrapActive: {
-    backgroundColor: colors.successBg,
-  },
   noteEditIconWrapPressed: {
     opacity: 0.78,
   },
   noteEditIconWrapDisabled: {
     opacity: 0.56,
-  },
-  noteInputBox: {
-    minHeight: 112,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: '#FCFCFD',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
   },
   noteReadBox: {
     minHeight: 112,
@@ -4528,10 +4172,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  noteReadBoxPressed: {
-    borderColor: colors.successBorder,
-    backgroundColor: '#FBFFFC',
-  },
   noteReadText: {
     ...typography.bodySmall,
     minHeight: 74,
@@ -4540,265 +4180,6 @@ const styles = StyleSheet.create({
   },
   noteReadPlaceholderText: {
     color: colors.textMuted,
-  },
-  noteReadFooterRow: {
-    minHeight: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  noteReadHintText: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '700',
-  },
-  noteReadCounterText: {
-    ...typography.caption,
-    color: colors.textMuted,
-    textAlign: 'right',
-    fontWeight: '600',
-  },
-  noteInputBoxFocused: {
-    borderColor: colors.successBorder,
-    backgroundColor: '#FBFFFC',
-  },
-  noteInput: {
-    ...typography.bodySmall,
-    minHeight: 74,
-    color: colors.textPrimary,
-    padding: 0,
-    includeFontPadding: false,
-  },
-  noteCounterText: {
-    ...typography.caption,
-    marginTop: spacing.xs,
-    color: colors.textMuted,
-    textAlign: 'right',
-    fontWeight: '600',
-  },
-  noteFooterRow: {
-    minHeight: 32,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
-  },
-  noteSaveStatusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  noteSaveStatusText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '700',
-  },
-  noteClearButton: {
-    minHeight: 30,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    borderRadius: radius.md,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: spacing.xs,
-  },
-  noteClearButtonPressed: {
-    opacity: 0.78,
-  },
-  noteClearButtonDisabled: {
-    opacity: 0.56,
-  },
-  noteClearButtonText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '800',
-  },
-  noteClearButtonTextDisabled: {
-    color: colors.textMuted,
-  },
-  noteModalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.screenPadding,
-    backgroundColor: 'rgba(0, 0, 0, 0.36)',
-  },
-  noteModalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  noteModalCard: {
-    maxHeight: '100%',
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: spacing.lg,
-    gap: spacing.md,
-    shadowColor: colors.shadow,
-    shadowOpacity: 0.14,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 8,
-  },
-  noteModalHeaderRow: {
-    minHeight: 36,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  noteModalTitleWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  noteModalTitle: {
-    ...typography.sectionTitle,
-    color: colors.textPrimary,
-  },
-  noteModalSubtitle: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '700',
-  },
-  noteModalCloseButton: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  noteModalCloseButtonPressed: {
-    opacity: 0.78,
-  },
-  noteModalScroll: {
-    flexGrow: 0,
-  },
-  noteModalScrollContent: {
-    paddingBottom: spacing.sm,
-  },
-  noteModalText: {
-    ...typography.body,
-    color: colors.textPrimary,
-    fontWeight: '500',
-  },
-  reviewTextModalOverlay: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.screenPadding,
-    backgroundColor: 'rgba(0, 0, 0, 0.36)',
-  },
-  reviewTextModalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  reviewTextModalCard: {
-    maxHeight: '100%',
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: '#DDD6FE',
-    backgroundColor: colors.surface,
-    padding: spacing.lg,
-    gap: spacing.md,
-    shadowColor: colors.shadow,
-    shadowOpacity: 0.14,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 8,
-  },
-  reviewTextModalHeader: {
-    minHeight: 40,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  reviewTextModalHeaderTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  reviewTextModalTitle: {
-    ...typography.sectionTitle,
-    color: colors.textPrimary,
-  },
-  reviewTextModalSubtitle: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '700',
-  },
-  reviewTextModalCloseButton: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  reviewTextModalInput: {
-    minHeight: 180,
-    maxHeight: 360,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#DDD6FE',
-    backgroundColor: '#FAFAFF',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    ...typography.body,
-    color: colors.textPrimary,
-  },
-  reviewTextModalMessage: {
-    ...typography.caption,
-    color: colors.danger,
-    fontWeight: '700',
-  },
-  reviewTextModalFooter: {
-    minHeight: 42,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: spacing.sm,
-  },
-  reviewTextModalSecondaryButton: {
-    minWidth: 76,
-    minHeight: 40,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-  },
-  reviewTextModalPrimaryButton: {
-    minWidth: 90,
-    minHeight: 40,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#6D28D9',
-    backgroundColor: '#7C3AED',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-  },
-  reviewTextModalButtonPressed: {
-    opacity: 0.82,
-  },
-  reviewTextModalButtonDisabled: {
-    opacity: 0.5,
-  },
-  reviewTextModalSecondaryButtonText: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  reviewTextModalPrimaryButtonText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '800',
   },
   modulePickerOverlay: {
     flex: 1,
@@ -5240,6 +4621,13 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   reviewRecordTextNoteHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  reviewRecordTextNoteHeaderTitle: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,

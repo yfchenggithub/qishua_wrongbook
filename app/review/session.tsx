@@ -17,7 +17,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -32,6 +31,8 @@ import {
   type ImagePreviewModalLongPressHelpers,
   PrimaryButton,
   ScreenContainer,
+  TextNoteEditorModal,
+  TextNotePreview,
 } from '@/src/components';
 import {
   BOTTOM_RELEASE_DISTANCE,
@@ -1131,6 +1132,7 @@ export default function ReviewSessionPage() {
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
   const [reviewTextNote, setReviewTextNote] = useState('');
+  const [isReviewTextEditorVisible, setIsReviewTextEditorVisible] = useState(false);
   const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
   const [isReviewSolutionImageBusy, setIsReviewSolutionImageBusy] = useState(false);
   const [actionBarHeight, setActionBarHeight] = useState(0);
@@ -1178,6 +1180,7 @@ export default function ReviewSessionPage() {
       || isVoiceRecording
       || normalizeReviewTextNote(reviewTextNote) !== null
     );
+
 
   const moduleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
     const moduleCounts = new Map<string, { count: number; remainingCount: number }>();
@@ -2971,6 +2974,21 @@ export default function ReviewSessionPage() {
     ],
   );
 
+  const handleOpenReviewTextEditor = useCallback(() => {
+    setIsReviewTextEditorVisible(true);
+  }, []);
+
+  const handleCloseReviewTextEditor = useCallback(() => {
+    Keyboard.dismiss();
+    setIsReviewTextEditorVisible(false);
+  }, []);
+
+  const handleSaveReviewTextDraft = useCallback((value: string): boolean => {
+    setReviewTextNote(value);
+    showToast('文字讲解已更新，选择结果后保存', 'success');
+    return true;
+  }, [showToast]);
+
   const progressCurrent =
     currentFilterTotal <= 0
       ? 0
@@ -3360,48 +3378,18 @@ export default function ReviewSessionPage() {
                       写下关键条件、解题思路和容易错的地方
                     </Text>
                   </View>
-                  {reviewTextNote.length > 0 ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="清空文字讲解"
-                      disabled={isSubmitting || isVoiceRecording || isVoiceBusy}
-                      onPress={() => setReviewTextNote('')}
-                      style={({ pressed }) => [
-                        styles.reviewTextClearButton,
-                        pressed && styles.reviewTextClearButtonPressed,
-                        (isSubmitting || isVoiceRecording || isVoiceBusy)
-                          && styles.reviewTextClearButtonDisabled,
-                      ]}>
-                      <Text style={styles.reviewTextClearButtonText}>清空</Text>
-                    </Pressable>
-                  ) : null}
                 </View>
 
-                <TextInput
-                  accessibilityLabel={`第 ${currentMeta?.nextReviewIndex ?? currentQueueItem.nextReviewIndex} 刷文字讲解`}
-                  editable={!isSubmitting && !isVoiceRecording && !isVoiceBusy}
-                  maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
-                  multiline
-                  onChangeText={setReviewTextNote}
-                  placeholder="例如：先由定义域确定参数范围，再分类讨论……"
-                  placeholderTextColor="#94A3B8"
-                  scrollEnabled
-                  style={[
-                    styles.reviewTextInput,
-                    (isSubmitting || isVoiceRecording || isVoiceBusy) && styles.reviewTextInputDisabled,
-                  ]}
-                  textAlignVertical="top"
+                <TextNotePreview
                   value={reviewTextNote}
+                  emptyText="尚未添加文字讲解"
+                  maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+                  accessibilityLabel={`第 ${currentMeta?.nextReviewIndex ?? currentQueueItem.nextReviewIndex} 刷文字讲解`}
+                  disabled={isSubmitting || isVoiceRecording || isVoiceBusy}
+                  onOpen={handleOpenReviewTextEditor}
+                  style={styles.reviewTextPreview}
+                  textStyle={styles.reviewTextPreviewText}
                 />
-
-                <View style={styles.reviewTextFooterRow}>
-                  <Text style={styles.reviewTextSaveHint}>
-                    {currentSubmittedReviewEntry ? '再次选择结果后更新本刷记录' : '选择结果后保存到本刷记录'}
-                  </Text>
-                  <Text style={styles.reviewTextCounter}>
-                    {reviewTextNote.length}/{REVIEW_TEXT_NOTE_MAX_LENGTH}
-                  </Text>
-                </View>
               </CardContainer>
             ) : null}
 
@@ -3439,6 +3427,23 @@ export default function ReviewSessionPage() {
         logSource="review_session"
         onClose={handleClosePreview}
         onImageLongPress={handlePreviewImageLongPress}
+      />
+
+      <TextNoteEditorModal
+        visible={isReviewTextEditorVisible}
+        title="文字讲解"
+        subtitle={`第 ${reviewRound} 刷`}
+        value={reviewTextNote}
+        maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+        placeholder="写下关键条件、解题思路和容易错的地方……"
+        helperText={
+          currentSubmittedReviewEntry
+            ? '完成编辑后，再次选择结果即可更新本刷记录。'
+            : '完成编辑后，选择结果即可保存到本刷记录。'
+        }
+        onClose={handleCloseReviewTextEditor}
+        onSave={handleSaveReviewTextDraft}
+        saveLabel="完成"
       />
 
       {showResultActions ? (
@@ -4148,56 +4153,19 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontWeight: '500',
   },
-  reviewTextClearButton: {
-    minHeight: 30,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#DDD6FE',
-    backgroundColor: '#F5F3FF',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
-  },
-  reviewTextClearButtonPressed: {
-    opacity: 0.78,
-  },
-  reviewTextClearButtonDisabled: {
-    opacity: 0.5,
-  },
-  reviewTextClearButtonText: {
-    ...typography.caption,
-    color: '#6D28D9',
-    fontWeight: '700',
-  },
-  reviewTextInput: {
-    minHeight: 132,
-    maxHeight: 260,
+  reviewTextPreview: {
+    minHeight: 104,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: '#DDD6FE',
     backgroundColor: '#FAFAFF',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+  },
+  reviewTextPreviewText: {
     ...typography.body,
     color: '#1E293B',
-  },
-  reviewTextInputDisabled: {
-    opacity: 0.6,
-  },
-  reviewTextFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  reviewTextSaveHint: {
-    ...typography.caption,
-    color: '#64748B',
-    flex: 1,
-  },
-  reviewTextCounter: {
-    ...typography.caption,
-    color: '#64748B',
-    fontVariant: ['tabular-nums'],
+    lineHeight: 24,
   },
   actionRow: {
     flexDirection: 'row',

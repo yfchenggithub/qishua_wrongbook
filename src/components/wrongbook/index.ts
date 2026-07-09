@@ -9,3 +9,4 @@ export * from './ProgressDots';
 export * from './SectionTitle';
 export * from './StatusPill';
 export * from './TagChip';
+export * from './TextNoteEditor';
