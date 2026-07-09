@@ -1,5 +1,9 @@
 import { withDatabaseTransaction } from '@/src/db';
-import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
+import {
+  MAX_REVIEW_COUNT,
+  REVIEW_STATUS,
+  REVIEW_TEXT_NOTE_MAX_LENGTH,
+} from '@/src/constants/review';
 import type { CompleteReviewInput, CompleteReviewResult } from '@/src/models/ReviewFlow';
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
@@ -24,6 +28,7 @@ interface NormalizedCompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
   solutionImageUri: string | null;
+  note: string | null;
   voiceNote: ReviewRecordVoiceNote | null;
   voiceNoteDropped: boolean;
   result: ReviewResult;
@@ -128,6 +133,14 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
   const solutionImageUriRaw =
     typeof input.solutionImageUri === 'string' ? input.solutionImageUri.trim() : '';
   const solutionImageUri = solutionImageUriRaw.length > 0 ? solutionImageUriRaw : null;
+  const noteRaw = typeof input.note === 'string' ? input.note.trim() : '';
+  if (noteRaw.length > REVIEW_TEXT_NOTE_MAX_LENGTH) {
+    return {
+      ok: false,
+      errorMessage: `文字讲解不能超过 ${REVIEW_TEXT_NOTE_MAX_LENGTH} 字`,
+    };
+  }
+  const note = noteRaw.length > 0 ? noteRaw : null;
   const voiceNoteFromInput = input.voiceNote ?? null;
   const voiceNote = normalizeReviewRecordVoiceNote(voiceNoteFromInput);
   const voiceNoteDropped = voiceNoteFromInput !== null && voiceNote === null;
@@ -146,6 +159,7 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
       mistakeId,
       reviewIndex: input.reviewIndex,
       solutionImageUri,
+      note,
       voiceNote,
       voiceNoteDropped,
       result,
@@ -170,6 +184,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
     reviewIndex: input.reviewIndex,
     cleanupImageOnFailure: input.cleanupImageOnFailure !== false,
     solutionImageUriShort: toShortUri(input.solutionImageUri),
+    hasTextNote: typeof input.note === 'string' && input.note.trim().length > 0,
     hasVoiceNote: !!input.voiceNote,
   });
 
@@ -277,7 +292,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           mistake_id: normalizedInput.mistakeId,
           review_index: normalizedInput.reviewIndex,
           result: normalizedInput.result,
-          note: null,
+          note: normalizedInput.note,
           createdAt: nowIso,
         });
         Logger.info(SERVICE_SCOPE, 'Created review_record successfully in transaction.', {

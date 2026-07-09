@@ -39,6 +39,7 @@ import {
   ERROR_REASON_OPTIONS,
   MODULE_OPTIONS,
 } from '@/src/constants/mistakeOptions';
+import { REVIEW_TEXT_NOTE_MAX_LENGTH } from '@/src/constants/review';
 import {
   BOTTOM_RELEASE_DISTANCE,
   BOTTOM_TRIGGER_DISTANCE,
@@ -61,6 +62,7 @@ import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
+import * as ReviewRecordTextService from '@/src/services/ReviewRecordTextService';
 import * as ReviewRecordVoiceService from '@/src/services/ReviewRecordVoiceService';
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
@@ -612,7 +614,9 @@ function ReviewRecordCard({
   isVoiceRecording = false,
   recordingElapsedMs = 0,
   isVoiceLocked = false,
+  isTextActionDisabled = false,
   onAddImage,
+  onAddText,
   onPreview,
   onOpenImageActions,
   onToggleVoicePlayback,
@@ -627,7 +631,9 @@ function ReviewRecordCard({
   isVoiceRecording?: boolean;
   recordingElapsedMs?: number;
   isVoiceLocked?: boolean;
+  isTextActionDisabled?: boolean;
   onAddImage?: (record: DetailReviewRecordItem) => void;
+  onAddText?: (record: DetailReviewRecordItem) => void;
   onPreview?: (targetImageId: string) => void;
   onOpenImageActions?: (record: DetailReviewRecordItem) => void;
   onToggleVoicePlayback?: (record: DetailReviewRecordItem) => void;
@@ -644,6 +650,7 @@ function ReviewRecordCard({
   const imageExists = record.solutionImageExists !== false;
   const canShowImage = hasImage && imageExists && !imageFailed;
   const voiceNote = record.voiceNote ?? null;
+  const reviewTextNote = typeof record.note === 'string' ? record.note.trim() : '';
   const voiceAddDisabled = isVoiceBusy || isVoiceLocked;
   const voiceAddButtonText = isVoiceLocked ? '其他录音中' : isVoiceBusy ? '处理中...' : '补充语音';
 
@@ -719,6 +726,34 @@ function ReviewRecordCard({
                 <Text style={styles.reviewRecordVoiceButtonText}>{voiceAddButtonText}</Text>
               </Pressable>
             )}
+          </View>
+        )}
+        {reviewTextNote ? (
+          <View style={styles.reviewRecordTextNote}>
+            <View style={styles.reviewRecordTextNoteHeader}>
+              <MaterialIcons name="edit-note" size={16} color="#7C3AED" />
+              <Text style={styles.reviewRecordTextNoteLabel}>文字讲解</Text>
+            </View>
+            <Text selectable style={styles.reviewRecordTextNoteContent}>
+              {reviewTextNote}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.reviewRecordTextEmptyRow}>
+            <Text style={styles.reviewRecordTextEmptyText}>未添加文本讲解</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`为第 ${record.reviewIndex} 刷补充文本讲解`}
+              disabled={isTextActionDisabled}
+              onPress={() => onAddText?.(record)}
+              style={({ pressed }) => [
+                styles.reviewRecordTextAddButton,
+                pressed && !isTextActionDisabled && styles.previewTapPressed,
+                isTextActionDisabled && styles.reviewRecordVoiceButtonDisabled,
+              ]}>
+              <MaterialIcons name="edit-note" size={16} color={colors.textPrimary} />
+              <Text style={styles.reviewRecordVoiceButtonText}>补充文本</Text>
+            </Pressable>
           </View>
         )}
       </View>
@@ -1140,6 +1175,10 @@ export default function MistakeDetailScreen() {
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
   const [metadataEditorMessage, setMetadataEditorMessage] = useState<string | null>(null);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
+  const [reviewTextEditorRecordId, setReviewTextEditorRecordId] = useState<string | null>(null);
+  const [reviewTextDraft, setReviewTextDraft] = useState('');
+  const [reviewTextEditorMessage, setReviewTextEditorMessage] = useState<string | null>(null);
+  const [isSavingReviewText, setIsSavingReviewText] = useState(false);
   const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
   const [isVoicePlaybackBusy, setIsVoicePlaybackBusy] = useState(false);
   const [activeVoiceRecordingRecordId, setActiveVoiceRecordingRecordId] = useState<string | null>(null);
@@ -2273,6 +2312,109 @@ export default function MistakeDetailScreen() {
     ],
   );
 
+  const handleOpenReviewTextEditor = useCallback(
+    (record: DetailReviewRecordItem) => {
+      if (state.kind !== 'success' || isSavingReviewText) {
+        return;
+      }
+      if (activeVoiceRecordingRecordId !== null || isVoiceRecordingBusy) {
+        showToast('正在录音，请先保存语音讲解后再补充文本。', 'info');
+        return;
+      }
+
+      const belongsToCurrentDetail = state.detail.reviewRecords.some((item) => item.id === record.id);
+      if (!belongsToCurrentDetail) {
+        showToast('复做记录已变化，请刷新后重试。', 'info');
+        return;
+      }
+
+      setReviewTextEditorRecordId(record.id);
+      setReviewTextDraft(typeof record.note === 'string' ? record.note : '');
+      setReviewTextEditorMessage(null);
+    },
+    [
+      activeVoiceRecordingRecordId,
+      isSavingReviewText,
+      isVoiceRecordingBusy,
+      showToast,
+      state,
+    ],
+  );
+
+  const handleCloseReviewTextEditor = useCallback(() => {
+    if (isSavingReviewText) {
+      return;
+    }
+    setReviewTextEditorRecordId(null);
+    setReviewTextDraft('');
+    setReviewTextEditorMessage(null);
+  }, [isSavingReviewText]);
+
+  const handleSaveReviewText = useCallback(async () => {
+    if (state.kind !== 'success' || !reviewTextEditorRecordId || isSavingReviewText) {
+      return;
+    }
+
+    const note = reviewTextDraft.trim();
+    if (!note) {
+      setReviewTextEditorMessage('请输入文本讲解。');
+      return;
+    }
+    if (note.length > REVIEW_TEXT_NOTE_MAX_LENGTH) {
+      setReviewTextEditorMessage(`文本讲解不能超过 ${REVIEW_TEXT_NOTE_MAX_LENGTH} 字。`);
+      return;
+    }
+
+    const targetRecord = state.detail.reviewRecords.find(
+      (record) => record.id === reviewTextEditorRecordId,
+    );
+    if (!targetRecord) {
+      setReviewTextEditorMessage('复做记录不存在，请刷新后重试。');
+      return;
+    }
+
+    setIsSavingReviewText(true);
+    setReviewTextEditorMessage(null);
+    const saveResult = await ReviewRecordTextService.upsertReviewRecordText({
+      mistakeId: state.detail.id,
+      reviewRecordId: targetRecord.id,
+      note,
+    });
+
+    if (!saveResult.ok || !saveResult.note) {
+      setReviewTextEditorMessage(saveResult.errorMessage ?? '文本讲解保存失败，请重试。');
+      setIsSavingReviewText(false);
+      return;
+    }
+
+    const savedNote = saveResult.note;
+    setState((current) => {
+      if (current.kind !== 'success' || current.detail.id !== state.detail.id) {
+        return current;
+      }
+      return {
+        kind: 'success',
+        detail: {
+          ...current.detail,
+          reviewRecords: current.detail.reviewRecords.map((record) =>
+            record.id === targetRecord.id ? { ...record, note: savedNote } : record,
+          ),
+        },
+      };
+    });
+    setIsSavingReviewText(false);
+    setReviewTextEditorRecordId(null);
+    setReviewTextDraft('');
+    setReviewTextEditorMessage(null);
+    showToast('文本讲解已保存', 'success');
+  }, [
+    isSavingReviewText,
+    reviewTextDraft,
+    reviewTextEditorRecordId,
+    showToast,
+    state,
+  ]);
+
   const isReviewRecordImageBusy = useCallback(
     (reviewRecordId: string) => activeReviewRecordId === reviewRecordId,
     [activeReviewRecordId],
@@ -3386,6 +3528,15 @@ export default function MistakeDetailScreen() {
     }
   }, [isSavingTitle, routeId, showToast, state, titleInput]);
 
+  const activeReviewTextRecord =
+    state.kind === 'success' && reviewTextEditorRecordId
+      ? state.detail.reviewRecords.find((record) => record.id === reviewTextEditorRecordId) ?? null
+      : null;
+  const canSaveReviewText =
+    !isSavingReviewText
+    && reviewTextDraft.trim().length > 0
+    && reviewTextDraft.length <= REVIEW_TEXT_NOTE_MAX_LENGTH;
+
   return (
     <View style={styles.pageRoot}>
       <Animated.View
@@ -3817,9 +3968,15 @@ export default function MistakeDetailScreen() {
                       isVoiceLocked={
                         !!activeVoiceRecordingRecordId && activeVoiceRecordingRecordId !== record.id
                       }
+                      isTextActionDisabled={
+                        isSavingReviewText
+                        || activeVoiceRecordingRecordId !== null
+                        || isVoiceRecordingBusy
+                      }
                       onAddImage={(targetRecord) => {
                         openReviewImagePickerActionSheet(targetRecord, 'add');
                       }}
+                      onAddText={handleOpenReviewTextEditor}
                       onPreview={openImageBrowser}
                       onOpenImageActions={handleOpenReviewImageActions}
                       onToggleVoicePlayback={(targetRecord) => {
@@ -3906,6 +4063,107 @@ export default function MistakeDetailScreen() {
                 {noteReadText}
               </Text>
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={reviewTextEditorRecordId !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseReviewTextEditor}>
+        <View
+          style={[
+            styles.reviewTextModalOverlay,
+            {
+              paddingTop: Math.max(insets.top + spacing.xl, spacing.xxl),
+              paddingBottom: Math.max(insets.bottom + spacing.xl, spacing.xxl),
+            },
+          ]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭补充文本讲解"
+            style={styles.reviewTextModalBackdrop}
+            onPress={handleCloseReviewTextEditor}
+          />
+          <View style={styles.reviewTextModalCard}>
+            <View style={styles.reviewTextModalHeader}>
+              <View style={styles.reviewTextModalHeaderTextWrap}>
+                <Text style={styles.reviewTextModalTitle}>补充文本讲解</Text>
+                <Text style={styles.reviewTextModalSubtitle}>
+                  {activeReviewTextRecord
+                    ? `第 ${activeReviewTextRecord.reviewIndex} 刷 · ${reviewTextDraft.length}/${REVIEW_TEXT_NOTE_MAX_LENGTH}`
+                    : `${reviewTextDraft.length}/${REVIEW_TEXT_NOTE_MAX_LENGTH}`}
+                </Text>
+              </View>
+              {isSavingReviewText ? <ActivityIndicator size="small" color="#7C3AED" /> : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="关闭补充文本讲解"
+                disabled={isSavingReviewText}
+                onPress={handleCloseReviewTextEditor}
+                style={({ pressed }) => [
+                  styles.reviewTextModalCloseButton,
+                  pressed && !isSavingReviewText && styles.reviewTextModalButtonPressed,
+                  isSavingReviewText && styles.reviewTextModalButtonDisabled,
+                ]}>
+                <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+
+            <TextInput
+              accessibilityLabel="文本讲解内容"
+              autoFocus
+              editable={!isSavingReviewText}
+              maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+              multiline
+              onChangeText={(value) => {
+                setReviewTextDraft(value);
+                if (reviewTextEditorMessage) {
+                  setReviewTextEditorMessage(null);
+                }
+              }}
+              placeholder="写下本次复做的关键条件、解题思路和易错点……"
+              placeholderTextColor={colors.textMuted}
+              style={styles.reviewTextModalInput}
+              textAlignVertical="top"
+              value={reviewTextDraft}
+            />
+
+            {reviewTextEditorMessage ? (
+              <Text style={styles.reviewTextModalMessage}>{reviewTextEditorMessage}</Text>
+            ) : null}
+
+            <View style={styles.reviewTextModalFooter}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="取消补充文本"
+                disabled={isSavingReviewText}
+                onPress={handleCloseReviewTextEditor}
+                style={({ pressed }) => [
+                  styles.reviewTextModalSecondaryButton,
+                  pressed && !isSavingReviewText && styles.reviewTextModalButtonPressed,
+                  isSavingReviewText && styles.reviewTextModalButtonDisabled,
+                ]}>
+                <Text style={styles.reviewTextModalSecondaryButtonText}>取消</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="保存文本讲解"
+                disabled={!canSaveReviewText}
+                onPress={() => {
+                  void handleSaveReviewText();
+                }}
+                style={({ pressed }) => [
+                  styles.reviewTextModalPrimaryButton,
+                  pressed && canSaveReviewText && styles.reviewTextModalButtonPressed,
+                  !canSaveReviewText && styles.reviewTextModalButtonDisabled,
+                ]}>
+                <Text style={styles.reviewTextModalPrimaryButtonText}>
+                  {isSavingReviewText ? '保存中...' : '保存'}
+                </Text>
+              </Pressable>
+            </View>
           </View>
         </View>
       </Modal>
@@ -4427,6 +4685,121 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     fontWeight: '500',
   },
+  reviewTextModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.screenPadding,
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+  },
+  reviewTextModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  reviewTextModalCard: {
+    maxHeight: '100%',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+  reviewTextModalHeader: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  reviewTextModalHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  reviewTextModalTitle: {
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
+  },
+  reviewTextModalSubtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  reviewTextModalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  reviewTextModalInput: {
+    minHeight: 180,
+    maxHeight: 360,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: '#FAFAFF',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    ...typography.body,
+    color: colors.textPrimary,
+  },
+  reviewTextModalMessage: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  reviewTextModalFooter: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  reviewTextModalSecondaryButton: {
+    minWidth: 76,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  reviewTextModalPrimaryButton: {
+    minWidth: 90,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#6D28D9',
+    backgroundColor: '#7C3AED',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  reviewTextModalButtonPressed: {
+    opacity: 0.82,
+  },
+  reviewTextModalButtonDisabled: {
+    opacity: 0.5,
+  },
+  reviewTextModalSecondaryButtonText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  reviewTextModalPrimaryButtonText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '800',
+  },
   modulePickerOverlay: {
     flex: 1,
     justifyContent: 'center',
@@ -4855,6 +5228,55 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 11,
     lineHeight: 14,
+  },
+  reviewRecordTextNote: {
+    marginTop: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: '#FAFAFF',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: 2,
+  },
+  reviewRecordTextNoteHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+  },
+  reviewRecordTextNoteLabel: {
+    ...typography.caption,
+    color: '#6D28D9',
+    fontWeight: '700',
+  },
+  reviewRecordTextNoteContent: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  reviewRecordTextEmptyRow: {
+    marginTop: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  reviewRecordTextEmptyText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  reviewRecordTextAddButton: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: '#FAFAFF',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
   reviewRecordPreviewWrap: {
     width: 72,

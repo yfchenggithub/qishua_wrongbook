@@ -1,5 +1,6 @@
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import { REVIEW_TEXT_NOTE_MAX_LENGTH } from '@/src/constants/review';
 import { withDatabaseTransaction } from '@/src/db';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import type { ReviewPageData } from '@/src/services/ReviewFlowService';
@@ -68,6 +69,14 @@ function normalizeReviewResult(value: ReviewResult): ReviewResult {
     return value;
   }
   throw new Error('result must be mastered / unsure / wrong.');
+}
+
+function normalizeReviewTextNote(value: string | null | undefined): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (normalized.length > REVIEW_TEXT_NOTE_MAX_LENGTH) {
+    throw new Error(`文字讲解不能超过 ${REVIEW_TEXT_NOTE_MAX_LENGTH} 字`);
+  }
+  return normalized.length > 0 ? normalized : null;
 }
 
 function normalizeReviewRecordVoiceNote(value: ReviewRecordVoiceNote | null | undefined): ReviewRecordVoiceNote | null {
@@ -179,6 +188,7 @@ export async function submitTodayReviewResult(input: {
   reviewIndex: number;
   result: ReviewResult;
   solutionImageUri?: string | null;
+  note?: string | null;
   voiceNote?: ReviewRecordVoiceNote | null;
 }) {
   return CompleteReviewService.completeReview({
@@ -186,6 +196,7 @@ export async function submitTodayReviewResult(input: {
     reviewIndex: input.reviewIndex,
     result: input.result,
     solutionImageUri: input.solutionImageUri ?? null,
+    note: input.note ?? null,
     voiceNote: input.voiceNote ?? null,
     cleanupImageOnFailure: false,
   });
@@ -196,6 +207,7 @@ export async function updateTodayReviewResult(input: {
   reviewRecordId: string;
   result: ReviewResult;
   solutionImageUri?: string | null;
+  note?: string | null;
   voiceNote?: ReviewRecordVoiceNote | null;
 }): Promise<UpdateTodayReviewResultResult> {
   try {
@@ -205,6 +217,7 @@ export async function updateTodayReviewResult(input: {
     const solutionImageUriRaw =
       typeof input.solutionImageUri === 'string' ? input.solutionImageUri.trim() : '';
     const solutionImageUri = solutionImageUriRaw.length > 0 ? solutionImageUriRaw : null;
+    const note = normalizeReviewTextNote(input.note);
     const voiceNoteFromInput = input.voiceNote ?? null;
     const voiceNote = normalizeReviewRecordVoiceNote(voiceNoteFromInput);
     const voiceNoteDropped = voiceNoteFromInput !== null && voiceNote === null;
@@ -217,6 +230,15 @@ export async function updateTodayReviewResult(input: {
         result,
       );
       if (!resultUpdated) {
+        throw new Error('Review record does not exist.');
+      }
+
+      const noteUpdated = await ReviewRecordRepository.updateReviewRecordNoteInTransaction(
+        db,
+        reviewRecordId,
+        note,
+      );
+      if (!noteUpdated) {
         throw new Error('Review record does not exist.');
       }
 

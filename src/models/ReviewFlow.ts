@@ -17,6 +17,7 @@ export interface CompleteReviewInput {
   mistakeId: string;
   reviewIndex: number;
   solutionImageUri?: string | null;
+  note?: string | null;
   voiceNote?: ReviewRecordVoiceNote | null;
   result: ReviewResult;
   cleanupImageOnFailure?: boolean;

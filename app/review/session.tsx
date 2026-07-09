@@ -8,6 +8,7 @@ import {
   BackHandler,
   type GestureResponderEvent,
   Image,
+  Keyboard,
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -16,6 +17,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -39,6 +41,7 @@ import {
   TOP_PULL_RELEASE_DISTANCE,
   TOP_PULL_TRIGGER_DISTANCE,
 } from '@/src/constants/edgePullNavigation';
+import { REVIEW_TEXT_NOTE_MAX_LENGTH } from '@/src/constants/review';
 import type { DetailImageSlot, DetailReviewRecordItem } from '@/src/models/MistakeDetailViewModel';
 import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewResult } from '@/src/models/Mistake';
@@ -105,6 +108,7 @@ interface SubmittedReviewEntry {
   reviewIndex: number;
   result: ReviewResult;
   solutionImage: LocalImage | null;
+  note: string | null;
   voiceNote: VoiceNoteEntity | null;
 }
 
@@ -545,6 +549,11 @@ function toReviewRecordVoiceNote(value: VoiceNoteEntity | null): ReviewRecordVoi
   };
 }
 
+function normalizeReviewTextNote(value: string | null | undefined): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  return normalized.length > 0 ? normalized : null;
+}
+
 function isReviewResult(value: unknown): value is ReviewResult {
   return value === 'mastered' || value === 'unsure' || value === 'wrong';
 }
@@ -620,6 +629,7 @@ function buildSubmittedReviewEntryFromRecord(
     reviewIndex: record.reviewIndex,
     result: record.result,
     solutionImage: toLocalReviewSolutionImage(record, mistakeId),
+    note: normalizeReviewTextNote(record.note),
     voiceNote: toVoiceNoteEntity(record.voiceNote ?? null),
   };
 }
@@ -1120,6 +1130,7 @@ export default function ReviewSessionPage() {
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
+  const [reviewTextNote, setReviewTextNote] = useState('');
   const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
   const [isReviewSolutionImageBusy, setIsReviewSolutionImageBusy] = useState(false);
   const [actionBarHeight, setActionBarHeight] = useState(0);
@@ -1160,7 +1171,13 @@ export default function ReviewSessionPage() {
     ? submittedReviewEntries[currentQueueItem.id] ?? null
     : null;
   const hasUnsubmittedReviewDraft =
-    !currentSubmittedReviewEntry && (!!reviewSolutionImage || !!voiceNote || isVoiceRecording);
+    !currentSubmittedReviewEntry
+    && (
+      !!reviewSolutionImage
+      || !!voiceNote
+      || isVoiceRecording
+      || normalizeReviewTextNote(reviewTextNote) !== null
+    );
 
   const moduleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
     const moduleCounts = new Map<string, { count: number; remainingCount: number }>();
@@ -1755,6 +1772,7 @@ export default function ReviewSessionPage() {
 
     setReviewSolutionImage(null);
     setVoiceNote(null);
+    setReviewTextNote('');
     setIsVoicePlaying(false);
     setIsVoiceRecording(false);
     setIsVoiceRecordingPaused(false);
@@ -2498,6 +2516,7 @@ export default function ReviewSessionPage() {
     setCurrentIndex(0);
     setResultStats(EMPTY_RESULT_STATS);
     setVoiceNote(null);
+    setReviewTextNote('');
     setIsVoiceRecording(false);
     setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
@@ -2591,6 +2610,7 @@ export default function ReviewSessionPage() {
   useEffect(() => {
     if (!currentQueueItemId) {
       setVoiceNote(null);
+      setReviewTextNote('');
       setIsVoiceRecording(false);
       setIsVoiceRecordingPaused(false);
       setRecordingElapsedMs(0);
@@ -2607,6 +2627,7 @@ export default function ReviewSessionPage() {
     }
 
     setVoiceNote(null);
+    setReviewTextNote('');
     setIsVoiceRecording(false);
     setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
@@ -2681,6 +2702,7 @@ export default function ReviewSessionPage() {
         if (effectiveSubmittedEntry) {
           setReviewSolutionImage(effectiveSubmittedEntry.solutionImage);
           setVoiceNote(effectiveSubmittedEntry.voiceNote);
+          setReviewTextNote(effectiveSubmittedEntry.note ?? '');
         }
         if (hydratedSubmittedEntry) {
           setSubmittedReviewEntries((previous) => {
@@ -2690,6 +2712,7 @@ export default function ReviewSessionPage() {
               && current.reviewIndex === hydratedSubmittedEntry.reviewIndex
               && current.result === hydratedSubmittedEntry.result
               && current.solutionImage?.uri === hydratedSubmittedEntry.solutionImage?.uri
+              && current.note === hydratedSubmittedEntry.note
               && current.voiceNote?.fileUri === hydratedSubmittedEntry.voiceNote?.fileUri;
             if (unchanged) {
               return previous;
@@ -2776,6 +2799,7 @@ export default function ReviewSessionPage() {
         await stopVoicePlayback(false);
       }
 
+      Keyboard.dismiss();
       setIsSubmitting(true);
       try {
         const existingSubmittedEntry = submittedReviewEntries[currentQueueItem.id] ?? null;
@@ -2785,6 +2809,7 @@ export default function ReviewSessionPage() {
             reviewRecordId: existingSubmittedEntry.reviewRecordId,
             result,
             solutionImageUri: reviewSolutionImage?.uri ?? null,
+            note: reviewTextNote,
             voiceNote: toReviewRecordVoiceNote(voiceNote),
           });
 
@@ -2812,6 +2837,7 @@ export default function ReviewSessionPage() {
               ...existingSubmittedEntry,
               result,
               solutionImage: reviewSolutionImage,
+              note: normalizeReviewTextNote(reviewTextNote),
               voiceNote,
             },
           }));
@@ -2831,6 +2857,7 @@ export default function ReviewSessionPage() {
           reviewIndex: currentMeta.nextReviewIndex,
           result,
           solutionImageUri: reviewSolutionImage?.uri ?? null,
+          note: reviewTextNote,
           voiceNote: toReviewRecordVoiceNote(voiceNote),
         });
 
@@ -2851,6 +2878,7 @@ export default function ReviewSessionPage() {
           reviewIndex: currentMeta.nextReviewIndex,
           result,
           solutionImage: reviewSolutionImage,
+          note: normalizeReviewTextNote(reviewTextNote),
           voiceNote,
         };
         const nextSubmittedReviewEntries = {
@@ -2895,6 +2923,7 @@ export default function ReviewSessionPage() {
         if (nextPendingIndex !== null) {
           setReviewSolutionImage(null);
           setVoiceNote(null);
+          setReviewTextNote('');
         }
         setIsVoicePlaying(false);
         setIsVoiceRecording(false);
@@ -2931,6 +2960,7 @@ export default function ReviewSessionPage() {
       isVoiceRecording,
       queue,
       reviewSolutionImage,
+      reviewTextNote,
       selectedModuleFilter,
       showToast,
       stopVoicePlayback,
@@ -3315,6 +3345,63 @@ export default function ReviewSessionPage() {
                     </View>
                   </>
                 ) : null}
+              </CardContainer>
+            ) : null}
+
+            {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
+              <CardContainer style={styles.reviewTextCard} padding={spacing.lg}>
+                <View style={styles.reviewTextHeaderRow}>
+                  <View style={styles.reviewTextIconWrap}>
+                    <MaterialIcons name="edit-note" size={21} color="#7C3AED" />
+                  </View>
+                  <View style={styles.reviewTextHeaderTextWrap}>
+                    <Text style={styles.reviewTextTitle}>文字讲解</Text>
+                    <Text style={styles.reviewTextDescription}>
+                      写下关键条件、解题思路和容易错的地方
+                    </Text>
+                  </View>
+                  {reviewTextNote.length > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="清空文字讲解"
+                      disabled={isSubmitting || isVoiceRecording || isVoiceBusy}
+                      onPress={() => setReviewTextNote('')}
+                      style={({ pressed }) => [
+                        styles.reviewTextClearButton,
+                        pressed && styles.reviewTextClearButtonPressed,
+                        (isSubmitting || isVoiceRecording || isVoiceBusy)
+                          && styles.reviewTextClearButtonDisabled,
+                      ]}>
+                      <Text style={styles.reviewTextClearButtonText}>清空</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                <TextInput
+                  accessibilityLabel={`第 ${currentMeta?.nextReviewIndex ?? currentQueueItem.nextReviewIndex} 刷文字讲解`}
+                  editable={!isSubmitting && !isVoiceRecording && !isVoiceBusy}
+                  maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+                  multiline
+                  onChangeText={setReviewTextNote}
+                  placeholder="例如：先由定义域确定参数范围，再分类讨论……"
+                  placeholderTextColor="#94A3B8"
+                  scrollEnabled
+                  style={[
+                    styles.reviewTextInput,
+                    (isSubmitting || isVoiceRecording || isVoiceBusy) && styles.reviewTextInputDisabled,
+                  ]}
+                  textAlignVertical="top"
+                  value={reviewTextNote}
+                />
+
+                <View style={styles.reviewTextFooterRow}>
+                  <Text style={styles.reviewTextSaveHint}>
+                    {currentSubmittedReviewEntry ? '再次选择结果后更新本刷记录' : '选择结果后保存到本刷记录'}
+                  </Text>
+                  <Text style={styles.reviewTextCounter}>
+                    {reviewTextNote.length}/{REVIEW_TEXT_NOTE_MAX_LENGTH}
+                  </Text>
+                </View>
               </CardContainer>
             ) : null}
 
@@ -4025,6 +4112,92 @@ const styles = StyleSheet.create({
   },
   voiceButtonPressed: {
     opacity: 0.78,
+  },
+  reviewTextCard: {
+    borderRadius: radius.xl,
+    gap: spacing.sm,
+  },
+  reviewTextHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  reviewTextIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EDE9FE',
+  },
+  reviewTextHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  reviewTextTitle: {
+    ...typography.sectionTitle,
+    fontSize: 20,
+    lineHeight: 27,
+    color: '#0F172A',
+    fontWeight: '700',
+  },
+  reviewTextDescription: {
+    ...typography.bodySmall,
+    fontSize: 14,
+    lineHeight: 19,
+    color: '#64748B',
+    fontWeight: '500',
+  },
+  reviewTextClearButton: {
+    minHeight: 30,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: '#F5F3FF',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  reviewTextClearButtonPressed: {
+    opacity: 0.78,
+  },
+  reviewTextClearButtonDisabled: {
+    opacity: 0.5,
+  },
+  reviewTextClearButtonText: {
+    ...typography.caption,
+    color: '#6D28D9',
+    fontWeight: '700',
+  },
+  reviewTextInput: {
+    minHeight: 132,
+    maxHeight: 260,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: '#FAFAFF',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    ...typography.body,
+    color: '#1E293B',
+  },
+  reviewTextInputDisabled: {
+    opacity: 0.6,
+  },
+  reviewTextFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  reviewTextSaveHint: {
+    ...typography.caption,
+    color: '#64748B',
+    flex: 1,
+  },
+  reviewTextCounter: {
+    ...typography.caption,
+    color: '#64748B',
+    fontVariant: ['tabular-nums'],
   },
   actionRow: {
     flexDirection: 'row',

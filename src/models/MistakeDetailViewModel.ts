@@ -35,6 +35,7 @@ export interface DetailReviewRecordItem {
   reviewIndex: number;
   createdAt: string;
   result: DetailReviewResult;
+  note?: string | null;
   voiceNote?: ReviewRecordVoiceNote | null;
   solutionImageId?: string | null;
   solutionImageUri?: string | null;

@@ -600,6 +600,40 @@ WHERE id = ?;`,
     }
   },
 
+  async updateReviewRecordNoteInTransaction(
+    db: SQLite.SQLiteDatabase,
+    reviewRecordId: string,
+    note: string | null,
+  ): Promise<boolean> {
+    try {
+      const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
+      const normalizedNote = typeof note === 'string' ? note.trim() : '';
+
+      const result = await db.runAsync(
+        `UPDATE review_records
+SET note = ?
+WHERE id = ?;`,
+        normalizedNote.length > 0 ? normalizedNote : null,
+        normalizedReviewRecordId,
+      );
+
+      if (result.changes <= 0) {
+        Logger.warn(REPO_SCOPE, 'updateReviewRecordNoteInTransaction skipped because review_record was not found.', {
+          reviewRecordId: normalizedReviewRecordId,
+        });
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateReviewRecordNoteInTransaction failed.', {
+        reviewRecordId,
+        error,
+      });
+      throw error;
+    }
+  },
+
   async updateReviewRecordVoiceNoteInTransaction(
     db: SQLite.SQLiteDatabase,
     reviewRecordId: string,
