@@ -35,6 +35,11 @@ import {
 } from '@/src/components';
 import { useMistakeDetailImages } from '@/src/hooks/useMistakeDetailImages';
 import {
+  DIFFICULTY_OPTIONS,
+  ERROR_REASON_OPTIONS,
+  MODULE_OPTIONS,
+} from '@/src/constants/mistakeOptions';
+import {
   BOTTOM_RELEASE_DISTANCE,
   BOTTOM_TRIGGER_DISTANCE,
   EDGE_END_DRAG_VELOCITY_MIN,
@@ -48,10 +53,13 @@ import type {
   DetailReviewRecordItem,
   MistakeDetailViewModel,
 } from '@/src/models/MistakeDetailViewModel';
+import type { CustomModule } from '@/src/models/CustomModule';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import { CustomModuleService } from '@/src/services/CustomModuleService';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
+import * as MistakeListService from '@/src/services/MistakeListService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import * as ReviewRecordVoiceService from '@/src/services/ReviewRecordVoiceService';
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
@@ -105,6 +113,14 @@ type DetailImagePreviewItem = {
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
 type ReviewImageSource = 'camera' | 'album';
+type DetailModulePickerOption = {
+  value: string;
+  label: string;
+};
+type DetailMetadataDraft = {
+  errorReason: string | null;
+  difficulty: number;
+};
 type MaybePreviewImage = {
   uri?: string | null;
   exists?: boolean;
@@ -457,6 +473,93 @@ function normalizeNoteDraft(value: string | null | undefined): string {
   return value.trim();
 }
 
+function normalizeModuleNameForPicker(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim().replace(/\s+/g, ' ');
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toModulePickerKey(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+
+function appendModulePickerOption(
+  options: DetailModulePickerOption[],
+  seenKeys: Set<string>,
+  value: string | null | undefined,
+  label?: string,
+) {
+  const normalizedValue = normalizeModuleNameForPicker(value);
+  if (!normalizedValue) {
+    return;
+  }
+
+  const key = toModulePickerKey(normalizedValue);
+  if (seenKeys.has(key)) {
+    return;
+  }
+
+  seenKeys.add(key);
+  options.push({
+    value: normalizedValue,
+    label: normalizeModuleNameForPicker(label) ?? normalizedValue,
+  });
+}
+
+function buildDetailModulePickerOptions(
+  customModules: CustomModule[],
+  existingMistakeModules: string[],
+  currentModule: string | null,
+): DetailModulePickerOption[] {
+  const options: DetailModulePickerOption[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const option of MODULE_OPTIONS) {
+    appendModulePickerOption(options, seenKeys, option.value, option.label);
+  }
+  for (const moduleItem of customModules) {
+    appendModulePickerOption(options, seenKeys, moduleItem.name);
+  }
+  for (const moduleName of existingMistakeModules) {
+    appendModulePickerOption(options, seenKeys, moduleName);
+  }
+
+  const normalizedCurrentModule = normalizeModuleNameForPicker(currentModule);
+  if (normalizedCurrentModule && !seenKeys.has(toModulePickerKey(normalizedCurrentModule))) {
+    options.unshift({
+      value: normalizedCurrentModule,
+      label: normalizedCurrentModule,
+    });
+  }
+
+  return options;
+}
+
+function normalizeMetadataErrorReason(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim().replace(/\s+/g, ' ');
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeMetadataDifficulty(value: number): number {
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized < 1 || normalized > 5) {
+    return 3;
+  }
+  return normalized;
+}
+
+function buildMetadataDraft(detail: MistakeDetailViewModel): DetailMetadataDraft {
+  return {
+    errorReason: normalizeMetadataErrorReason(detail.errorReason),
+    difficulty: normalizeMetadataDifficulty(detail.difficulty),
+  };
+}
+
 function clampNoteDraft(value: string): string {
   if (value.length <= NOTE_MAX_LENGTH) {
     return value;
@@ -727,6 +830,276 @@ function StateCard({
   );
 }
 
+function DetailModulePickerModal({
+  visible,
+  options,
+  selectedModule,
+  busy,
+  message,
+  onClose,
+  onSelectModule,
+}: {
+  visible: boolean;
+  options: DetailModulePickerOption[];
+  selectedModule: string | null;
+  busy: boolean;
+  message?: string | null;
+  onClose: () => void;
+  onSelectModule: (moduleName: string) => void;
+}) {
+  const normalizedSelectedModule = normalizeModuleNameForPicker(selectedModule);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modulePickerOverlay}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="关闭模块选择"
+          style={styles.modulePickerBackdrop}
+          onPress={onClose}
+        />
+        <View style={styles.modulePickerSheet}>
+          <View style={styles.modulePickerHandle} />
+          <View style={styles.modulePickerHeader}>
+            <View style={styles.modulePickerHeaderTextWrap}>
+              <Text style={styles.modulePickerTitle}>修改模块</Text>
+              <Text style={styles.modulePickerSubtitle}>选择已有模块</Text>
+            </View>
+            {busy ? <ActivityIndicator size="small" color={colors.success} /> : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭模块选择"
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.modulePickerCloseButton,
+                pressed && styles.modulePickerCloseButtonPressed,
+              ]}>
+              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+            </Pressable>
+          </View>
+
+          {message ? (
+            <Text maxFontSizeMultiplier={1.1} style={styles.modulePickerMessage}>
+              {message}
+            </Text>
+          ) : null}
+
+          <ScrollView
+            style={styles.modulePickerScroll}
+            contentContainerStyle={styles.modulePickerContent}>
+            {options.map((option) => {
+              const selected =
+                normalizedSelectedModule !== null
+                && toModulePickerKey(normalizedSelectedModule) === toModulePickerKey(option.value);
+              return (
+                <Pressable
+                  key={option.value}
+                  accessibilityRole="button"
+                  accessibilityLabel={`选择模块：${option.label}`}
+                  disabled={busy || selected}
+                  onPress={() => onSelectModule(option.value)}
+                  style={({ pressed }) => [
+                    styles.modulePickerOption,
+                    selected && styles.modulePickerOptionSelected,
+                    pressed && !busy && !selected && styles.modulePickerOptionPressed,
+                    busy && styles.modulePickerOptionDisabled,
+                  ]}>
+                  <Text
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.1}
+                    style={[
+                      styles.modulePickerOptionText,
+                      selected && styles.modulePickerOptionTextSelected,
+                    ]}>
+                    {option.label}
+                  </Text>
+                  {selected ? (
+                    <MaterialIcons name="check-circle" size={18} color={colors.success} />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function DetailMetadataEditorModal({
+  visible,
+  draft,
+  busy,
+  message,
+  onClose,
+  onChangeDraft,
+  onSave,
+}: {
+  visible: boolean;
+  draft: DetailMetadataDraft | null;
+  busy: boolean;
+  message?: string | null;
+  onClose: () => void;
+  onChangeDraft: (draft: DetailMetadataDraft) => void;
+  onSave: () => void;
+}) {
+  if (!draft) {
+    return null;
+  }
+
+  const errorReasonOptions = [
+    { value: null, label: '未填写' },
+    ...ERROR_REASON_OPTIONS.map((option) => ({
+      value: option.value,
+      label: option.label,
+    })),
+  ];
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.metadataModalOverlay}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="关闭错因难度编辑"
+          style={styles.metadataModalBackdrop}
+          onPress={onClose}
+        />
+        <View style={styles.metadataModalSheet}>
+          <View style={styles.metadataModalHandle} />
+          <View style={styles.metadataModalHeader}>
+            <View style={styles.metadataModalHeaderTextWrap}>
+              <Text style={styles.metadataModalTitle}>修改错因/难度</Text>
+              <Text style={styles.metadataModalSubtitle}>修正录入时选错的信息</Text>
+            </View>
+            {busy ? <ActivityIndicator size="small" color={colors.success} /> : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭错因难度编辑"
+              onPress={onClose}
+              disabled={busy}
+              style={({ pressed }) => [
+                styles.metadataModalCloseButton,
+                pressed && !busy && styles.metadataModalCloseButtonPressed,
+                busy && styles.metadataModalButtonDisabled,
+              ]}>
+              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+            </Pressable>
+          </View>
+
+          {message ? (
+            <Text maxFontSizeMultiplier={1.1} style={styles.metadataModalMessage}>
+              {message}
+            </Text>
+          ) : null}
+
+          <View style={styles.metadataSection}>
+            <Text style={styles.metadataSectionTitle}>错因</Text>
+            <View style={styles.metadataChipRow}>
+              {errorReasonOptions.map((option) => {
+                const selected = draft.errorReason === option.value;
+                return (
+                  <Pressable
+                    key={option.value ?? 'none'}
+                    accessibilityRole="button"
+                    accessibilityLabel={`选择错因：${option.label}`}
+                    disabled={busy}
+                    onPress={() =>
+                      onChangeDraft({
+                        ...draft,
+                        errorReason: option.value,
+                      })
+                    }
+                    style={({ pressed }) => [
+                      styles.metadataChip,
+                      selected && styles.metadataChipSelected,
+                      pressed && !busy && styles.metadataChipPressed,
+                      busy && styles.metadataModalButtonDisabled,
+                    ]}>
+                    <Text
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={1.1}
+                      style={[
+                        styles.metadataChipText,
+                        selected && styles.metadataChipTextSelected,
+                      ]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={styles.metadataSection}>
+            <Text style={styles.metadataSectionTitle}>难度</Text>
+            <View style={styles.metadataChipRow}>
+              {DIFFICULTY_OPTIONS.map((option) => {
+                const selected = draft.difficulty === option.value;
+                return (
+                  <Pressable
+                    key={option.value}
+                    accessibilityRole="button"
+                    accessibilityLabel={`选择难度：${option.label}`}
+                    disabled={busy}
+                    onPress={() =>
+                      onChangeDraft({
+                        ...draft,
+                        difficulty: option.value,
+                      })
+                    }
+                    style={({ pressed }) => [
+                      styles.metadataChip,
+                      selected && styles.metadataChipSelected,
+                      pressed && !busy && styles.metadataChipPressed,
+                      busy && styles.metadataModalButtonDisabled,
+                    ]}>
+                    <Text
+                      numberOfLines={1}
+                      maxFontSizeMultiplier={1.1}
+                      style={[
+                        styles.metadataChipText,
+                        selected && styles.metadataChipTextSelected,
+                      ]}>
+                      {option.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          <View style={styles.metadataModalFooter}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="取消修改错因难度"
+              disabled={busy}
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.metadataSecondaryButton,
+                pressed && !busy && styles.metadataButtonPressed,
+                busy && styles.metadataModalButtonDisabled,
+              ]}>
+              <Text style={styles.metadataSecondaryButtonText}>取消</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="保存错因难度"
+              disabled={busy}
+              onPress={onSave}
+              style={({ pressed }) => [
+                styles.metadataPrimaryButton,
+                pressed && !busy && styles.metadataButtonPressed,
+                busy && styles.metadataModalButtonDisabled,
+              ]}>
+              <Text style={styles.metadataPrimaryButtonText}>{busy ? '保存中...' : '保存'}</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function MistakeDetailScreen() {
   const router = useRouter();
   const navigation = useNavigation();
@@ -756,6 +1129,16 @@ export default function MistakeDetailScreen() {
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isDeletingMistake, setIsDeletingMistake] = useState(false);
+  const [customModules, setCustomModules] = useState<CustomModule[]>([]);
+  const [existingMistakeModules, setExistingMistakeModules] = useState<string[]>([]);
+  const [isModulePickerVisible, setIsModulePickerVisible] = useState(false);
+  const [isModuleOptionsLoading, setIsModuleOptionsLoading] = useState(false);
+  const [isSavingModule, setIsSavingModule] = useState(false);
+  const [modulePickerMessage, setModulePickerMessage] = useState<string | null>(null);
+  const [isMetadataEditorVisible, setIsMetadataEditorVisible] = useState(false);
+  const [metadataDraft, setMetadataDraft] = useState<DetailMetadataDraft | null>(null);
+  const [isSavingMetadata, setIsSavingMetadata] = useState(false);
+  const [metadataEditorMessage, setMetadataEditorMessage] = useState<string | null>(null);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
   const [activeVoiceRecordId, setActiveVoiceRecordId] = useState<string | null>(null);
   const [isVoicePlaybackBusy, setIsVoicePlaybackBusy] = useState(false);
@@ -908,6 +1291,43 @@ export default function MistakeDetailScreen() {
       noteSaveTimerRef.current = null;
     }
   }, []);
+
+  const loadModuleOptionsForPicker = useCallback(async () => {
+    setIsModuleOptionsLoading(true);
+    setModulePickerMessage(null);
+    const loadErrors: string[] = [];
+
+    try {
+      const modules = await CustomModuleService.listCustomModules();
+      setCustomModules(modules);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to load custom modules for detail module picker.', {
+        routeId,
+        error,
+      });
+      loadErrors.push('自定义模块');
+    }
+
+    try {
+      const moduleCounts = await MistakeListService.getMistakeModuleCounts({
+        segment: 'all',
+        keyword: '',
+        module: null,
+      });
+      setExistingMistakeModules(moduleCounts.map((item) => item.module));
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to load existing mistake modules for detail module picker.', {
+        routeId,
+        error,
+      });
+      loadErrors.push('题库模块');
+    } finally {
+      if (loadErrors.length > 0) {
+        setModulePickerMessage(`${loadErrors.join('、')}加载失败，已显示可用模块。`);
+      }
+      setIsModuleOptionsLoading(false);
+    }
+  }, [routeId]);
 
   const handleSaveNote = useCallback(
     async (nextValue?: string) => {
@@ -2180,6 +2600,8 @@ export default function MistakeDetailScreen() {
   const isDeleteMistakeDisabled =
     isDeletingMistake
     || isRefreshing
+    || isSavingModule
+    || isSavingMetadata
     || isSavingTitle
     || isSavingNote
     || takePhotoType !== null
@@ -2199,6 +2621,208 @@ export default function MistakeDetailScreen() {
   const hasNoteContent = normalizeNoteDraft(noteInput).length > 0;
   const noteReadText = hasNoteContent ? noteInput : '暂无备注';
   const isNoteClearDisabled = !isNoteEditing || isSavingNote || noteInput.length <= 0;
+  const currentModule = state.kind === 'success' ? state.detail.module : null;
+  const modulePickerOptions = useMemo(
+    () => buildDetailModulePickerOptions(customModules, existingMistakeModules, currentModule),
+    [customModules, existingMistakeModules, currentModule],
+  );
+  const isModulePickerBusy = isModuleOptionsLoading || isSavingModule;
+  const isModuleChangeDisabled = isDeleteMistakeDisabled || isModulePickerBusy;
+  const isMetadataChangeDisabled = isDeleteMistakeDisabled || isSavingMetadata;
+
+  const handleOpenModulePicker = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    if (isModuleChangeDisabled) {
+      if (activeVoiceRecordingRecordId !== null) {
+        showToast('正在录音，请先结束或放弃录音后再修改模块。', 'info');
+        return;
+      }
+      showToast('当前正在处理，请稍后再修改模块。', 'info');
+      return;
+    }
+
+    setModulePickerMessage(null);
+    setIsModulePickerVisible(true);
+    void loadModuleOptionsForPicker();
+  }, [
+    activeVoiceRecordingRecordId,
+    isModuleChangeDisabled,
+    loadModuleOptionsForPicker,
+    showToast,
+    state,
+  ]);
+
+  const handleCloseModulePicker = useCallback(() => {
+    if (isSavingModule) {
+      return;
+    }
+    setIsModulePickerVisible(false);
+  }, [isSavingModule]);
+
+  const handleSelectModule = useCallback(
+    async (moduleName: string) => {
+      if (state.kind !== 'success' || isSavingModule) {
+        return;
+      }
+
+      const nextModule = normalizeModuleNameForPicker(moduleName);
+      if (!nextModule) {
+        setModulePickerMessage('模块不能为空。');
+        showToast('模块不能为空。', 'error');
+        return;
+      }
+
+      const currentModuleName = normalizeModuleNameForPicker(state.detail.module);
+      if (currentModuleName && toModulePickerKey(currentModuleName) === toModulePickerKey(nextModule)) {
+        setIsModulePickerVisible(false);
+        return;
+      }
+
+      setIsSavingModule(true);
+      setModulePickerMessage(null);
+      try {
+        const result = await MistakeDetailService.updateMistakeModule({
+          mistakeId: state.detail.id,
+          module: nextModule,
+        });
+
+        if (!result.ok || !result.detail) {
+          const message = result.errorMessage ?? '更新模块失败，请重试。';
+          setModulePickerMessage(message);
+          showToast(message, 'error', TOAST_DURATION_LONG);
+          return;
+        }
+
+        const updatedDetail = result.detail;
+        setState((current) => {
+          if (current.kind !== 'success' || current.detail.id !== updatedDetail.id) {
+            return current;
+          }
+          return {
+            kind: 'success',
+            detail: updatedDetail,
+          };
+        });
+        setIsModulePickerVisible(false);
+        showToast('模块已更新。', 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Unexpected error while updating module.', {
+          routeId,
+          module: nextModule,
+          error,
+        });
+        const message = error instanceof Error ? error.message : '更新模块失败，请重试。';
+        setModulePickerMessage(message);
+        showToast(message, 'error', TOAST_DURATION_LONG);
+      } finally {
+        setIsSavingModule(false);
+      }
+    },
+    [isSavingModule, routeId, showToast, state],
+  );
+
+  const handleOpenMetadataEditor = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    if (isMetadataChangeDisabled) {
+      if (activeVoiceRecordingRecordId !== null) {
+        showToast('正在录音，请先结束或放弃录音后再修改错因/难度。', 'info');
+        return;
+      }
+      showToast('当前正在处理，请稍后再修改错因/难度。', 'info');
+      return;
+    }
+
+    setMetadataDraft(buildMetadataDraft(state.detail));
+    setMetadataEditorMessage(null);
+    setIsMetadataEditorVisible(true);
+  }, [
+    activeVoiceRecordingRecordId,
+    isMetadataChangeDisabled,
+    showToast,
+    state,
+  ]);
+
+  const handleCloseMetadataEditor = useCallback(() => {
+    if (isSavingMetadata) {
+      return;
+    }
+    setIsMetadataEditorVisible(false);
+    setMetadataEditorMessage(null);
+    setMetadataDraft(null);
+  }, [isSavingMetadata]);
+
+  const handleSaveMetadata = useCallback(async () => {
+    if (state.kind !== 'success' || !metadataDraft || isSavingMetadata) {
+      return;
+    }
+
+    const nextDraft: DetailMetadataDraft = {
+      errorReason: normalizeMetadataErrorReason(metadataDraft.errorReason),
+      difficulty: normalizeMetadataDifficulty(metadataDraft.difficulty),
+    };
+    const currentDraft = buildMetadataDraft(state.detail);
+    if (
+      nextDraft.errorReason === currentDraft.errorReason
+      && nextDraft.difficulty === currentDraft.difficulty
+    ) {
+      handleCloseMetadataEditor();
+      return;
+    }
+
+    setIsSavingMetadata(true);
+    setMetadataEditorMessage(null);
+    try {
+      const result = await MistakeDetailService.updateMistakeMetadata({
+        mistakeId: state.detail.id,
+        errorReason: nextDraft.errorReason,
+        difficulty: nextDraft.difficulty,
+      });
+
+      if (!result.ok || !result.detail) {
+        const message = result.errorMessage ?? '更新错因/难度失败，请重试。';
+        setMetadataEditorMessage(message);
+        showToast(message, 'error', TOAST_DURATION_LONG);
+        return;
+      }
+
+      const updatedDetail = result.detail;
+      setState((current) => {
+        if (current.kind !== 'success' || current.detail.id !== updatedDetail.id) {
+          return current;
+        }
+        return {
+          kind: 'success',
+          detail: updatedDetail,
+        };
+      });
+      setIsMetadataEditorVisible(false);
+      setMetadataDraft(null);
+      showToast('错因/难度已更新。', 'success');
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Unexpected error while updating metadata.', {
+        routeId,
+        error,
+      });
+      const message = error instanceof Error ? error.message : '更新错因/难度失败，请重试。';
+      setMetadataEditorMessage(message);
+      showToast(message, 'error', TOAST_DURATION_LONG);
+    } finally {
+      setIsSavingMetadata(false);
+    }
+  }, [
+    handleCloseMetadataEditor,
+    isSavingMetadata,
+    metadataDraft,
+    routeId,
+    showToast,
+    state,
+  ]);
 
   const handleStartDetailReview = useCallback(() => {
     if (state.kind !== 'success') {
@@ -2817,9 +3441,20 @@ export default function MistakeDetailScreen() {
           <>
             <CardContainer style={styles.summaryCard} padding={spacing.xl}>
               <View style={styles.summaryHeaderRow}>
-                <View style={styles.summaryMetaRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`当前模块：${state.detail.module}，长按修改模块`}
+                  accessibilityHint="长按后选择已有模块"
+                  disabled={isModuleChangeDisabled}
+                  delayLongPress={360}
+                  onLongPress={handleOpenModulePicker}
+                  style={({ pressed }) => [
+                    styles.summaryMetaRow,
+                    pressed && !isModuleChangeDisabled && styles.summaryMetaRowPressed,
+                    isModuleChangeDisabled && styles.summaryMetaRowDisabled,
+                  ]}>
                   <Text style={styles.summaryMeta}>{state.detail.module}</Text>
-                </View>
+                </Pressable>
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="删除错题"
@@ -2894,7 +3529,20 @@ export default function MistakeDetailScreen() {
                   <Text style={styles.summaryDateText}>{formatDateShort(state.detail.createdAt)}</Text>
                 </View>
                 <Text style={styles.summaryInfoDot}>·</Text>
-                <Text style={styles.summaryDifficultyText}>难度 {state.detail.difficulty}</Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`当前难度：${state.detail.difficulty}，长按修改错因和难度`}
+                  accessibilityHint="长按后修改错因和难度"
+                  disabled={isMetadataChangeDisabled}
+                  delayLongPress={360}
+                  onLongPress={handleOpenMetadataEditor}
+                  style={({ pressed }) => [
+                    styles.summaryMetadataPressable,
+                    pressed && !isMetadataChangeDisabled && styles.summaryMetadataPressablePressed,
+                    isMetadataChangeDisabled && styles.summaryMetadataPressableDisabled,
+                  ]}>
+                  <Text style={styles.summaryDifficultyText}>难度 {state.detail.difficulty}</Text>
+                </Pressable>
               </View>
 
               <View style={styles.summaryDivider} />
@@ -2917,7 +3565,20 @@ export default function MistakeDetailScreen() {
 
               {state.detail.errorReason ? (
                 <View style={styles.summaryInfoList}>
-                  <Text style={styles.summaryInfoText}>错因：{state.detail.errorReason}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`当前错因：${state.detail.errorReason}，长按修改错因和难度`}
+                    accessibilityHint="长按后修改错因和难度"
+                    disabled={isMetadataChangeDisabled}
+                    delayLongPress={360}
+                    onLongPress={handleOpenMetadataEditor}
+                    style={({ pressed }) => [
+                      styles.summaryMetadataPressable,
+                      pressed && !isMetadataChangeDisabled && styles.summaryMetadataPressablePressed,
+                      isMetadataChangeDisabled && styles.summaryMetadataPressableDisabled,
+                    ]}>
+                    <Text style={styles.summaryInfoText}>错因：{state.detail.errorReason}</Text>
+                  </Pressable>
                 </View>
               ) : null}
 
@@ -3249,6 +3910,30 @@ export default function MistakeDetailScreen() {
         </View>
       </Modal>
 
+      <DetailModulePickerModal
+        visible={isModulePickerVisible}
+        options={modulePickerOptions}
+        selectedModule={currentModule}
+        busy={isModulePickerBusy}
+        message={modulePickerMessage}
+        onClose={handleCloseModulePicker}
+        onSelectModule={(moduleName) => {
+          void handleSelectModule(moduleName);
+        }}
+      />
+
+      <DetailMetadataEditorModal
+        visible={isMetadataEditorVisible}
+        draft={metadataDraft}
+        busy={isSavingMetadata}
+        message={metadataEditorMessage}
+        onClose={handleCloseMetadataEditor}
+        onChangeDraft={setMetadataDraft}
+        onSave={() => {
+          void handleSaveMetadata();
+        }}
+      />
+
       {toastVisible ? (
         <Animated.View
           pointerEvents="none"
@@ -3361,6 +4046,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
+  summaryMetaRowPressed: {
+    opacity: 0.82,
+  },
+  summaryMetaRowDisabled: {
+    opacity: 0.62,
+  },
   summaryMeta: {
     ...typography.body,
     color: '#4E5A52',
@@ -3470,6 +4161,17 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
     fontWeight: '700',
+  },
+  summaryMetadataPressable: {
+    borderRadius: radius.sm,
+    paddingHorizontal: 2,
+    paddingVertical: 2,
+  },
+  summaryMetadataPressablePressed: {
+    opacity: 0.78,
+  },
+  summaryMetadataPressableDisabled: {
+    opacity: 0.62,
   },
   summaryDivider: {
     marginTop: spacing.md,
@@ -3724,6 +4426,265 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textPrimary,
     fontWeight: '500',
+  },
+  modulePickerOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.screenPadding,
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+  },
+  modulePickerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  modulePickerSheet: {
+    maxHeight: '86%',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+  modulePickerHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.border,
+  },
+  modulePickerHeader: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  modulePickerHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  modulePickerTitle: {
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
+  },
+  modulePickerSubtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  modulePickerCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modulePickerCloseButtonPressed: {
+    opacity: 0.78,
+  },
+  modulePickerMessage: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  modulePickerScroll: {
+    flexGrow: 0,
+  },
+  modulePickerContent: {
+    gap: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  modulePickerOption: {
+    minHeight: 44,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  modulePickerOptionSelected: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  modulePickerOptionPressed: {
+    opacity: 0.82,
+  },
+  modulePickerOptionDisabled: {
+    opacity: 0.72,
+  },
+  modulePickerOptionText: {
+    ...typography.bodySmall,
+    flex: 1,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  modulePickerOptionTextSelected: {
+    color: colors.success,
+  },
+  metadataModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.screenPadding,
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+  },
+  metadataModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  metadataModalSheet: {
+    maxHeight: '86%',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+  metadataModalHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.border,
+  },
+  metadataModalHeader: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  metadataModalHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  metadataModalTitle: {
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
+  },
+  metadataModalSubtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  metadataModalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metadataModalCloseButtonPressed: {
+    opacity: 0.78,
+  },
+  metadataModalMessage: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  metadataSection: {
+    gap: spacing.sm,
+  },
+  metadataSectionTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  metadataChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  metadataChip: {
+    minHeight: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metadataChipSelected: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  metadataChipPressed: {
+    opacity: 0.82,
+  },
+  metadataChipText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '700',
+  },
+  metadataChipTextSelected: {
+    color: colors.success,
+  },
+  metadataModalFooter: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  metadataSecondaryButton: {
+    minWidth: 76,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  metadataPrimaryButton: {
+    minWidth: 90,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  metadataButtonPressed: {
+    opacity: 0.84,
+  },
+  metadataModalButtonDisabled: {
+    opacity: 0.56,
+  },
+  metadataSecondaryButtonText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  metadataPrimaryButtonText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '800',
   },
   imagesSectionCard: {
     borderRadius: radius.xl,

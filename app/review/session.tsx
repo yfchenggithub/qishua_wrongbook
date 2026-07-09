@@ -1944,6 +1944,45 @@ export default function ReviewSessionPage() {
     router.replace('/(tabs)' as never);
   }, [router]);
 
+  const handleOpenCurrentDetail = useCallback(() => {
+    const targetId = (currentMeta?.mistakeId ?? currentQueueItemId ?? '').trim();
+    if (!targetId) {
+      showToast('当前题未准备好，请稍后...', 'info', TOAST_DURATION_SHORT);
+      return;
+    }
+
+    if (isSubmitting || isReviewSolutionImageBusy || isVoiceBusy || activePreviewImageAction !== null) {
+      showToast('正在处理，请稍后...', 'info', TOAST_DURATION_SHORT);
+      return;
+    }
+
+    if (isVoiceRecording) {
+      showToast('请先停止并保存语音讲解，再进入详情页。', 'info', TOAST_DURATION_SHORT);
+      return;
+    }
+
+    if (isLoadingCurrent) {
+      showToast('题目加载中，请稍后...', 'info', TOAST_DURATION_SHORT);
+      return;
+    }
+
+    Logger.info(PAGE_SCOPE, 'Open mistake detail from review session.', {
+      mistakeId: targetId,
+    });
+    router.push(`/mistake/${targetId}` as never);
+  }, [
+    activePreviewImageAction,
+    currentMeta?.mistakeId,
+    currentQueueItemId,
+    isLoadingCurrent,
+    isReviewSolutionImageBusy,
+    isSubmitting,
+    isVoiceBusy,
+    isVoiceRecording,
+    router,
+    showToast,
+  ]);
+
   const handleOpenQuestionPreview = useCallback((uri: string) => {
     const normalizedUri = uri.trim();
     if (!normalizedUri) {
@@ -3091,7 +3130,22 @@ export default function ReviewSessionPage() {
               <Text style={styles.progressTitle} numberOfLines={2}>
                 {currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...'}
               </Text>
-              <Text style={styles.progressModule}>{currentMeta?.module ?? currentQueueItem?.module ?? ''}</Text>
+              <View style={styles.progressMetaRow}>
+                <Text style={styles.progressModule} numberOfLines={1}>
+                  {currentMeta?.module ?? currentQueueItem?.module ?? ''}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="进入当前错题详情页"
+                  onPress={handleOpenCurrentDetail}
+                  style={({ pressed }) => [
+                    styles.detailEntryButton,
+                    pressed ? styles.detailEntryButtonPressed : null,
+                  ]}>
+                  <Text style={styles.detailEntryText} numberOfLines={1}>进入详情页</Text>
+                  <MaterialIcons name="chevron-right" size={18} color="#64748B" />
+                </Pressable>
+              </View>
             </CardContainer>
             ) : null}
 
@@ -3628,12 +3682,41 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: '800',
   },
+  progressMetaRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
   progressModule: {
     ...typography.body,
+    flex: 1,
+    minWidth: 0,
     color: colors.success,
     fontSize: 15,
     lineHeight: 21,
     fontWeight: '500',
+  },
+  detailEntryButton: {
+    minHeight: 28,
+    flexShrink: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    paddingLeft: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  detailEntryButtonPressed: {
+    opacity: 0.72,
+  },
+  detailEntryText: {
+    ...typography.bodySmall,
+    color: '#64748B',
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '700',
   },
   questionCard: {
     borderRadius: radius.xl,

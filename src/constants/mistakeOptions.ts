@@ -3,7 +3,7 @@ export interface MistakeOption<T extends string | number> {
   label: string;
 }
 
-export const MISTAKE_NOTE_MAX_LENGTH = 1000;
+export const MISTAKE_NOTE_MAX_LENGTH = 5000;
 
 export const SUBJECT_OPTIONS = [
   { value: 'math', label: '高中数学' },

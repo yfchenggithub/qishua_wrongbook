@@ -77,9 +77,9 @@ function buildExportModeHintText(mode: PrintEnhanceMode | null): string {
     return '当前导出模式：读取中...';
   }
   if (mode === 'clear_print') {
-    return '当前导出模式：清晰打印（较慢）';
+    return '当前导出模式：清晰打印';
   }
-  return '当前导出模式：快速导出（更快）';
+  return '当前导出模式：快速导出';
 }
 
 function buildHomePrimaryMessage(summary: HomeTaskSummary): string {

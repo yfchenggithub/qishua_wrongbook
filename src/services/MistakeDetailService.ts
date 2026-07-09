@@ -94,6 +94,29 @@ export type UpdateMistakeTitleResult = {
   errorMessage?: string;
 };
 
+export type UpdateMistakeModuleParams = {
+  mistakeId: string;
+  module: string;
+};
+
+export type UpdateMistakeModuleResult = {
+  ok: boolean;
+  detail?: MistakeDetailViewModel;
+  errorMessage?: string;
+};
+
+export type UpdateMistakeMetadataParams = {
+  mistakeId: string;
+  errorReason?: string | null;
+  difficulty: number;
+};
+
+export type UpdateMistakeMetadataResult = {
+  ok: boolean;
+  detail?: MistakeDetailViewModel;
+  errorMessage?: string;
+};
+
 export type UpdateMistakeNoteParams = {
   mistakeId: string;
   note?: string | null;
@@ -235,6 +258,40 @@ function buildDetailTitle(moduleName: string, title?: string | null): string {
     return normalizedTitle;
   }
   return `${moduleName}错题`;
+}
+
+function buildTitleAfterModuleUpdate(
+  currentTitle: string | null | undefined,
+  currentModule: string,
+  nextModule: string,
+): string | null | undefined {
+  const normalizedTitle = normalizeOptionalText(currentTitle);
+  const normalizedCurrentModule = normalizeOptionalText(currentModule);
+  if (!normalizedTitle || !normalizedCurrentModule || normalizedCurrentModule === nextModule) {
+    return currentTitle;
+  }
+
+  const canonicalPrefix = `${normalizedCurrentModule} · `;
+  if (normalizedTitle.startsWith(canonicalPrefix)) {
+    const suffix = normalizedTitle.slice(canonicalPrefix.length);
+    if (/^第\s*\d+\s*题$/u.test(suffix)) {
+      return `${nextModule} · ${suffix}`;
+    }
+  }
+
+  if (normalizedTitle === `${normalizedCurrentModule}错题`) {
+    return `${nextModule}错题`;
+  }
+
+  return currentTitle;
+}
+
+function normalizeDetailDifficulty(value: number): number | null {
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized < 1 || normalized > 5) {
+    return null;
+  }
+  return normalized;
 }
 
 function buildSubtitle(mistake: Mistake): string {
@@ -810,6 +867,145 @@ export async function updateMistakeTitle(
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'updateMistakeTitle failed.', {
       mistakeId,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function updateMistakeModule(
+  params: UpdateMistakeModuleParams,
+): Promise<UpdateMistakeModuleResult> {
+  const mistakeId = normalizeMistakeId(params.mistakeId);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  const nextModule = normalizeOptionalText(params.module);
+  if (!nextModule) {
+    return {
+      ok: false,
+      errorMessage: '模块不能为空。',
+    };
+  }
+
+  try {
+    const currentMistake = await MistakeRepository.getMistakeById(mistakeId);
+    if (!currentMistake) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    const nextTitle = buildTitleAfterModuleUpdate(
+      currentMistake.title,
+      currentMistake.module,
+      nextModule,
+    );
+    const updated = await MistakeRepository.updateMistake(mistakeId, {
+      module: nextModule,
+      title: nextTitle ?? null,
+    });
+    if (!updated) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Updated mistake module successfully.', {
+      mistakeId,
+      module: nextModule,
+    });
+
+    const detailResult = await getMistakeDetail(mistakeId);
+    if (!detailResult.ok || !detailResult.detail) {
+      return {
+        ok: false,
+        errorMessage: detailResult.errorMessage ?? '模块已更新，但刷新详情失败。',
+      };
+    }
+
+    return {
+      ok: true,
+      detail: detailResult.detail,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'updateMistakeModule failed.', {
+      mistakeId,
+      module: nextModule,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
+    };
+  }
+}
+
+export async function updateMistakeMetadata(
+  params: UpdateMistakeMetadataParams,
+): Promise<UpdateMistakeMetadataResult> {
+  const mistakeId = normalizeMistakeId(params.mistakeId);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  const nextDifficulty = normalizeDetailDifficulty(params.difficulty);
+  if (!nextDifficulty) {
+    return {
+      ok: false,
+      errorMessage: '难度必须是 1 到 5。',
+    };
+  }
+
+  const nextErrorReason = normalizeOptionalText(params.errorReason ?? null);
+
+  try {
+    const updated = await MistakeRepository.updateMistake(mistakeId, {
+      error_reason: nextErrorReason,
+      difficulty: nextDifficulty,
+    });
+    if (!updated) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Updated mistake metadata successfully.', {
+      mistakeId,
+      hasErrorReason: nextErrorReason !== null,
+      difficulty: nextDifficulty,
+    });
+
+    const detailResult = await getMistakeDetail(mistakeId);
+    if (!detailResult.ok || !detailResult.detail) {
+      return {
+        ok: false,
+        errorMessage: detailResult.errorMessage ?? '错因和难度已更新，但刷新详情失败。',
+      };
+    }
+
+    return {
+      ok: true,
+      detail: detailResult.detail,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'updateMistakeMetadata failed.', {
+      mistakeId,
+      hasErrorReason: nextErrorReason !== null,
+      difficulty: nextDifficulty,
       error,
     });
     return {
