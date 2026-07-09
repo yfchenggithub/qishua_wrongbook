@@ -5,6 +5,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -131,10 +132,13 @@ export function TextNoteEditorModal({
   const [mode, setMode] = useState<'view' | 'edit'>('view');
   const [draft, setDraft] = useState(value);
   const [isAwaitingSave, setIsAwaitingSave] = useState(false);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const wasVisibleRef = useRef(false);
   const keyboardVisibleRef = useRef(false);
+  const inputRef = useRef<TextInput>(null);
   const effectiveBusy = busy || isAwaitingSave;
   const canSave = !effectiveBusy && (allowEmpty || draft.trim().length > 0);
+  const shouldUseKeyboardLayout = mode === 'edit' && isKeyboardVisible;
   const displayText = value.trim().length > 0 ? value : '暂无内容';
 
   useEffect(() => {
@@ -149,20 +153,24 @@ export function TextNoteEditorModal({
   useEffect(() => {
     if (!visible) {
       keyboardVisibleRef.current = false;
+      setIsKeyboardVisible(false);
       return;
     }
 
     const showSubscription = Keyboard.addListener('keyboardDidShow', () => {
       keyboardVisibleRef.current = true;
+      setIsKeyboardVisible(true);
     });
     const hideSubscription = Keyboard.addListener('keyboardDidHide', () => {
       keyboardVisibleRef.current = false;
+      setIsKeyboardVisible(false);
     });
 
     return () => {
       showSubscription.remove();
       hideSubscription.remove();
       keyboardVisibleRef.current = false;
+      setIsKeyboardVisible(false);
     };
   }, [visible]);
 
@@ -170,8 +178,11 @@ export function TextNoteEditorModal({
     if (effectiveBusy) {
       return;
     }
-    Keyboard.dismiss();
+    inputRef.current?.blur();
     onClose();
+    requestAnimationFrame(() => {
+      Keyboard.dismiss();
+    });
   };
 
   const handleRequestClose = () => {
@@ -189,10 +200,15 @@ export function TextNoteEditorModal({
   };
 
   const handleCancelEdit = () => {
-    Keyboard.dismiss();
+    inputRef.current?.blur();
+    keyboardVisibleRef.current = false;
+    setIsKeyboardVisible(false);
     setDraft(value);
     setMode('view');
     onDraftChange?.(value);
+    requestAnimationFrame(() => {
+      Keyboard.dismiss();
+    });
   };
 
   const handleSave = async () => {
@@ -205,19 +221,28 @@ export function TextNoteEditorModal({
     if (!saved) {
       return;
     }
-    Keyboard.dismiss();
+    inputRef.current?.blur();
+    keyboardVisibleRef.current = false;
+    setIsKeyboardVisible(false);
     setMode('view');
+    requestAnimationFrame(() => {
+      Keyboard.dismiss();
+    });
   };
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleRequestClose}>
       <KeyboardAvoidingView
-        behavior="padding"
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        enabled={mode === 'edit'}
         style={[
           styles.modalOverlay,
+          shouldUseKeyboardLayout && styles.modalOverlayKeyboardVisible,
           {
             paddingTop: Math.max(insets.top + spacing.xl, spacing.xxl),
-            paddingBottom: Math.max(insets.bottom + spacing.xl, spacing.xxl),
+            paddingBottom: shouldUseKeyboardLayout
+              ? Math.max(insets.bottom + spacing.sm, spacing.md)
+              : Math.max(insets.bottom + spacing.xl, spacing.xxl),
           },
         ]}>
         <Pressable
@@ -226,7 +251,7 @@ export function TextNoteEditorModal({
           style={styles.modalBackdrop}
           onPress={handleClose}
         />
-        <View style={styles.modalCard}>
+        <View style={[styles.modalCard, shouldUseKeyboardLayout && styles.modalCardKeyboardVisible]}>
           <View style={styles.modalHeader}>
             <View style={styles.modalHeaderText}>
               <Text style={styles.modalTitle}>{title}</Text>
@@ -253,7 +278,7 @@ export function TextNoteEditorModal({
           {mode === 'view' ? (
             <ScrollView
               style={styles.modalReadScroll}
-              contentContainerStyle={styles.modalScrollContent}>
+              contentContainerStyle={[styles.modalScrollContent, styles.modalReadScrollContent]}>
               <Text
                 selectable
                 style={[
@@ -265,11 +290,9 @@ export function TextNoteEditorModal({
               {helperText ? <Text style={styles.helperText}>{helperText}</Text> : null}
             </ScrollView>
           ) : (
-            <ScrollView
-              style={styles.modalEditorScroll}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.modalScrollContent}>
+            <View style={[styles.modalEditorBody, shouldUseKeyboardLayout && styles.modalEditorBodyKeyboardVisible]}>
               <TextInput
+                ref={inputRef}
                 accessibilityLabel={`${title}内容`}
                 autoFocus
                 editable={!effectiveBusy}
@@ -282,13 +305,13 @@ export function TextNoteEditorModal({
                 placeholder={placeholder}
                 placeholderTextColor={colors.textMuted}
                 scrollEnabled
-                style={styles.modalInput}
+                style={[styles.modalInput, shouldUseKeyboardLayout && styles.modalInputKeyboardVisible]}
                 textAlignVertical="top"
                 value={draft}
               />
               {helperText ? <Text style={styles.helperText}>{helperText}</Text> : null}
               {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
-            </ScrollView>
+            </View>
           )}
 
           <View style={styles.modalFooter}>
@@ -386,22 +409,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.screenPadding,
     backgroundColor: 'rgba(0, 0, 0, 0.36)',
   },
+  modalOverlayKeyboardVisible: {
+    justifyContent: 'flex-end',
+  },
   modalBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
   modalCard: {
+    width: '100%',
     maxHeight: '92%',
+    minHeight: '58%',
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: '#DDD6FE',
     backgroundColor: colors.surface,
     padding: spacing.lg,
     gap: spacing.md,
+    overflow: 'hidden',
     shadowColor: colors.shadow,
     shadowOpacity: 0.14,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 12 },
     elevation: 8,
+  },
+  modalCardKeyboardVisible: {
+    maxHeight: '100%',
+    minHeight: 0,
   },
   modalHeader: {
     minHeight: 40,
@@ -435,12 +468,27 @@ const styles = StyleSheet.create({
   modalScrollContent: {
     gap: spacing.sm,
   },
-  modalEditorScroll: {
+  modalEditorBody: {
+    flexGrow: 1,
     flexShrink: 1,
+    minHeight: 260,
+    gap: spacing.sm,
+  },
+  modalEditorBodyKeyboardVisible: {
+    minHeight: 180,
   },
   modalReadScroll: {
+    flexShrink: 1,
     flexGrow: 0,
     minHeight: 220,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#EEE7FF',
+    backgroundColor: '#FAFAFF',
+    overflow: 'hidden',
+  },
+  modalReadScrollContent: {
+    padding: spacing.md,
   },
   modalReadText: {
     ...typography.body,
@@ -451,8 +499,8 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   modalInput: {
-    minHeight: 220,
-    maxHeight: 420,
+    flex: 1,
+    minHeight: 280,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: '#DDD6FE',
@@ -461,6 +509,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     ...typography.body,
     color: colors.textPrimary,
+  },
+  modalInputKeyboardVisible: {
+    minHeight: 180,
   },
   helperText: {
     ...typography.caption,
@@ -474,13 +525,24 @@ const styles = StyleSheet.create({
   modalFooter: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
     gap: spacing.sm,
+    marginTop: 'auto',
+    marginHorizontal: -spacing.lg,
+    marginBottom: -spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E7EB',
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
+    backgroundColor: colors.surface,
   },
   secondaryButton: {
-    minWidth: 76,
-    minHeight: 40,
-    borderRadius: radius.lg,
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
@@ -489,9 +551,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   primaryButton: {
-    minWidth: 90,
-    minHeight: 40,
-    borderRadius: radius.lg,
+    flex: 1,
+    minHeight: 48,
+    borderRadius: 999,
     borderWidth: 1,
     borderColor: '#6D28D9',
     backgroundColor: '#7C3AED',
