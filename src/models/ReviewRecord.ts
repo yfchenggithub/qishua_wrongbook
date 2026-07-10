@@ -15,6 +15,7 @@ export interface ReviewRecord {
   review_index: number;
   result: string | null;
   note?: string | null;
+  note_highlights?: string | null;
   voice_note?: ReviewRecordVoiceNote | null;
   created_at: string;
 }
@@ -24,5 +25,6 @@ export interface CreateReviewRecordInput {
   review_index: number;
   result: ReviewResult;
   note?: string | null;
+  note_highlights?: string | null;
   voice_note?: ReviewRecordVoiceNote | null;
 }

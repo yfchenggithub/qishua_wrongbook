@@ -24,6 +24,7 @@ INSERT INTO mistakes (
   error_reason,
   difficulty,
   note,
+  note_highlights,
   review_count,
   status,
   created_at,
@@ -31,7 +32,7 @@ INSERT INTO mistakes (
   next_review_at,
   last_review_at,
   last_review_result
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const SELECT_MISTAKE_FIELDS_SQL = `
@@ -43,6 +44,7 @@ SELECT
   error_reason,
   difficulty,
   note,
+  note_highlights,
   review_count,
   status,
   created_at,
@@ -572,6 +574,7 @@ export const MistakeRepository = {
         error_reason: input.error_reason ?? null,
         difficulty: normalizeDifficulty(input.difficulty),
         note: input.note ?? null,
+        note_highlights: input.note_highlights ?? null,
         review_count: 0,
         status: REVIEW_STATUS.ACTIVE,
         created_at: createdAt,
@@ -590,6 +593,7 @@ export const MistakeRepository = {
         record.error_reason ?? null,
         record.difficulty,
         record.note ?? null,
+        record.note_highlights ?? null,
         record.review_count,
         record.status,
         record.created_at,
@@ -935,6 +939,7 @@ FROM mistakes;`,
         'error_reason',
         'difficulty',
         'note',
+        'note_highlights',
         'review_count',
         'status',
         'next_review_at',

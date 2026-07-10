@@ -9,12 +9,14 @@ import type {
 } from '@/src/models/MistakeDetailViewModel';
 import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { formatDateShort } from '@/src/utils/date';
+import { parseStoredTextHighlights, serializeTextHighlights } from '@/src/utils/textHighlights';
 
 const SERVICE_SCOPE = 'MistakeDetailService';
 const FALLBACK_ERROR_MESSAGE = '读取错题详情失败，请稍后重试。';
@@ -120,6 +122,7 @@ export type UpdateMistakeMetadataResult = {
 export type UpdateMistakeNoteParams = {
   mistakeId: string;
   note?: string | null;
+  noteHighlights?: TextHighlightRange[] | null;
 };
 
 export type UpdateMistakeNoteResult = {
@@ -392,6 +395,7 @@ function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSl
     errorReason: mistake.error_reason ?? null,
     difficulty: mistake.difficulty,
     note: mistake.note ?? null,
+    noteHighlights: parseStoredTextHighlights(mistake.note_highlights, mistake.note ?? ''),
     reviewCount: mistake.review_count,
     maxReviewCount: MAX_REVIEW_COUNT,
     status: mistake.status,
@@ -423,6 +427,7 @@ async function mapReviewRecords(
         createdAt: record.created_at,
         result: normalizeDetailReviewResult(record.result),
         note: normalizeOptionalText(record.note),
+        noteHighlights: parseStoredTextHighlights(record.note_highlights, record.note ?? ''),
         voiceNote: record.voice_note ?? null,
         solutionImageId,
         solutionImageUri,
@@ -1028,6 +1033,10 @@ export async function updateMistakeNote(
   }
 
   const nextNote = normalizeOptionalText(params.note ?? null);
+  const shouldUpdateHighlights = Object.prototype.hasOwnProperty.call(params, 'noteHighlights');
+  const nextNoteHighlights = shouldUpdateHighlights
+    ? serializeTextHighlights(params.noteHighlights ?? [], nextNote ?? '')
+    : undefined;
   if (nextNote && nextNote.length > MISTAKE_DETAIL_NOTE_MAX_LENGTH) {
     return {
       ok: false,
@@ -1038,6 +1047,7 @@ export async function updateMistakeNote(
   try {
     const updated = await MistakeRepository.updateMistake(mistakeId, {
       note: nextNote,
+      ...(shouldUpdateHighlights ? { note_highlights: nextNoteHighlights } : {}),
     });
     if (!updated) {
       return {

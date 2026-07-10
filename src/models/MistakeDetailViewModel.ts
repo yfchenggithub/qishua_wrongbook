@@ -1,5 +1,6 @@
 import type { MistakeStatus, ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 
 export type DetailImageSlotType =
   | 'question'
@@ -36,6 +37,7 @@ export interface DetailReviewRecordItem {
   createdAt: string;
   result: DetailReviewResult;
   note?: string | null;
+  noteHighlights?: TextHighlightRange[];
   voiceNote?: ReviewRecordVoiceNote | null;
   solutionImageId?: string | null;
   solutionImageUri?: string | null;
@@ -51,6 +53,7 @@ export interface MistakeDetailViewModel {
   errorReason?: string | null;
   difficulty: number;
   note?: string | null;
+  noteHighlights?: TextHighlightRange[];
   reviewCount: number;
   maxReviewCount: number;
   status: MistakeStatus;

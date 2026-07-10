@@ -47,6 +47,7 @@ import type { DetailImageSlot, DetailReviewRecordItem } from '@/src/models/Mista
 import type { LocalImage } from '@/src/models/LocalImage';
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import {
   MusicBottomSheet,
   MusicEntryButton,
@@ -62,6 +63,7 @@ import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { prewarmTodayReviewPrintEnhanceCache } from '@/src/services/export/PrintEnhancePrewarmService';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+import { areTextHighlightsEqual, normalizeTextHighlights } from '@/src/utils/textHighlights';
 
 const PAGE_SCOPE = 'ReviewSessionPage';
 const TOAST_DURATION_DEFAULT = 2000;
@@ -116,6 +118,7 @@ interface SubmittedReviewEntry {
   result: ReviewResult;
   solutionImage: LocalImage | null;
   note: string | null;
+  noteHighlights: TextHighlightRange[];
   voiceNote: VoiceNoteEntity | null;
 }
 
@@ -637,6 +640,7 @@ function buildSubmittedReviewEntryFromRecord(
     result: record.result,
     solutionImage: toLocalReviewSolutionImage(record, mistakeId),
     note: normalizeReviewTextNote(record.note),
+    noteHighlights: normalizeTextHighlights(record.noteHighlights ?? [], record.note ?? ''),
     voiceNote: toVoiceNoteEntity(record.voiceNote ?? null),
   };
 }
@@ -1139,6 +1143,7 @@ export default function ReviewSessionPage() {
   const [isVoicePlaying, setIsVoicePlaying] = useState(false);
   const [isVoiceBusy, setIsVoiceBusy] = useState(false);
   const [reviewTextNote, setReviewTextNote] = useState('');
+  const [reviewTextHighlights, setReviewTextHighlights] = useState<TextHighlightRange[]>([]);
   const [isReviewTextEditorVisible, setIsReviewTextEditorVisible] = useState(false);
   const [musicSheetVisible, setMusicSheetVisible] = useState(false);
   const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
@@ -1812,6 +1817,7 @@ export default function ReviewSessionPage() {
     setReviewSolutionImage(null);
     setVoiceNote(null);
     setReviewTextNote('');
+    setReviewTextHighlights([]);
     setIsVoicePlaying(false);
     setIsVoiceRecording(false);
     setIsVoiceRecordingPaused(false);
@@ -2556,6 +2562,7 @@ export default function ReviewSessionPage() {
     setResultStats(EMPTY_RESULT_STATS);
     setVoiceNote(null);
     setReviewTextNote('');
+    setReviewTextHighlights([]);
     setIsVoiceRecording(false);
     setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
@@ -2651,6 +2658,7 @@ export default function ReviewSessionPage() {
     if (!currentQueueItemId) {
       setVoiceNote(null);
       setReviewTextNote('');
+      setReviewTextHighlights([]);
       setIsVoiceRecording(false);
       setIsVoiceRecordingPaused(false);
       setRecordingElapsedMs(0);
@@ -2668,6 +2676,7 @@ export default function ReviewSessionPage() {
 
     setVoiceNote(null);
     setReviewTextNote('');
+    setReviewTextHighlights([]);
     setIsVoiceRecording(false);
     setIsVoiceRecordingPaused(false);
     setRecordingElapsedMs(0);
@@ -2749,6 +2758,9 @@ export default function ReviewSessionPage() {
           setReviewSolutionImage(effectiveSubmittedEntry.solutionImage);
           setVoiceNote(effectiveSubmittedEntry.voiceNote);
           setReviewTextNote(effectiveSubmittedEntry.note ?? '');
+          setReviewTextHighlights(
+            normalizeTextHighlights(effectiveSubmittedEntry.noteHighlights, effectiveSubmittedEntry.note ?? ''),
+          );
         }
         if (hydratedSubmittedEntry) {
           setSubmittedReviewEntries((previous) => {
@@ -2759,6 +2771,11 @@ export default function ReviewSessionPage() {
               && current.result === hydratedSubmittedEntry.result
               && current.solutionImage?.uri === hydratedSubmittedEntry.solutionImage?.uri
               && current.note === hydratedSubmittedEntry.note
+              && areTextHighlightsEqual(
+                current.noteHighlights,
+                hydratedSubmittedEntry.noteHighlights,
+                hydratedSubmittedEntry.note ?? '',
+              )
               && current.voiceNote?.fileUri === hydratedSubmittedEntry.voiceNote?.fileUri;
             if (unchanged) {
               return previous;
@@ -2856,6 +2873,7 @@ export default function ReviewSessionPage() {
             result,
             solutionImageUri: reviewSolutionImage?.uri ?? null,
             note: reviewTextNote,
+            noteHighlights: reviewTextHighlights,
             voiceNote: toReviewRecordVoiceNote(voiceNote),
           });
 
@@ -2884,6 +2902,7 @@ export default function ReviewSessionPage() {
               result,
               solutionImage: reviewSolutionImage,
               note: normalizeReviewTextNote(reviewTextNote),
+              noteHighlights: normalizeTextHighlights(reviewTextHighlights, reviewTextNote),
               voiceNote,
             },
           }));
@@ -2904,6 +2923,7 @@ export default function ReviewSessionPage() {
           result,
           solutionImageUri: reviewSolutionImage?.uri ?? null,
           note: reviewTextNote,
+          noteHighlights: reviewTextHighlights,
           voiceNote: toReviewRecordVoiceNote(voiceNote),
         });
 
@@ -2925,6 +2945,7 @@ export default function ReviewSessionPage() {
           result,
           solutionImage: reviewSolutionImage,
           note: normalizeReviewTextNote(reviewTextNote),
+          noteHighlights: normalizeTextHighlights(reviewTextHighlights, reviewTextNote),
           voiceNote,
         };
         const nextSubmittedReviewEntries = {
@@ -2970,6 +2991,7 @@ export default function ReviewSessionPage() {
           setReviewSolutionImage(null);
           setVoiceNote(null);
           setReviewTextNote('');
+          setReviewTextHighlights([]);
         }
         setIsVoicePlaying(false);
         setIsVoiceRecording(false);
@@ -3006,6 +3028,7 @@ export default function ReviewSessionPage() {
       isVoiceRecording,
       queue,
       reviewSolutionImage,
+      reviewTextHighlights,
       reviewTextNote,
       selectedModuleFilter,
       showToast,
@@ -3026,11 +3049,23 @@ export default function ReviewSessionPage() {
     setIsReviewTextEditorVisible(false);
   }, []);
 
-  const handleSaveReviewTextDraft = useCallback((value: string): boolean => {
+  const handleSaveReviewTextDraft = useCallback((
+    value: string,
+    highlights: TextHighlightRange[],
+  ): boolean => {
     setReviewTextNote(value);
+    setReviewTextHighlights(normalizeTextHighlights(highlights, value));
     showToast('文字讲解已更新，选择结果后保存', 'success');
     return true;
   }, [showToast]);
+
+  const handleSaveReviewTextHighlightsDraft = useCallback((
+    highlights: TextHighlightRange[],
+  ): boolean => {
+    setReviewTextHighlights(normalizeTextHighlights(highlights, reviewTextNote));
+    showToast('高亮已更新，选择结果后保存', 'success');
+    return true;
+  }, [reviewTextNote, showToast]);
 
   const progressCurrent =
     currentFilterTotal <= 0
@@ -3433,6 +3468,7 @@ export default function ReviewSessionPage() {
                   accessibilityLabel={`第 ${currentMeta?.nextReviewIndex ?? currentQueueItem.nextReviewIndex} 刷文字讲解`}
                   disabled={isSubmitting || isVoiceRecording || isVoiceBusy}
                   onOpen={handleOpenReviewTextEditor}
+                  highlights={reviewTextHighlights}
                   style={styles.reviewTextPreview}
                   textStyle={styles.reviewTextPreviewText}
                 />
@@ -3486,6 +3522,7 @@ export default function ReviewSessionPage() {
         value={reviewTextNote}
         maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
         placeholder="写下关键条件、解题思路和容易错的地方……"
+        highlights={reviewTextHighlights}
         helperText={
           currentSubmittedReviewEntry
             ? '完成编辑后，再次选择结果即可更新本刷记录。'
@@ -3493,6 +3530,7 @@ export default function ReviewSessionPage() {
         }
         onClose={handleCloseReviewTextEditor}
         onSave={handleSaveReviewTextDraft}
+        onHighlightsChange={handleSaveReviewTextHighlightsDraft}
         saveLabel="完成"
       />
 

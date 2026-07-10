@@ -1,5 +1,6 @@
 import type { MistakeStatus, ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 
 export interface ReviewSession {
   mistakeId: string;
@@ -18,6 +19,7 @@ export interface CompleteReviewInput {
   reviewIndex: number;
   solutionImageUri?: string | null;
   note?: string | null;
+  noteHighlights?: TextHighlightRange[] | null;
   voiceNote?: ReviewRecordVoiceNote | null;
   result: ReviewResult;
   cleanupImageOnFailure?: boolean;

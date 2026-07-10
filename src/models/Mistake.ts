@@ -13,6 +13,7 @@ export interface Mistake {
   error_reason?: string | null;
   difficulty: number;
   note?: string | null;
+  note_highlights?: string | null;
   review_count: number;
   status: MistakeStatus;
   created_at: string;
@@ -29,6 +30,7 @@ export interface CreateMistakeInput {
   error_reason?: string;
   difficulty?: number;
   note?: string | null;
+  note_highlights?: string | null;
   subject?: string;
   next_review_at?: string | null;
   last_review_at?: string | null;
@@ -42,6 +44,7 @@ export interface UpdateMistakeInput {
   error_reason?: string | null;
   difficulty?: number;
   note?: string | null;
+  note_highlights?: string | null;
   review_count?: number;
   status?: MistakeStatus;
   next_review_at?: string | null;

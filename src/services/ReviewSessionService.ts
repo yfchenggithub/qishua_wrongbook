@@ -1,5 +1,6 @@
 import type { ReviewResult } from '@/src/models/Mistake';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { REVIEW_TEXT_NOTE_MAX_LENGTH } from '@/src/constants/review';
 import { withDatabaseTransaction } from '@/src/db';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
@@ -8,6 +9,7 @@ import * as CompleteReviewService from '@/src/services/CompleteReviewService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import * as ReviewFlowService from '@/src/services/ReviewFlowService';
+import { serializeTextHighlights } from '@/src/utils/textHighlights';
 
 const SERVICE_SCOPE = 'ReviewSessionService';
 const FALLBACK_LOAD_ERROR = '\u8bfb\u53d6\u590d\u505a\u9898\u76ee\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002';
@@ -189,6 +191,7 @@ export async function submitTodayReviewResult(input: {
   result: ReviewResult;
   solutionImageUri?: string | null;
   note?: string | null;
+  noteHighlights?: TextHighlightRange[] | null;
   voiceNote?: ReviewRecordVoiceNote | null;
 }) {
   return CompleteReviewService.completeReview({
@@ -197,6 +200,7 @@ export async function submitTodayReviewResult(input: {
     result: input.result,
     solutionImageUri: input.solutionImageUri ?? null,
     note: input.note ?? null,
+    noteHighlights: input.noteHighlights ?? null,
     voiceNote: input.voiceNote ?? null,
     cleanupImageOnFailure: false,
   });
@@ -208,6 +212,7 @@ export async function updateTodayReviewResult(input: {
   result: ReviewResult;
   solutionImageUri?: string | null;
   note?: string | null;
+  noteHighlights?: TextHighlightRange[] | null;
   voiceNote?: ReviewRecordVoiceNote | null;
 }): Promise<UpdateTodayReviewResultResult> {
   try {
@@ -218,6 +223,7 @@ export async function updateTodayReviewResult(input: {
       typeof input.solutionImageUri === 'string' ? input.solutionImageUri.trim() : '';
     const solutionImageUri = solutionImageUriRaw.length > 0 ? solutionImageUriRaw : null;
     const note = normalizeReviewTextNote(input.note);
+    const noteHighlights = serializeTextHighlights(input.noteHighlights ?? [], note ?? '');
     const voiceNoteFromInput = input.voiceNote ?? null;
     const voiceNote = normalizeReviewRecordVoiceNote(voiceNoteFromInput);
     const voiceNoteDropped = voiceNoteFromInput !== null && voiceNote === null;
@@ -237,6 +243,7 @@ export async function updateTodayReviewResult(input: {
         db,
         reviewRecordId,
         note,
+        noteHighlights,
       );
       if (!noteUpdated) {
         throw new Error('Review record does not exist.');

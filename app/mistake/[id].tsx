@@ -57,6 +57,7 @@ import type {
 } from '@/src/models/MistakeDetailViewModel';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { useMusicInterruption } from '@/src/music';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
 import * as ImageService from '@/src/services/ImageService';
@@ -71,6 +72,7 @@ import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { formatDateShort } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
+import { areTextHighlightsEqual, normalizeTextHighlights } from '@/src/utils/textHighlights';
 
 const BRAND = {
   title: '七刷错题本',
@@ -753,6 +755,7 @@ function ReviewRecordCard({
               maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
               accessibilityLabel={`第 ${record.reviewIndex} 刷文字讲解`}
               onOpen={() => onOpenText?.(record)}
+              highlights={record.noteHighlights}
               textStyle={styles.reviewRecordTextNoteContent}
             />
           </View>
@@ -1178,6 +1181,7 @@ export default function MistakeDetailScreen() {
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [noteInput, setNoteInput] = useState('');
+  const [noteHighlightsInput, setNoteHighlightsInput] = useState<TextHighlightRange[]>([]);
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
   const [noteModalMessage, setNoteModalMessage] = useState<string | null>(null);
   const [isSavingNote, setIsSavingNote] = useState(false);
@@ -1377,6 +1381,7 @@ export default function MistakeDetailScreen() {
       return;
     }
     setNoteInput(clampNoteDraft(state.detail.note ?? ''));
+    setNoteHighlightsInput(normalizeTextHighlights(state.detail.noteHighlights ?? [], state.detail.note ?? ''));
     setNoteModalMessage(null);
     setIsNoteModalVisible(true);
   }, [isDeletingMistake, state]);
@@ -1387,19 +1392,31 @@ export default function MistakeDetailScreen() {
     }
     if (state.kind === 'success') {
       setNoteInput(clampNoteDraft(state.detail.note ?? ''));
+      setNoteHighlightsInput(normalizeTextHighlights(state.detail.noteHighlights ?? [], state.detail.note ?? ''));
     }
     setNoteModalMessage(null);
     setIsNoteModalVisible(false);
   }, [isSavingNote, state]);
 
-  const handleSaveNote = useCallback(async (value: string): Promise<boolean> => {
+  const handleSaveNote = useCallback(async (
+    value: string,
+    highlights: TextHighlightRange[],
+  ): Promise<boolean> => {
     if (state.kind !== 'success' || isSavingNote) {
       return false;
     }
 
     const normalizedNextNote = normalizeNoteDraft(value);
     const normalizedCurrentNote = normalizeNoteDraft(state.detail.note ?? null);
-    if (normalizedNextNote === normalizedCurrentNote) {
+    const normalizedNextHighlights = normalizeTextHighlights(highlights, normalizedNextNote);
+    if (
+      normalizedNextNote === normalizedCurrentNote
+      && areTextHighlightsEqual(
+        normalizedNextHighlights,
+        state.detail.noteHighlights ?? [],
+        normalizedNextNote,
+      )
+    ) {
       return true;
     }
 
@@ -1409,6 +1426,7 @@ export default function MistakeDetailScreen() {
       const result = await MistakeDetailService.updateMistakeNote({
         mistakeId: state.detail.id,
         note: normalizedNextNote.length > 0 ? normalizedNextNote : null,
+        noteHighlights: normalizedNextHighlights,
       });
 
       if (!result.ok || !result.detail) {
@@ -1420,6 +1438,7 @@ export default function MistakeDetailScreen() {
 
       setState({ kind: 'success', detail: result.detail });
       setNoteInput(clampNoteDraft(result.detail.note ?? ''));
+      setNoteHighlightsInput(normalizeTextHighlights(result.detail.noteHighlights ?? [], result.detail.note ?? ''));
       showToast('备注已保存', 'success');
       return true;
     } catch (error) {
@@ -1428,6 +1447,54 @@ export default function MistakeDetailScreen() {
         error,
       });
       const message = error instanceof Error ? error.message : '备注保存失败，请重试。';
+      setNoteModalMessage(message);
+      showToast(message, 'error');
+      return false;
+    } finally {
+      setIsSavingNote(false);
+    }
+  }, [isSavingNote, routeId, showToast, state]);
+
+  const handleSaveNoteHighlights = useCallback(async (
+    highlights: TextHighlightRange[],
+  ): Promise<boolean> => {
+    if (state.kind !== 'success' || isSavingNote) {
+      return false;
+    }
+
+    const currentNote = normalizeNoteDraft(state.detail.note ?? null);
+    const normalizedHighlights = normalizeTextHighlights(highlights, currentNote);
+    if (areTextHighlightsEqual(normalizedHighlights, state.detail.noteHighlights ?? [], currentNote)) {
+      return true;
+    }
+
+    setIsSavingNote(true);
+    setNoteModalMessage(null);
+    try {
+      const result = await MistakeDetailService.updateMistakeNote({
+        mistakeId: state.detail.id,
+        note: currentNote.length > 0 ? currentNote : null,
+        noteHighlights: normalizedHighlights,
+      });
+
+      if (!result.ok || !result.detail) {
+        const message = result.errorMessage ?? '高亮保存失败，请重试。';
+        setNoteModalMessage(message);
+        showToast(message, 'error');
+        return false;
+      }
+
+      setState({ kind: 'success', detail: result.detail });
+      setNoteInput(clampNoteDraft(result.detail.note ?? ''));
+      setNoteHighlightsInput(normalizeTextHighlights(result.detail.noteHighlights ?? [], result.detail.note ?? ''));
+      showToast('高亮已保存', 'success');
+      return true;
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Unexpected error while updating note highlights.', {
+        routeId,
+        error,
+      });
+      const message = error instanceof Error ? error.message : '高亮保存失败，请重试。';
       setNoteModalMessage(message);
       showToast(message, 'error');
       return false;
@@ -2323,12 +2390,16 @@ export default function MistakeDetailScreen() {
     setReviewTextEditorMessage(null);
   }, [isSavingReviewText]);
 
-  const handleSaveReviewText = useCallback(async (value: string): Promise<boolean> => {
+  const handleSaveReviewText = useCallback(async (
+    value: string,
+    highlights: TextHighlightRange[],
+  ): Promise<boolean> => {
     if (state.kind !== 'success' || !reviewTextEditorRecordId || isSavingReviewText) {
       return false;
     }
 
     const note = value.trim();
+    const normalizedHighlights = normalizeTextHighlights(highlights, note);
     if (note.length > REVIEW_TEXT_NOTE_MAX_LENGTH) {
       setReviewTextEditorMessage(`文本讲解不能超过 ${REVIEW_TEXT_NOTE_MAX_LENGTH} 字。`);
       return false;
@@ -2348,6 +2419,7 @@ export default function MistakeDetailScreen() {
       mistakeId: state.detail.id,
       reviewRecordId: targetRecord.id,
       note,
+      noteHighlights: normalizedHighlights,
     });
 
     if (!saveResult.ok) {
@@ -2357,6 +2429,7 @@ export default function MistakeDetailScreen() {
     }
 
     const savedNote = saveResult.note;
+    const savedHighlights = saveResult.noteHighlights;
     setState((current) => {
       if (current.kind !== 'success' || current.detail.id !== state.detail.id) {
         return current;
@@ -2366,7 +2439,9 @@ export default function MistakeDetailScreen() {
         detail: {
           ...current.detail,
           reviewRecords: current.detail.reviewRecords.map((record) =>
-            record.id === targetRecord.id ? { ...record, note: savedNote } : record,
+            record.id === targetRecord.id
+              ? { ...record, note: savedNote, noteHighlights: savedHighlights }
+              : record,
           ),
         },
       };
@@ -2374,6 +2449,69 @@ export default function MistakeDetailScreen() {
     setIsSavingReviewText(false);
     setReviewTextEditorMessage(null);
     showToast(savedNote ? '文本讲解已保存' : '文本讲解已清空', 'success');
+    return true;
+  }, [
+    isSavingReviewText,
+    reviewTextEditorRecordId,
+    showToast,
+    state,
+  ]);
+
+  const handleSaveReviewTextHighlights = useCallback(async (
+    highlights: TextHighlightRange[],
+  ): Promise<boolean> => {
+    if (state.kind !== 'success' || !reviewTextEditorRecordId || isSavingReviewText) {
+      return false;
+    }
+
+    const targetRecord = state.detail.reviewRecords.find(
+      (record) => record.id === reviewTextEditorRecordId,
+    );
+    if (!targetRecord) {
+      setReviewTextEditorMessage('复做记录不存在，请刷新后重试。');
+      return false;
+    }
+
+    const note = typeof targetRecord.note === 'string' ? targetRecord.note.trim() : '';
+    const normalizedHighlights = normalizeTextHighlights(highlights, note);
+    if (areTextHighlightsEqual(normalizedHighlights, targetRecord.noteHighlights ?? [], note)) {
+      return true;
+    }
+
+    setIsSavingReviewText(true);
+    setReviewTextEditorMessage(null);
+    const saveResult = await ReviewRecordTextService.upsertReviewRecordText({
+      mistakeId: state.detail.id,
+      reviewRecordId: targetRecord.id,
+      note,
+      noteHighlights: normalizedHighlights,
+    });
+
+    if (!saveResult.ok) {
+      setReviewTextEditorMessage(saveResult.errorMessage ?? '高亮保存失败，请重试。');
+      setIsSavingReviewText(false);
+      return false;
+    }
+
+    setState((current) => {
+      if (current.kind !== 'success' || current.detail.id !== state.detail.id) {
+        return current;
+      }
+      return {
+        kind: 'success',
+        detail: {
+          ...current.detail,
+          reviewRecords: current.detail.reviewRecords.map((record) =>
+            record.id === targetRecord.id
+              ? { ...record, note: saveResult.note, noteHighlights: saveResult.noteHighlights }
+              : record,
+          ),
+        },
+      };
+    });
+    setIsSavingReviewText(false);
+    setReviewTextEditorMessage(null);
+    showToast('高亮已保存', 'success');
     return true;
   }, [
     isSavingReviewText,
@@ -2615,6 +2753,7 @@ export default function MistakeDetailScreen() {
   useEffect(() => {
     if (state.kind !== 'success') {
       setNoteInput('');
+      setNoteHighlightsInput([]);
       setIsNoteModalVisible(false);
       setNoteModalMessage(null);
       return;
@@ -2626,6 +2765,10 @@ export default function MistakeDetailScreen() {
 
     const nextNoteInput = state.detail.note ?? '';
     setNoteInput((current) => (current === nextNoteInput ? current : nextNoteInput));
+    const nextHighlights = normalizeTextHighlights(state.detail.noteHighlights ?? [], nextNoteInput);
+    setNoteHighlightsInput((current) =>
+      areTextHighlightsEqual(current, nextHighlights, nextNoteInput) ? current : nextHighlights,
+    );
   }, [isNoteModalVisible, isSavingNote, state]);
 
   const detailSlots = state.kind === 'success' ? state.detail.imageSlots : [];
@@ -3692,6 +3835,7 @@ export default function MistakeDetailScreen() {
                   accessibilityLabel="错题备注"
                   disabled={isDeletingMistake}
                   onOpen={handleOpenNoteModal}
+                  highlights={noteHighlightsInput}
                   style={styles.noteReadBox}
                   textStyle={styles.noteReadText}
                   emptyTextStyle={styles.noteReadPlaceholderText}
@@ -3853,6 +3997,7 @@ export default function MistakeDetailScreen() {
         value={noteInput}
         maxLength={NOTE_MAX_LENGTH}
         placeholder={NOTE_PLACEHOLDER}
+        highlights={noteHighlightsInput}
         busy={isSavingNote}
         errorMessage={noteModalMessage}
         onDraftChange={() => {
@@ -3860,6 +4005,7 @@ export default function MistakeDetailScreen() {
         }}
         onClose={handleCloseNoteModal}
         onSave={handleSaveNote}
+        onHighlightsChange={handleSaveNoteHighlights}
       />
 
       <TextNoteEditorModal
@@ -3869,6 +4015,7 @@ export default function MistakeDetailScreen() {
         value={typeof activeReviewTextRecord?.note === 'string' ? activeReviewTextRecord.note : ''}
         maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
         placeholder="写下本次复做的关键条件、解题思路和易错点……"
+        highlights={activeReviewTextRecord?.noteHighlights ?? []}
         busy={isSavingReviewText}
         errorMessage={reviewTextEditorMessage}
         onDraftChange={() => {
@@ -3876,6 +4023,7 @@ export default function MistakeDetailScreen() {
         }}
         onClose={handleCloseReviewTextEditor}
         onSave={handleSaveReviewText}
+        onHighlightsChange={handleSaveReviewTextHighlights}
       />
 
       <DetailModulePickerModal

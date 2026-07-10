@@ -1,7 +1,9 @@
 import { REVIEW_TEXT_NOTE_MAX_LENGTH } from '@/src/constants/review';
 import { withDatabaseTransaction } from '@/src/db';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { ReviewRecordRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
+import { normalizeTextHighlights, serializeTextHighlights } from '@/src/utils/textHighlights';
 
 const SERVICE_SCOPE = 'ReviewRecordTextService';
 
@@ -9,10 +11,11 @@ export type UpsertReviewRecordTextParams = {
   mistakeId: string;
   reviewRecordId: string;
   note: string;
+  noteHighlights?: TextHighlightRange[] | null;
 };
 
 export type UpsertReviewRecordTextResult =
-  | { ok: true; note: string | null }
+  | { ok: true; note: string | null; noteHighlights: TextHighlightRange[] }
   | { ok: false; errorMessage: string };
 
 function normalizeRequiredText(value: string | null | undefined): string {
@@ -32,6 +35,8 @@ export async function upsertReviewRecordText(
   const mistakeId = normalizeRequiredText(params.mistakeId);
   const reviewRecordId = normalizeRequiredText(params.reviewRecordId);
   const note = normalizeRequiredText(params.note);
+  const normalizedHighlights = normalizeTextHighlights(params.noteHighlights ?? [], note);
+  const noteHighlightsJson = serializeTextHighlights(normalizedHighlights, note);
 
   if (!mistakeId) {
     return { ok: false, errorMessage: '错题 id 不能为空。' };
@@ -60,6 +65,7 @@ export async function upsertReviewRecordText(
         db,
         reviewRecordId,
         note.length > 0 ? note : null,
+        noteHighlightsJson,
       ),
     );
     if (!updated) {
@@ -71,7 +77,11 @@ export async function upsertReviewRecordText(
       reviewRecordId,
       noteLength: note.length,
     });
-    return { ok: true, note: note.length > 0 ? note : null };
+    return {
+      ok: true,
+      note: note.length > 0 ? note : null,
+      noteHighlights: normalizedHighlights,
+    };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'upsertReviewRecordText failed.', {
       mistakeId,

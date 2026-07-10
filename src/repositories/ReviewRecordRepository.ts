@@ -19,9 +19,10 @@ INSERT INTO review_records (
   review_index,
   result,
   note,
+  note_highlights,
   voice_note,
   created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const SELECT_REVIEW_RECORD_FIELDS_SQL = `
@@ -31,6 +32,7 @@ SELECT
   review_index,
   result,
   note,
+  note_highlights,
   voice_note,
   created_at
 FROM review_records
@@ -54,6 +56,7 @@ type ReviewRecordRow = {
   review_index: number;
   result: string | null;
   note?: string | null;
+  note_highlights?: string | null;
   voice_note?: string | null;
   created_at: string;
 };
@@ -297,6 +300,7 @@ function buildReviewRecord(
     review_index: normalizeReviewIndex(input.review_index),
     result: input.result,
     note: note.length > 0 ? note : null,
+    note_highlights: input.note_highlights ?? null,
     voice_note: normalizedVoiceNote,
     created_at: input.createdAt ?? nowIso(),
   };
@@ -551,6 +555,7 @@ FROM review_records;`,
         record.review_index,
         record.result,
         record.note ?? null,
+        record.note_highlights ?? null,
         voiceNoteJson,
         record.created_at,
       );
@@ -604,18 +609,29 @@ WHERE id = ?;`,
     db: SQLite.SQLiteDatabase,
     reviewRecordId: string,
     note: string | null,
+    noteHighlights?: string | null,
   ): Promise<boolean> {
     try {
       const normalizedReviewRecordId = normalizeRequiredText(reviewRecordId, 'reviewRecordId');
       const normalizedNote = typeof note === 'string' ? note.trim() : '';
 
-      const result = await db.runAsync(
-        `UPDATE review_records
+      const shouldUpdateHighlights = noteHighlights !== undefined;
+      const result = shouldUpdateHighlights
+        ? await db.runAsync(
+          `UPDATE review_records
+SET note = ?, note_highlights = ?
+WHERE id = ?;`,
+          normalizedNote.length > 0 ? normalizedNote : null,
+          noteHighlights ?? null,
+          normalizedReviewRecordId,
+        )
+        : await db.runAsync(
+          `UPDATE review_records
 SET note = ?
 WHERE id = ?;`,
-        normalizedNote.length > 0 ? normalizedNote : null,
-        normalizedReviewRecordId,
-      );
+          normalizedNote.length > 0 ? normalizedNote : null,
+          normalizedReviewRecordId,
+        );
 
       if (result.changes <= 0) {
         Logger.warn(REPO_SCOPE, 'updateReviewRecordNoteInTransaction skipped because review_record was not found.', {

@@ -96,6 +96,7 @@ INSERT INTO mistakes (
   error_reason,
   difficulty,
   note,
+  note_highlights,
   review_count,
   status,
   created_at,
@@ -103,7 +104,7 @@ INSERT INTO mistakes (
   next_review_at,
   last_review_at,
   last_review_result
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const INSERT_REVIEW_RECORD_SQL = `
@@ -113,9 +114,10 @@ INSERT INTO review_records (
   review_index,
   result,
   note,
+  note_highlights,
   voice_note,
   created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const INSERT_MISTAKE_IMAGE_SQL = `
@@ -1708,6 +1710,7 @@ async function runRestoreDatabaseTransaction(options: {
             mistake.error_reason ?? null,
             mistake.difficulty,
             mistake.note ?? null,
+            mistake.note_highlights ?? null,
             mistake.review_count,
             mistake.status,
             mistake.created_at,
@@ -1741,6 +1744,7 @@ async function runRestoreDatabaseTransaction(options: {
             reviewRecord.review_index,
             reviewRecord.result,
             reviewRecord.note ?? null,
+            reviewRecord.note_highlights ?? null,
             voiceNoteJson,
             reviewRecord.created_at,
           );

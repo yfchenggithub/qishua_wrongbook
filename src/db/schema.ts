@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS mistakes (
   error_reason TEXT,
   difficulty INTEGER NOT NULL DEFAULT 3 CHECK (difficulty BETWEEN 1 AND 5),
   note TEXT,
+  note_highlights TEXT,
   review_count INTEGER NOT NULL DEFAULT 0 CHECK (review_count BETWEEN 0 AND ${MAX_REVIEW_COUNT}),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'mastered', 'archived')),
   created_at TEXT NOT NULL,
@@ -29,6 +30,7 @@ CREATE TABLE IF NOT EXISTS review_records (
   review_index INTEGER NOT NULL CHECK (review_index BETWEEN 1 AND ${MAX_REVIEW_COUNT}),
   result TEXT NOT NULL CHECK (result IN ('mastered', 'unsure', 'wrong')),
   note TEXT,
+  note_highlights TEXT,
   voice_note TEXT,
   created_at TEXT NOT NULL,
   FOREIGN KEY(mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE

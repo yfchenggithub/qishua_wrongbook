@@ -10,6 +10,7 @@ import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
+import { serializeTextHighlights } from '@/src/utils/textHighlights';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import {
   calculateNextReviewAt,
@@ -29,6 +30,7 @@ interface NormalizedCompleteReviewInput {
   reviewIndex: number;
   solutionImageUri: string | null;
   note: string | null;
+  noteHighlights: string | null;
   voiceNote: ReviewRecordVoiceNote | null;
   voiceNoteDropped: boolean;
   result: ReviewResult;
@@ -141,6 +143,7 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
     };
   }
   const note = noteRaw.length > 0 ? noteRaw : null;
+  const noteHighlights = serializeTextHighlights(input.noteHighlights ?? [], note ?? '');
   const voiceNoteFromInput = input.voiceNote ?? null;
   const voiceNote = normalizeReviewRecordVoiceNote(voiceNoteFromInput);
   const voiceNoteDropped = voiceNoteFromInput !== null && voiceNote === null;
@@ -160,6 +163,7 @@ function normalizeCompleteReviewInput(input: CompleteReviewInput): {
       reviewIndex: input.reviewIndex,
       solutionImageUri,
       note,
+      noteHighlights,
       voiceNote,
       voiceNoteDropped,
       result,
@@ -293,6 +297,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
           review_index: normalizedInput.reviewIndex,
           result: normalizedInput.result,
           note: normalizedInput.note,
+          note_highlights: normalizedInput.noteHighlights,
           createdAt: nowIso,
         });
         Logger.info(SERVICE_SCOPE, 'Created review_record successfully in transaction.', {

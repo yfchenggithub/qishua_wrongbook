@@ -68,6 +68,43 @@ async function ensureReviewRecordsVoiceNoteColumn(db: SQLite.SQLiteDatabase): Pr
   await db.execAsync('ALTER TABLE review_records ADD COLUMN voice_note TEXT;');
 }
 
+async function ensureColumn(
+  db: SQLite.SQLiteDatabase,
+  tableName: string,
+  columnName: string,
+  alterTableSql: string,
+): Promise<void> {
+  const columnRows = await db.getAllAsync<TableColumnRow>(`PRAGMA table_info(${tableName});`);
+  const hasColumn = columnRows.some((row) => row.name === columnName);
+
+  if (hasColumn) {
+    return;
+  }
+
+  Logger.info(DB_SCOPE, `Adding missing ${tableName}.${columnName} column for backward compatibility.`);
+  await db.execAsync(alterTableSql);
+}
+
+async function ensureTextHighlightColumns(db: SQLite.SQLiteDatabase): Promise<void> {
+  await ensureColumn(
+    db,
+    'mistakes',
+    'note_highlights',
+    'ALTER TABLE mistakes ADD COLUMN note_highlights TEXT;',
+  );
+  await ensureColumn(
+    db,
+    'review_records',
+    'note_highlights',
+    'ALTER TABLE review_records ADD COLUMN note_highlights TEXT;',
+  );
+}
+
+async function ensureBackwardCompatibleColumns(db: SQLite.SQLiteDatabase): Promise<void> {
+  await ensureReviewRecordsVoiceNoteColumn(db);
+  await ensureTextHighlightColumns(db);
+}
+
 async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
 PRAGMA foreign_keys = OFF;
@@ -97,6 +134,7 @@ async function runMigrationToCurrentVersion(
 
   if (currentVersion === DATABASE_VERSION) {
     await applyBaseSchema(db);
+    await ensureBackwardCompatibleColumns(db);
     return;
   }
 
@@ -105,10 +143,12 @@ async function runMigrationToCurrentVersion(
     to: DATABASE_VERSION,
   });
 
-  // Development phase strategy:
-  // For schema-breaking changes, rebuild domain tables directly instead of
-  // carrying compatibility fields.
-  await rebuildDomainSchema(db);
+  if (currentVersion <= 0) {
+    await rebuildDomainSchema(db);
+  } else {
+    await applyBaseSchema(db);
+    await ensureBackwardCompatibleColumns(db);
+  }
   await setUserVersion(db, DATABASE_VERSION);
 }
 
@@ -199,7 +239,7 @@ export async function initDatabase(): Promise<void> {
 
     const currentVersion = await readUserVersion(db);
     await runMigrationToCurrentVersion(db, currentVersion);
-    await ensureReviewRecordsVoiceNoteColumn(db);
+    await ensureBackwardCompatibleColumns(db);
 
     const finalVersion = await readUserVersion(db);
     Logger.info(DB_SCOPE, 'Database initialized.', {
