@@ -788,7 +788,25 @@ export default function TodayScreen() {
   return (
     <View style={styles.pageRoot}>
       <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
-      <BrandHeader title={todayMock.brand.title} subtitle={todayMock.brand.subtitle} />
+      <BrandHeader
+        title={todayMock.brand.title}
+        subtitle={todayMock.brand.subtitle}
+        rightAccessory={
+          canShowScanButton ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="扫描练习卷"
+              hitSlop={8}
+              onPress={handleOpenReviewSheetScanner}
+              style={({ pressed }) => [
+                styles.headerScanButton,
+                pressed ? styles.headerScanButtonPressed : null,
+              ]}>
+              <MaterialIcons name="qr-code-scanner" size={24} color={colors.success} />
+            </Pressable>
+          ) : null
+        }
+      />
 
       {shouldShowBackupSafetyCard ? (
         <CardContainer
@@ -930,16 +948,6 @@ export default function TodayScreen() {
                   <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                 </View>
               </Pressable>
-              {canShowScanButton ? (
-                <Pressable
-                  onPress={handleOpenReviewSheetScanner}
-                  style={styles.secondaryActionButton}>
-                  <View style={styles.actionButtonContent}>
-                    <MaterialIcons name="qr-code-scanner" size={20} color={colors.success} />
-                    <Text style={styles.secondaryActionButtonText}>扫描练习卷</Text>
-                  </View>
-                </Pressable>
-              ) : null}
               <View style={styles.exportHintWrap}>
                 <Text style={styles.exportHintText}>{exportProgressHeadline}</Text>
                 {exportProgressDetailText ? (
@@ -1001,16 +1009,6 @@ export default function TodayScreen() {
                     ) : null}
                   </View>
                 </>
-              ) : null}
-              {canShowScanButton ? (
-                <Pressable
-                  onPress={handleOpenReviewSheetScanner}
-                  style={styles.secondaryActionButton}>
-                  <View style={styles.actionButtonContent}>
-                    <MaterialIcons name="qr-code-scanner" size={20} color={colors.success} />
-                    <Text style={styles.secondaryActionButtonText}>扫描练习卷</Text>
-                  </View>
-                </Pressable>
               ) : null}
             </View>
           )}
@@ -1076,6 +1074,16 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     paddingBottom: layout.bottomTabHeight,
     gap: spacing.lg,
+  },
+  headerScanButton: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerScanButtonPressed: {
+    backgroundColor: colors.successBg,
   },
   backupSafetyPressablePressed: {
     opacity: 0.9,

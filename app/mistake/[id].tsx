@@ -31,7 +31,6 @@ import {
   ProgressDots,
   ScreenContainer,
   SectionTitle,
-  StatusPill,
   TextNoteEditorModal,
   TextNotePreview,
 } from '@/src/components';
@@ -171,21 +170,30 @@ function toBriefErrorMessage(message?: string): string {
   return `${normalized.slice(0, 48)}...`;
 }
 
-function mapStatusToTone(status: MistakeDetailViewModel['status']): 'dark' | 'light' | 'success' {
-  if (status === 'mastered') {
-    return 'success';
-  }
-  if (status === 'archived') {
-    return 'light';
-  }
-  return 'dark';
-}
-
 function buildCurrentReviewIndex(detail: MistakeDetailViewModel): number | undefined {
   if (detail.reviewCount >= detail.maxReviewCount) {
     return undefined;
   }
   return Math.min(detail.maxReviewCount, detail.reviewCount + 1);
+}
+
+function buildSummaryReviewLabel(detail: MistakeDetailViewModel): string {
+  const total = Number.isFinite(detail.maxReviewCount) && detail.maxReviewCount > 0
+    ? Math.floor(detail.maxReviewCount)
+    : 7;
+  const completed = Number.isFinite(detail.reviewCount)
+    ? Math.max(0, Math.min(total, Math.floor(detail.reviewCount)))
+    : 0;
+
+  if (detail.status === 'mastered' || completed >= total) {
+    return `已完成 ${completed}/${total} · 已七刷`;
+  }
+  if (detail.status === 'archived') {
+    return `已完成 ${completed}/${total} · 已归档`;
+  }
+
+  const nextReviewIndex = Math.min(total, completed + 1);
+  return `已完成 ${completed}/${total} · 待做第${nextReviewIndex}刷`;
 }
 
 function formatReviewResultLabel(result: DetailReviewRecordItem['result']): string {
@@ -3604,10 +3612,12 @@ export default function MistakeDetailScreen() {
               <View style={styles.summaryDivider} />
 
               <View style={styles.summaryBottomRow}>
-                <View style={styles.progressLabelWrap}>
-                  <Text style={styles.progressNumber}>{state.detail.reviewCount}</Text>
-                  <Text style={styles.progressText}>/{state.detail.maxReviewCount}</Text>
-                </View>
+                <Text
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.1}
+                  style={styles.reviewSummaryText}>
+                  {buildSummaryReviewLabel(state.detail)}
+                </Text>
 
                 <ProgressDots
                   total={state.detail.maxReviewCount}
@@ -3615,9 +3625,25 @@ export default function MistakeDetailScreen() {
                   completed={state.detail.reviewCount}
                   style={styles.summaryDots}
                 />
-
-                <StatusPill label={state.detail.statusLabel} tone={mapStatusToTone(state.detail.status)} />
               </View>
+
+              {canStartDetailReview ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="立即复做这道错题"
+                  disabled={isStartDetailReviewDisabled}
+                  onPress={handleStartDetailReview}
+                  style={({ pressed }) => [
+                    styles.detailReviewButton,
+                    pressed && !isStartDetailReviewDisabled && styles.detailReviewButtonPressed,
+                    isStartDetailReviewDisabled && styles.detailReviewButtonDisabled,
+                  ]}>
+                  <View style={styles.detailReviewButtonContent}>
+                    <MaterialIcons name="edit" size={22} color={colors.white} />
+                    <Text style={styles.detailReviewButtonText}>立即复做</Text>
+                  </View>
+                </Pressable>
+              ) : null}
 
               {state.detail.errorReason ? (
                 <View style={styles.summaryInfoList}>
@@ -3758,23 +3784,6 @@ export default function MistakeDetailScreen() {
                   {nextReviewInfo?.displayText ?? '⏳ 待安排（完成本次复做后自动生成）'}
                 </Text>
               </View>
-              {canStartDetailReview ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="立即复做这道错题"
-                  disabled={isStartDetailReviewDisabled}
-                  onPress={handleStartDetailReview}
-                  style={({ pressed }) => [
-                    styles.detailReviewButton,
-                    pressed && !isStartDetailReviewDisabled && styles.detailReviewButtonPressed,
-                    isStartDetailReviewDisabled && styles.detailReviewButtonDisabled,
-                  ]}>
-                  <View style={styles.detailReviewButtonContent}>
-                    <MaterialIcons name="edit" size={22} color={colors.white} />
-                    <Text style={styles.detailReviewButtonText}>立即复做</Text>
-                  </View>
-                </Pressable>
-              ) : null}
               {state.detail.reviewRecords.length <= 0 ? (
                 <Text style={styles.reviewRecordsEmptyText}>还没有复做记录</Text>
               ) : (
@@ -4144,21 +4153,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
-  progressLabelWrap: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: spacing.xs,
-  },
-  progressNumber: {
-    ...typography.titleMedium,
-    fontSize: 42,
-    lineHeight: 46,
-  },
-  progressText: {
+  reviewSummaryText: {
     ...typography.body,
-    color: colors.textSecondary,
-    fontSize: 18,
-    lineHeight: 24,
+    flexShrink: 0,
+    color: colors.black,
+    fontWeight: '800',
   },
   summaryDots: {
     flex: 1,
@@ -4532,14 +4531,15 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   detailReviewButton: {
+    marginTop: spacing.md,
     minHeight: 56,
     borderRadius: radius.lg,
-    backgroundColor: '#F5222D',
+    backgroundColor: colors.success,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
-    shadowColor: '#F5222D',
+    shadowColor: colors.success,
     shadowOpacity: 0.24,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
