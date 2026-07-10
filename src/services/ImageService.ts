@@ -45,6 +45,10 @@ export interface SaveImagesParams {
   maxSelection?: number;
 }
 
+export interface SaveSharedImageParams extends SaveImageParams {
+  sourceUri: string;
+}
+
 export type ImagePermissionResult = PermissionRequestResult;
 
 export interface SavedImagesResult {
@@ -508,6 +512,70 @@ export async function pickImagesAndSave(
       error,
     });
     return canceledBatchResult(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export async function saveSharedImageToMistakeFolder(
+  params: SaveSharedImageParams,
+): Promise<SavedImageResult> {
+  Logger.info(SERVICE_SCOPE, 'Start saving shared image.', {
+    mistakeId: params.mistakeId,
+    type: params.type,
+    index: params.index,
+    sourceUriShort: toShortUri(params.sourceUri),
+  });
+
+  const normalizedUri = normalizeImageUri(params.sourceUri);
+  if (!normalizedUri) {
+    Logger.warn(SERVICE_SCOPE, 'Shared image uri is empty.', {
+      mistakeId: params.mistakeId,
+      type: params.type,
+    });
+    return canceledResult('Shared image uri is empty.');
+  }
+
+  try {
+    const preparedImage = await prepareImageForStorage(normalizedUri, {});
+
+    const savedResult = await saveTempImageToMistakeFolder({
+      mistakeId: params.mistakeId,
+      type: params.type,
+      tempUri: preparedImage.uri,
+      width: preparedImage.width,
+      height: preparedImage.height,
+      fileSize: preparedImage.fileSize ?? null,
+      index: params.index,
+    });
+
+    if (!savedResult.ok) {
+      Logger.error(SERVICE_SCOPE, 'Failed to save shared image to local folder.', {
+        params: {
+          mistakeId: params.mistakeId,
+          type: params.type,
+          index: params.index,
+          sourceUriShort: toShortUri(normalizedUri),
+        },
+        savedResult,
+      });
+    } else {
+      Logger.info(SERVICE_SCOPE, 'Saved shared image to local folder successfully.', {
+        mistakeId: params.mistakeId,
+        type: params.type,
+        index: params.index,
+        savedUriShort: toShortUri(savedResult.image?.uri),
+      });
+    }
+
+    return savedResult;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Unexpected error in saveSharedImageToMistakeFolder.', {
+      mistakeId: params.mistakeId,
+      type: params.type,
+      index: params.index,
+      sourceUriShort: toShortUri(normalizedUri),
+      error,
+    });
+    return canceledResult(error instanceof Error ? error.message : String(error));
   }
 }
 

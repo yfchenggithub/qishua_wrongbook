@@ -32,13 +32,14 @@ import {
   deleteLocalImage,
   pickImageAndSave,
   pickImagesAndSave,
+  saveSharedImageToMistakeFolder,
   takePhotoAndSave,
 } from '@/src/services/ImageService';
 import { setAddScreenHasUnsavedPhotos } from '@/src/services/LeaveGuardService';
 import { Logger } from '@/src/services/Logger';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 import { createMistakeId } from '@/src/utils/id';
-import { useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const PAGE_SCOPE = 'AddScreen';
@@ -50,7 +51,7 @@ const TOAST_DURATION_LONG = 2400;
 
 type DraftImageField = 'questionImage' | 'mySolutionImage' | 'answerImage';
 type CaptureCardVariant = 'primary' | 'compact';
-type QueuePhotoSource = 'camera' | 'album';
+type QueuePhotoSource = 'camera' | 'album' | 'shared';
 
 type CaptureEntryConfig = {
   key: DraftImageField;
@@ -72,6 +73,11 @@ type LastTapInfo = {
 };
 
 type ToastType = 'success' | 'info' | 'warning' | 'error';
+type SharedImageSearchParams = {
+  sharedImageUri?: string | string[];
+  sharedImageNonce?: string | string[];
+  sharedImageError?: string | string[];
+};
 
 const QUESTION_CAPTURE_ENTRY: CaptureEntryConfig = {
   key: 'questionImage',
@@ -158,6 +164,33 @@ function toShortUri(uri?: string | null): string | null {
     return trimmed;
   }
   return `${trimmed.slice(0, 28)}...${trimmed.slice(-20)}`;
+}
+
+function getFirstSearchParam(value: string | string[] | undefined): string | null {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  if (typeof rawValue !== 'string') {
+    return null;
+  }
+
+  const trimmed = rawValue.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function getSharedImageErrorMessage(errorCode: string | null): string | null {
+  switch (errorCode) {
+    case 'unsupported_share_type':
+      return '暂不支持该分享类型，请分享图片。';
+    case 'missing_image':
+      return '没有读取到分享图片，请重新分享一次。';
+    case 'image_read_failed':
+      return '图片读取失败，请重试。';
+    case 'empty_image_uri':
+      return '分享图片路径为空，请重新分享一次。';
+    case null:
+      return null;
+    default:
+      return '导入图片失败，请重试。';
+  }
 }
 
 function normalizeValidationErrors(draft: AddMistakeDraft, errors: string[]): string[] {
@@ -509,6 +542,7 @@ function QuestionPhotoQueueCard({
 
 export default function AddScreen() {
   const navigation = useNavigation();
+  const searchParams = useLocalSearchParams<SharedImageSearchParams>();
   const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
   const [photoQueue, setPhotoQueue] = useState<QueuedPhoto[]>([]);
@@ -530,6 +564,15 @@ export default function AddScreen() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastHandledSharedImageKeyRef = useRef<string | null>(null);
+  const lastHandledSharedErrorKeyRef = useRef<string | null>(null);
+  const showToastRef = useRef<
+    (message: string, type?: ToastType, duration?: number) => void
+  >(() => undefined);
+  const runImageActionRef = useRef<
+    (actionKey: string, handler: () => Promise<void>) => Promise<void>
+  >(async () => undefined);
+  const syncDraftQuestionImageRef = useRef<(queue: QueuedPhoto[]) => void>(() => undefined);
 
   const isImageBusy = activeImageAction !== null;
   const isBusy = isImageBusy || isSaving;
@@ -551,6 +594,9 @@ export default function AddScreen() {
         label: moduleItem.name,
       })),
   ];
+  const sharedImageUri = getFirstSearchParam(searchParams.sharedImageUri);
+  const sharedImageNonce = getFirstSearchParam(searchParams.sharedImageNonce);
+  const sharedImageError = getFirstSearchParam(searchParams.sharedImageError);
 
   const saveHintTextV2 = isSaving
     ? '正在保存...'
@@ -1095,6 +1141,112 @@ export default function AddScreen() {
       showToast(`${config.title}已更新`, 'success');
     });
   }
+
+  showToastRef.current = showToast;
+  runImageActionRef.current = runImageAction;
+  syncDraftQuestionImageRef.current = syncDraftQuestionImage;
+
+  useEffect(() => {
+    const message = getSharedImageErrorMessage(sharedImageError);
+    if (!message) {
+      return;
+    }
+
+    const errorKey = `${sharedImageNonce ?? 'no-nonce'}:${sharedImageError}`;
+    if (lastHandledSharedErrorKeyRef.current === errorKey) {
+      return;
+    }
+
+    lastHandledSharedErrorKeyRef.current = errorKey;
+    Logger.warn(PAGE_SCOPE, 'Shared image intent could not be imported.', {
+      draftId: draft.draftId,
+      sharedImageError,
+      sharedImageNonce,
+    });
+    showToastRef.current(message, 'warning', TOAST_DURATION_LONG);
+  }, [draft.draftId, sharedImageError, sharedImageNonce]);
+
+  useEffect(() => {
+    if (!sharedImageUri) {
+      return;
+    }
+
+    const importKey = `${sharedImageNonce ?? 'no-nonce'}:${sharedImageUri}`;
+    if (lastHandledSharedImageKeyRef.current === importKey) {
+      return;
+    }
+
+    if (isImageBusy || isSaving) {
+      return;
+    }
+
+    if (photoQueue.length >= MAX_PHOTO_QUEUE_SIZE) {
+      lastHandledSharedImageKeyRef.current = importKey;
+      Logger.warn(PAGE_SCOPE, 'Skip importing shared image because question queue is full.', {
+        draftId: draft.draftId,
+        photoQueueSize: photoQueue.length,
+        sharedImageUriShort: toShortUri(sharedImageUri),
+      });
+      showToastRef.current('已达到 20 张上限，请先保存当前队列', 'warning');
+      return;
+    }
+
+    lastHandledSharedImageKeyRef.current = importKey;
+    void runImageActionRef.current(`shared-question-${sharedImageNonce ?? Date.now()}`, async () => {
+      Logger.info(PAGE_SCOPE, 'Start importing shared image into add draft.', {
+        draftId: draft.draftId,
+        photoQueueSize: photoQueue.length,
+        sharedImageUriShort: toShortUri(sharedImageUri),
+      });
+
+      const result = await saveSharedImageToMistakeFolder({
+        mistakeId: draft.draftId,
+        type: 'question',
+        sourceUri: sharedImageUri,
+        index: photoQueue.length + 1,
+      });
+
+      if (!result.ok || !result.image) {
+        const message = result.errorMessage?.trim();
+        Logger.error(PAGE_SCOPE, 'Failed to import shared image into add draft.', {
+          draftId: draft.draftId,
+          message: message ?? null,
+          sharedImageUriShort: toShortUri(sharedImageUri),
+        });
+        showToastRef.current('图片读取失败，请重试', 'error', TOAST_DURATION_LONG);
+        return;
+      }
+
+      const importedImage = result.image;
+      const queueItem = buildQueuedPhoto(importedImage, 'shared');
+      setPhotoQueue((prev) => {
+        if (prev.length >= MAX_PHOTO_QUEUE_SIZE) {
+          void deleteLocalImage(importedImage.uri);
+          return prev;
+        }
+
+        const nextQueue = [...prev, queueItem];
+        syncDraftQuestionImageRef.current(nextQueue);
+        return nextQueue;
+      });
+      setValidationErrors([]);
+      setSaveErrorMessage(null);
+      showToastRef.current('已从其他应用导入图片', 'success');
+
+      Logger.info(PAGE_SCOPE, 'Imported shared image into add draft successfully.', {
+        draftId: draft.draftId,
+        photoId: queueItem.id,
+        savedUriShort: toShortUri(importedImage.uri),
+      });
+    });
+  }, [
+    draft.draftId,
+    isImageBusy,
+    isSaving,
+    photoQueue.length,
+    sharedImageNonce,
+    sharedImageUri,
+  ]);
 
   function handleDeleteQueuedQuestionPhoto(photoId: string) {
     const target = photoQueue.find((item) => item.id === photoId);
