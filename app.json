@@ -27,6 +27,7 @@
       "predictiveBackGestureEnabled": false,
       "package": "com.okshuxue.qishua_wrongbook",
       "permissions": [
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ]
     },
@@ -53,6 +54,13 @@
         {
           "cameraPermission": "Allow camera access to capture mistake photos.",
           "photosPermission": "Allow photo library access to pick mistake photos."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow camera access to scan worksheet QR codes.",
+          "recordAudioAndroid": false
         }
       ],
       "expo-notifications",

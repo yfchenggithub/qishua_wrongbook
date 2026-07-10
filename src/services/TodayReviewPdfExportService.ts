@@ -1,6 +1,7 @@
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
+import createQrCode from 'qrcode-generator';
 import { Image, Platform } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 
@@ -13,6 +14,7 @@ import {
 } from '@/src/services/export/PrintImageEnhancer';
 import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
+import * as ReviewSheetService from '@/src/services/ReviewSheetService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
@@ -356,12 +358,38 @@ function summarizeExportItems(items: TodayReviewExportItem[]): {
   }));
 }
 
+function buildReviewSheetQrSvg(sheetId: string): string {
+  const qr = createQrCode(0, 'M');
+  qr.addData(sheetId);
+  qr.make();
+  return qr.createSvgTag({
+    cellSize: 2,
+    margin: 1,
+    scalable: true,
+  });
+}
+
+function buildReviewSheetQrBadgeHtml(sheetId: string, qrSvg: string): string {
+  return `
+    <div class="sheet-qr-badge">
+      <div class="sheet-qr-svg">${qrSvg}</div>
+      <div class="sheet-qr-copy">
+        <div class="sheet-qr-label">&#25195;&#30721;&#22238;&#22635;</div>
+        <div class="sheet-qr-id">${escapeHtml(sheetId)}</div>
+      </div>
+    </div>
+  `;
+}
+
 function buildFallbackPdfHtml(
   items: TodayReviewPdfRenderItem[],
   dateString: string,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
   totalCount = items.length,
   questionNumberOffset = 0,
 ): string {
+  const qrBadgeHtml = buildReviewSheetQrBadgeHtml(reviewSheetId, reviewSheetQrSvg);
   const cardsHtml = items
     .map((item, index) => {
       const module = escapeHtml(toDisplayText(item.raw.module, '-'));
@@ -412,9 +440,17 @@ function buildFallbackPdfHtml(
           .question-image { display: block; width: 100%; max-height: 520px; object-fit: contain; }
           .question-placeholder { color: #888; font-size: 13px; }
           .answer-box { margin-top: 8px; min-height: 120px; border: 1px dashed #b8b8b8; border-radius: 6px; padding: 8px; color: #666; }
+          .sheet-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+          .sheet-qr-badge { display: flex; align-items: center; gap: 8px; border: 1px solid #111; border-radius: 8px; padding: 5px 8px; background: #fff; }
+          .sheet-qr-svg svg { display: block; width: 18mm; height: 18mm; }
+          .sheet-qr-label { font-size: 12px; font-weight: 800; color: #111; }
+          .sheet-qr-id { max-width: 42mm; overflow-wrap: anywhere; font-size: 9px; color: #555; }
         </style>
       </head>
       <body>
+        <div class="sheet-top">
+          ${qrBadgeHtml}
+        </div>
         <h1 class="sheet-title">七刷错题本 · 今日复做练习卷</h1>
         <p class="sheet-meta">日期：${escapeHtml(dateString)} · 共 ${totalCount} 道题</p>
         ${cardsHtml}
@@ -826,6 +862,8 @@ function buildAutoQuestionMetaHtml(
   index: number,
   totalCount: number,
   dateString: string,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
   pageLabelHtml?: string,
 ): string {
   const questionNo = index + 1;
@@ -837,12 +875,16 @@ function buildAutoQuestionMetaHtml(
   const pageLabel = pageLabelHtml
     ? `<span class="problem-page-label">${pageLabelHtml}</span>`
     : '';
+  const qrBadgeHtml = buildReviewSheetQrBadgeHtml(reviewSheetId, reviewSheetQrSvg);
 
   return `
     <div class="problem-heading">
-      <h2 class="problem-title">&#31532; ${questionNo} &#39064;</h2>
-      ${pageLabel}
-      <span class="sheet-summary">${escapeHtml(dateString)} &#183; ${totalCount} &#39064;</span>
+      <div class="problem-heading-text">
+        <h2 class="problem-title">&#31532; ${questionNo} &#39064;</h2>
+        ${pageLabel}
+        <span class="sheet-summary">${escapeHtml(dateString)} &#183; ${totalCount} &#39064;</span>
+      </div>
+      ${qrBadgeHtml}
     </div>
     <div class="problem-meta">
       <span class="problem-meta-item">&#27169;&#22359;&#65306;${module}</span>
@@ -897,12 +939,14 @@ function buildAutoSingleQuestionPageHtml(
   index: number,
   totalCount: number,
   dateString: string,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
   layout: QuestionPrintLayout,
 ): string {
   return `
     <section class="worksheet-page worksheet-page-single">
       <section class="problem-card">
-        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString)}
+        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, reviewSheetId, reviewSheetQrSvg)}
         ${buildAutoQuestionImageHtml(item, layout)}
         <div class="answer-area">
           <div class="answer-title">&#25105;&#30340;&#35299;&#31572;&#65306;</div>
@@ -920,12 +964,14 @@ function buildAutoQuestionOnlyPageHtml(
   index: number,
   totalCount: number,
   dateString: string,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
   layout: QuestionPrintLayout,
 ): string {
   return `
     <section class="worksheet-page worksheet-page-question">
       <section class="problem-card">
-        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, '&#39064;&#30446;&#39029;')}
+        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, reviewSheetId, reviewSheetQrSvg, '&#39064;&#30446;&#39029;')}
         ${buildAutoQuestionImageHtml(item, layout)}
         <div class="answer-area thought-area">
           <div class="answer-title">&#25105;&#30340;&#24605;&#36335;&#65306;</div>
@@ -942,6 +988,8 @@ function buildAutoAnswerPageHtml(
   index: number,
   totalCount: number,
   dateString: string,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
 ): string {
   const answerLinesHeightMm = Math.max(
     ANSWER_MIN_HEIGHT_MM,
@@ -951,7 +999,7 @@ function buildAutoAnswerPageHtml(
   return `
     <section class="worksheet-page worksheet-page-answer">
       <section class="problem-card">
-        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, '&#35299;&#31572;&#39029;')}
+        ${buildAutoQuestionMetaHtml(item, index, totalCount, dateString, reviewSheetId, reviewSheetQrSvg, '&#35299;&#31572;&#39029;')}
         <div class="answer-area">
           <div class="answer-title">&#25105;&#30340;&#35299;&#31572;&#65306;</div>
           ${buildAnswerLinesHtml(answerLinesHeightMm)}
@@ -967,6 +1015,8 @@ function buildAutoWorksheetPageHtml(
   index: number,
   totalCount: number,
   dateString: string,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
 ): string {
   const layout = chooseQuestionPrintLayout(item);
   Logger.info(SERVICE_SCOPE, 'pdf_export_question_layout_selected', {
@@ -982,12 +1032,28 @@ function buildAutoWorksheetPageHtml(
   });
 
   if (layout.kind === 'single_page') {
-    return buildAutoSingleQuestionPageHtml(item, index, totalCount, dateString, layout);
+    return buildAutoSingleQuestionPageHtml(
+      item,
+      index,
+      totalCount,
+      dateString,
+      reviewSheetId,
+      reviewSheetQrSvg,
+      layout,
+    );
   }
 
   return [
-    buildAutoQuestionOnlyPageHtml(item, index, totalCount, dateString, layout),
-    buildAutoAnswerPageHtml(item, index, totalCount, dateString),
+    buildAutoQuestionOnlyPageHtml(
+      item,
+      index,
+      totalCount,
+      dateString,
+      reviewSheetId,
+      reviewSheetQrSvg,
+      layout,
+    ),
+    buildAutoAnswerPageHtml(item, index, totalCount, dateString, reviewSheetId, reviewSheetQrSvg),
   ].join('\n');
 }
 
@@ -995,6 +1061,8 @@ function buildPdfHtml(
   items: TodayReviewPdfRenderItem[],
   dateString: string,
   imageFilterCss: string | null,
+  reviewSheetId: string,
+  reviewSheetQrSvg: string,
   totalCount = items.length,
   questionNumberOffset = 0,
   onPageProgress?: (progress: BuildItemsProgress) => void,
@@ -1004,7 +1072,14 @@ function buildPdfHtml(
 
   for (let index = 0; index < total; index += 1) {
     const item = items[index];
-    pageHtmlList.push(buildAutoWorksheetPageHtml(item, questionNumberOffset + index, totalCount, dateString));
+    pageHtmlList.push(buildAutoWorksheetPageHtml(
+      item,
+      questionNumberOffset + index,
+      totalCount,
+      dateString,
+      reviewSheetId,
+      reviewSheetQrSvg,
+    ));
     if (onPageProgress) {
       onPageProgress({
         current: index + 1,
@@ -1096,10 +1171,18 @@ function buildPdfHtml(
           }
           .problem-heading {
             display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 8px 12px;
+            margin-bottom: 6px;
+          }
+          .problem-heading-text {
+            display: flex;
             align-items: baseline;
             gap: 8px 12px;
+            flex: 1 1 auto;
             flex-wrap: wrap;
-            margin-bottom: 6px;
+            min-width: 0;
           }
           .problem-heading .problem-title {
             margin: 0;
@@ -1113,9 +1196,37 @@ function buildPdfHtml(
             color: #111111;
           }
           .sheet-summary {
-            margin-left: auto;
             font-size: 12px;
             color: #666666;
+          }
+          .sheet-qr-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid #111111;
+            border-radius: 8px;
+            padding: 4px 6px;
+            background: #ffffff;
+            flex: 0 0 auto;
+          }
+          .sheet-qr-svg svg {
+            display: block;
+            width: 15mm;
+            height: 15mm;
+          }
+          .sheet-qr-label {
+            font-size: 11px;
+            line-height: 1.2;
+            color: #111111;
+            font-weight: 800;
+            white-space: nowrap;
+          }
+          .sheet-qr-id {
+            max-width: 34mm;
+            overflow-wrap: anywhere;
+            font-size: 8px;
+            line-height: 1.2;
+            color: #555555;
           }
           .problem-meta {
             display: flex;
@@ -1542,6 +1653,16 @@ export async function exportTodayReviewPdf(
       };
     }
 
+    const reviewSheet = await ReviewSheetService.createReviewSheetForMistakeIds(
+      exportItems.map((item) => item.mistakeId),
+    );
+    const reviewSheetId = reviewSheet.id;
+    const reviewSheetQrSvg = buildReviewSheetQrSvg(reviewSheetId);
+    Logger.info(SERVICE_SCOPE, 'review_sheet_created_for_pdf_export', {
+      sheetId: reviewSheetId,
+      itemCount: reviewSheet.items.length,
+    });
+
     reportExportProgress(onProgress, {
       stage: 'prepare_items',
       current: 0,
@@ -1616,6 +1737,8 @@ export async function exportTodayReviewPdf(
         renderResult.renderItems,
         dateString,
         imageFilterCss,
+        reviewSheetId,
+        reviewSheetQrSvg,
         exportItems.length,
         processedItemOffset,
         ({ current }) => {
@@ -1682,6 +1805,8 @@ export async function exportTodayReviewPdf(
           const fallbackHtml = buildFallbackPdfHtml(
             renderResult.renderItems,
             dateString,
+            reviewSheetId,
+            reviewSheetQrSvg,
             exportItems.length,
             processedItemOffset,
           );

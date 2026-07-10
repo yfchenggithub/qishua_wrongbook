@@ -49,6 +49,27 @@ CREATE TABLE IF NOT EXISTS mistake_images (
 );
 `;
 
+export const CREATE_REVIEW_SHEETS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS review_sheets (
+  id TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL,
+  submitted_at TEXT,
+  is_submitted INTEGER NOT NULL DEFAULT 0 CHECK (is_submitted IN (0, 1))
+);
+`;
+
+export const CREATE_REVIEW_SHEET_ITEMS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS review_sheet_items (
+  id TEXT PRIMARY KEY,
+  sheet_id TEXT NOT NULL,
+  mistake_id TEXT NOT NULL,
+  sort_order INTEGER NOT NULL CHECK (sort_order >= 0),
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(sheet_id) REFERENCES review_sheets(id) ON DELETE CASCADE,
+  FOREIGN KEY(mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+);
+`;
+
 export const CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS module_question_counters (
   module TEXT PRIMARY KEY,
@@ -82,6 +103,9 @@ CREATE INDEX IF NOT EXISTS idx_mistake_images_mistake_id ON mistake_images(mista
 CREATE INDEX IF NOT EXISTS idx_mistake_images_mistake_type ON mistake_images(mistake_id, type);
 CREATE INDEX IF NOT EXISTS idx_mistake_images_review_record_id ON mistake_images(review_record_id);
 CREATE INDEX IF NOT EXISTS idx_mistake_images_cover ON mistake_images(mistake_id, type, sort_order);
+CREATE INDEX IF NOT EXISTS idx_review_sheets_is_submitted ON review_sheets(is_submitted, created_at);
+CREATE INDEX IF NOT EXISTS idx_review_sheet_items_sheet_order ON review_sheet_items(sheet_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_review_sheet_items_mistake_id ON review_sheet_items(mistake_id);
 CREATE INDEX IF NOT EXISTS idx_custom_modules_sort_order ON custom_modules(sort_order, created_at);
 `;
 
@@ -89,6 +113,8 @@ export const CREATE_SCHEMA_SQL = `
 ${CREATE_MISTAKES_TABLE_SQL}
 ${CREATE_REVIEW_RECORDS_TABLE_SQL}
 ${CREATE_MISTAKE_IMAGES_TABLE_SQL}
+${CREATE_REVIEW_SHEETS_TABLE_SQL}
+${CREATE_REVIEW_SHEET_ITEMS_TABLE_SQL}
 ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
 ${CREATE_CUSTOM_MODULES_TABLE_SQL}
 ${CREATE_INDEXES_SQL}

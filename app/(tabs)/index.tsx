@@ -625,6 +625,10 @@ export default function TodayScreen() {
     }
   }, [isStartingSession, loadHomeData, router, showToast]);
 
+  const handleOpenReviewSheetScanner = useCallback(() => {
+    router.push('/review-sheet/scan' as never);
+  }, [router]);
+
   /* const handleExportTodayWorksheet = useCallback(async () => {
     if (Number.isFinite(summary.todayDueCount)) {
       const dueToday = Math.max(0, Math.floor(summary.todayDueCount));
@@ -776,6 +780,7 @@ export default function TodayScreen() {
   const exportModeHintText = buildExportModeHintText(exportMode);
   const canShowExportButton =
     summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
+  const canShowScanButton = summary.hasAnyMistake;
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
   const homePrimaryMessage = useMemo(() => buildHomePrimaryMessage(summary), [summary]);
@@ -925,6 +930,16 @@ export default function TodayScreen() {
                   <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
                 </View>
               </Pressable>
+              {canShowScanButton ? (
+                <Pressable
+                  onPress={handleOpenReviewSheetScanner}
+                  style={styles.secondaryActionButton}>
+                  <View style={styles.actionButtonContent}>
+                    <MaterialIcons name="qr-code-scanner" size={20} color={colors.success} />
+                    <Text style={styles.secondaryActionButtonText}>扫描练习卷</Text>
+                  </View>
+                </Pressable>
+              ) : null}
               <View style={styles.exportHintWrap}>
                 <Text style={styles.exportHintText}>{exportProgressHeadline}</Text>
                 {exportProgressDetailText ? (
@@ -986,6 +1001,16 @@ export default function TodayScreen() {
                     ) : null}
                   </View>
                 </>
+              ) : null}
+              {canShowScanButton ? (
+                <Pressable
+                  onPress={handleOpenReviewSheetScanner}
+                  style={styles.secondaryActionButton}>
+                  <View style={styles.actionButtonContent}>
+                    <MaterialIcons name="qr-code-scanner" size={20} color={colors.success} />
+                    <Text style={styles.secondaryActionButtonText}>扫描练习卷</Text>
+                  </View>
+                </Pressable>
               ) : null}
             </View>
           )}
