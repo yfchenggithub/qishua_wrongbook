@@ -12,7 +12,11 @@ import {
   Text,
   TextInput,
   View,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type StyleProp,
+  type TextInputContentSizeChangeEvent,
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
@@ -21,6 +25,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const DOUBLE_TAP_WINDOW_MS = 300;
+const TEXT_SCROLLBAR_MIN_THUMB_HEIGHT = 36;
 
 export type TextNotePreviewProps = {
   value: string;
@@ -133,12 +138,58 @@ export function TextNoteEditorModal({
   const [draft, setDraft] = useState(value);
   const [isAwaitingSave, setIsAwaitingSave] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [editorViewportHeight, setEditorViewportHeight] = useState(0);
+  const [editorContentHeight, setEditorContentHeight] = useState(0);
+  const [editorScrollOffsetY, setEditorScrollOffsetY] = useState(0);
+  const [editorTextHeight, setEditorTextHeight] = useState(0);
+  const [readViewportHeight, setReadViewportHeight] = useState(0);
+  const [readContentHeight, setReadContentHeight] = useState(0);
+  const [readScrollOffsetY, setReadScrollOffsetY] = useState(0);
   const wasVisibleRef = useRef(false);
   const keyboardVisibleRef = useRef(false);
   const inputRef = useRef<TextInput>(null);
   const effectiveBusy = busy || isAwaitingSave;
   const canSave = !effectiveBusy && (allowEmpty || draft.trim().length > 0);
   const shouldUseKeyboardLayout = mode === 'edit' && isKeyboardVisible;
+  const editorFallbackInputHeight = shouldUseKeyboardLayout ? 180 : 280;
+  const editorMinInputHeight = Math.max(editorFallbackInputHeight, editorViewportHeight);
+  const editorInputHeight = Math.max(editorMinInputHeight, editorTextHeight);
+  const editorIsScrollable = editorContentHeight > editorViewportHeight + 8;
+  const editorScrollbarThumbHeight = editorIsScrollable
+    ? Math.min(
+      editorViewportHeight,
+      Math.max(
+        TEXT_SCROLLBAR_MIN_THUMB_HEIGHT,
+        (editorViewportHeight * editorViewportHeight) / Math.max(editorContentHeight, 1),
+      ),
+    )
+    : 0;
+  const editorScrollbarMaxTop = Math.max(editorViewportHeight - editorScrollbarThumbHeight, 0);
+  const editorScrollbarTop = editorIsScrollable
+    ? Math.min(
+      editorScrollbarMaxTop,
+      (editorScrollOffsetY / Math.max(editorContentHeight - editorViewportHeight, 1))
+        * editorScrollbarMaxTop,
+    )
+    : 0;
+  const readIsScrollable = readContentHeight > readViewportHeight + 8;
+  const readScrollbarThumbHeight = readIsScrollable
+    ? Math.min(
+      readViewportHeight,
+      Math.max(
+        TEXT_SCROLLBAR_MIN_THUMB_HEIGHT,
+        (readViewportHeight * readViewportHeight) / Math.max(readContentHeight, 1),
+      ),
+    )
+    : 0;
+  const readScrollbarMaxTop = Math.max(readViewportHeight - readScrollbarThumbHeight, 0);
+  const readScrollbarTop = readIsScrollable
+    ? Math.min(
+      readScrollbarMaxTop,
+      (readScrollOffsetY / Math.max(readContentHeight - readViewportHeight, 1))
+        * readScrollbarMaxTop,
+    )
+    : 0;
   const displayText = value.trim().length > 0 ? value : '暂无内容';
 
   useEffect(() => {
@@ -146,6 +197,13 @@ export function TextNoteEditorModal({
       setDraft(value);
       setMode(initialMode);
       setIsAwaitingSave(false);
+      setEditorScrollOffsetY(0);
+      setEditorContentHeight(0);
+      setEditorViewportHeight(0);
+      setEditorTextHeight(0);
+      setReadScrollOffsetY(0);
+      setReadContentHeight(0);
+      setReadViewportHeight(0);
     }
     wasVisibleRef.current = visible;
   }, [initialMode, value, visible]);
@@ -193,8 +251,43 @@ export function TextNoteEditorModal({
     handleClose();
   };
 
+  const handleReadLayout = (event: LayoutChangeEvent) => {
+    setReadViewportHeight(event.nativeEvent.layout.height);
+  };
+
+  const handleReadContentSizeChange = (_width: number, height: number) => {
+    setReadContentHeight(height);
+  };
+
+  const handleReadScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    setReadScrollOffsetY(Math.max(contentOffset.y, 0));
+    setReadContentHeight(contentSize.height);
+    setReadViewportHeight(layoutMeasurement.height);
+  };
+
+  const handleEditorLayout = (event: LayoutChangeEvent) => {
+    setEditorViewportHeight(event.nativeEvent.layout.height);
+  };
+
+  const handleEditorContentSizeChange = (_width: number, height: number) => {
+    setEditorContentHeight(height);
+  };
+
+  const handleEditorScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    setEditorScrollOffsetY(Math.max(contentOffset.y, 0));
+    setEditorContentHeight(contentSize.height);
+    setEditorViewportHeight(layoutMeasurement.height);
+  };
+
+  const handleInputContentSizeChange = (event: TextInputContentSizeChangeEvent) => {
+    setEditorTextHeight(Math.ceil(event.nativeEvent.contentSize.height) + spacing.sm);
+  };
+
   const handleStartEdit = () => {
     setDraft(value);
+    setEditorScrollOffsetY(0);
     setMode('edit');
     onDraftChange?.(value);
   };
@@ -276,39 +369,96 @@ export function TextNoteEditorModal({
           </View>
 
           {mode === 'view' ? (
-            <ScrollView
-              style={styles.modalReadScroll}
-              contentContainerStyle={[styles.modalScrollContent, styles.modalReadScrollContent]}>
-              <Text
-                selectable
-                style={[
-                  styles.modalReadText,
-                  value.trim().length <= 0 && styles.modalReadEmptyText,
-                ]}>
-                {displayText}
-              </Text>
-              {helperText ? <Text style={styles.helperText}>{helperText}</Text> : null}
-            </ScrollView>
+            <View style={styles.modalReadScrollFrame}>
+              <ScrollView
+                style={styles.modalReadScroll}
+                contentContainerStyle={[styles.modalScrollContent, styles.modalReadScrollContent]}
+                decelerationRate="fast"
+                onContentSizeChange={handleReadContentSizeChange}
+                onLayout={handleReadLayout}
+                onScroll={handleReadScroll}
+                overScrollMode="always"
+                persistentScrollbar
+                scrollEventThrottle={16}
+                showsVerticalScrollIndicator={false}>
+                <Text
+                  selectable
+                  style={[
+                    styles.modalReadText,
+                    value.trim().length <= 0 && styles.modalReadEmptyText,
+                  ]}>
+                  {displayText}
+                </Text>
+                {helperText ? <Text style={styles.helperText}>{helperText}</Text> : null}
+              </ScrollView>
+              {readIsScrollable ? (
+                <View pointerEvents="none" style={styles.modalScrollbarTrack}>
+                  <View
+                    style={[
+                      styles.modalScrollbarThumb,
+                      {
+                        height: readScrollbarThumbHeight,
+                        transform: [{ translateY: readScrollbarTop }],
+                      },
+                    ]}
+                  />
+                </View>
+              ) : null}
+            </View>
           ) : (
             <View style={[styles.modalEditorBody, shouldUseKeyboardLayout && styles.modalEditorBodyKeyboardVisible]}>
-              <TextInput
-                ref={inputRef}
-                accessibilityLabel={`${title}内容`}
-                autoFocus
-                editable={!effectiveBusy}
-                maxLength={maxLength}
-                multiline
-                onChangeText={(nextValue) => {
-                  setDraft(nextValue);
-                  onDraftChange?.(nextValue);
-                }}
-                placeholder={placeholder}
-                placeholderTextColor={colors.textMuted}
-                scrollEnabled
-                style={[styles.modalInput, shouldUseKeyboardLayout && styles.modalInputKeyboardVisible]}
-                textAlignVertical="top"
-                value={draft}
-              />
+              <View style={styles.modalEditorScrollFrame}>
+                <ScrollView
+                  style={styles.modalEditorScroll}
+                  contentContainerStyle={styles.modalEditorScrollContent}
+                  decelerationRate="fast"
+                  keyboardShouldPersistTaps="always"
+                  nestedScrollEnabled
+                  onContentSizeChange={handleEditorContentSizeChange}
+                  onLayout={handleEditorLayout}
+                  onScroll={handleEditorScroll}
+                  overScrollMode="always"
+                  persistentScrollbar
+                  scrollEventThrottle={16}
+                  showsVerticalScrollIndicator={false}>
+                  <TextInput
+                    ref={inputRef}
+                    accessibilityLabel={`${title}内容`}
+                    autoFocus
+                    editable={!effectiveBusy}
+                    maxLength={maxLength}
+                    multiline
+                    onChangeText={(nextValue) => {
+                      setDraft(nextValue);
+                      onDraftChange?.(nextValue);
+                    }}
+                    onContentSizeChange={handleInputContentSizeChange}
+                    placeholder={placeholder}
+                    placeholderTextColor={colors.textMuted}
+                    scrollEnabled={false}
+                    style={[
+                      styles.modalInput,
+                      shouldUseKeyboardLayout && styles.modalInputKeyboardVisible,
+                      { height: editorInputHeight, minHeight: editorMinInputHeight },
+                    ]}
+                    textAlignVertical="top"
+                    value={draft}
+                  />
+                </ScrollView>
+                {editorIsScrollable ? (
+                  <View pointerEvents="none" style={styles.modalScrollbarTrack}>
+                    <View
+                      style={[
+                        styles.modalScrollbarThumb,
+                        {
+                          height: editorScrollbarThumbHeight,
+                          transform: [{ translateY: editorScrollbarTop }],
+                        },
+                      ]}
+                    />
+                  </View>
+                ) : null}
+              </View>
               {helperText ? <Text style={styles.helperText}>{helperText}</Text> : null}
               {errorMessage ? <Text style={styles.errorText}>{errorMessage}</Text> : null}
             </View>
@@ -417,8 +567,8 @@ const styles = StyleSheet.create({
   },
   modalCard: {
     width: '100%',
+    height: '88%',
     maxHeight: '92%',
-    minHeight: '58%',
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: '#DDD6FE',
@@ -433,6 +583,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   modalCardKeyboardVisible: {
+    height: undefined,
     maxHeight: '100%',
     minHeight: 0,
   },
@@ -469,26 +620,57 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   modalEditorBody: {
-    flexGrow: 1,
-    flexShrink: 1,
-    minHeight: 260,
+    flex: 1,
+    minHeight: 0,
     gap: spacing.sm,
   },
   modalEditorBodyKeyboardVisible: {
     minHeight: 180,
   },
-  modalReadScroll: {
-    flexShrink: 1,
-    flexGrow: 0,
-    minHeight: 220,
+  modalEditorScrollFrame: {
+    flex: 1,
+    minHeight: 180,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: '#DDD6FE',
+    backgroundColor: '#FAFAFF',
+    overflow: 'hidden',
+  },
+  modalEditorScroll: {
+    flex: 1,
+  },
+  modalEditorScrollContent: {
+    paddingRight: spacing.sm,
+  },
+  modalScrollbarTrack: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.xs,
+    bottom: spacing.sm,
+    width: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(124, 58, 237, 0.10)',
+  },
+  modalScrollbarThumb: {
+    width: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(124, 58, 237, 0.62)',
+  },
+  modalReadScrollFrame: {
+    flex: 1,
+    minHeight: 0,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: '#EEE7FF',
     backgroundColor: '#FAFAFF',
     overflow: 'hidden',
   },
+  modalReadScroll: {
+    flex: 1,
+  },
   modalReadScrollContent: {
     padding: spacing.md,
+    paddingRight: spacing.lg,
   },
   modalReadText: {
     ...typography.body,
@@ -499,12 +681,7 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
   },
   modalInput: {
-    flex: 1,
-    minHeight: 280,
     borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#DDD6FE',
-    backgroundColor: '#FAFAFF',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     ...typography.body,
