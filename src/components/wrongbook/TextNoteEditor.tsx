@@ -1019,13 +1019,13 @@ const styles = StyleSheet.create({
     paddingBottom: 76,
   },
   selectableReadTextWrap: {
-    minHeight: 120,
     position: 'relative',
   },
   modalReadText: {
     ...typography.body,
     color: colors.textPrimary,
     lineHeight: 25,
+    includeFontPadding: false,
   },
   modalReadEmptyText: {
     color: colors.textMuted,
@@ -1035,7 +1035,11 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: 'transparent',
     lineHeight: 25,
+    includeFontPadding: false,
+    margin: 0,
     padding: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
     backgroundColor: 'transparent',
   },
   modalReadSelectionInputDisabled: {
