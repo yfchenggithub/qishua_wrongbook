@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CardContainer, ScreenContainer } from '@/src/components';
 import {
   APP_NAME,
-  APP_VERSION,
+  APP_BUILD_DATE,
   DATA_MODE_LABEL,
   IMAGE_COMBINER_URL,
   OFFICIAL_ACCOUNT_SEARCH_TEXT,
@@ -144,7 +144,7 @@ export default function AboutSupportScreen() {
           <Text style={styles.appName}>{APP_NAME}</Text>
           <View style={styles.infoTags}>
             <View style={styles.infoTag}>
-              <Text style={styles.infoTagText}>版本 {APP_VERSION}</Text>
+              <Text style={styles.infoTagText}>编译 {APP_BUILD_DATE}</Text>
             </View>
             <View style={styles.infoTag}>
               <Text style={styles.infoTagText}>{DATA_MODE_LABEL}</Text>

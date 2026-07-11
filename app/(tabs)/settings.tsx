@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
-import { APP_NAME, APP_VERSION, DATA_MODE_LABEL } from '@/src/constants/app';
+import { APP_BUILD_DATE, APP_NAME, DATA_MODE_LABEL } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
@@ -2691,7 +2691,7 @@ export default function SettingsScreen() {
                   onPress={handleVersionTap}
                   style={styles.versionPressable}>
                   <Text style={[styles.metaText, styles.aboutSupportPrimaryMeta]}>
-                    {APP_NAME} · {APP_VERSION}
+                    {APP_NAME} · {APP_BUILD_DATE}
                   </Text>
                 </Pressable>
                 <Text style={styles.metaText}>{DATA_MODE_LABEL} · 数据仅保存在本机</Text>
