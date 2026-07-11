@@ -31,6 +31,7 @@ import {
   ProgressDots,
   ScreenContainer,
   SectionTitle,
+  TagChip,
   TextNoteEditorModal,
   TextNotePreview,
 } from '@/src/components';
@@ -56,6 +57,7 @@ import type {
   MistakeDetailViewModel,
 } from '@/src/models/MistakeDetailViewModel';
 import type { CustomModule } from '@/src/models/CustomModule';
+import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { useMusicInterruption } from '@/src/music';
@@ -64,6 +66,7 @@ import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
+import * as MistakeTagService from '@/src/services/MistakeTagService';
 import * as ReviewRecordImageService from '@/src/services/ReviewRecordImageService';
 import * as ReviewRecordTextService from '@/src/services/ReviewRecordTextService';
 import * as ReviewRecordVoiceService from '@/src/services/ReviewRecordVoiceService';
@@ -1203,6 +1206,13 @@ export default function MistakeDetailScreen() {
   const [metadataDraft, setMetadataDraft] = useState<DetailMetadataDraft | null>(null);
   const [isSavingMetadata, setIsSavingMetadata] = useState(false);
   const [metadataEditorMessage, setMetadataEditorMessage] = useState<string | null>(null);
+  const [isTagAddModalVisible, setIsTagAddModalVisible] = useState(false);
+  const [tagDraft, setTagDraft] = useState('');
+  const [tagModalMessage, setTagModalMessage] = useState<string | null>(null);
+  const [tagSuggestions, setTagSuggestions] = useState<string[]>([]);
+  const [isSavingTag, setIsSavingTag] = useState(false);
+  const [deletingTagId, setDeletingTagId] = useState<string | null>(null);
+  const [isTagManageMode, setIsTagManageMode] = useState(false);
   const [activeReviewRecordId, setActiveReviewRecordId] = useState<string | null>(null);
   const [reviewTextEditorRecordId, setReviewTextEditorRecordId] = useState<string | null>(null);
   const [reviewTextEditorMessage, setReviewTextEditorMessage] = useState<string | null>(null);
@@ -3034,6 +3044,169 @@ export default function MistakeDetailScreen() {
     state,
   ]);
 
+  const updateDetailTags = useCallback((mistakeId: string, tags: MistakeTag[]) => {
+    setState((current) => {
+      if (current.kind !== 'success' || current.detail.id !== mistakeId) {
+        return current;
+      }
+      return {
+        kind: 'success',
+        detail: {
+          ...current.detail,
+          tags,
+        },
+      };
+    });
+  }, []);
+
+  const handleOpenTagAddModal = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+    if (isDeletingMistake) {
+      showToast('当前正在删除错题，请稍后再添加标签。', 'info');
+      return;
+    }
+
+    setTagDraft('');
+    setTagModalMessage(null);
+    setTagSuggestions([]);
+    setIsTagAddModalVisible(true);
+
+    void MistakeTagService.getTagSuggestionsForMistake(state.detail.id).then((result) => {
+      if (result.ok) {
+        setTagSuggestions(result.suggestions ?? []);
+      }
+    });
+  }, [isDeletingMistake, showToast, state]);
+
+  const handleCloseTagAddModal = useCallback(() => {
+    if (isSavingTag) {
+      return;
+    }
+    setIsTagAddModalVisible(false);
+    setTagDraft('');
+    setTagModalMessage(null);
+  }, [isSavingTag]);
+
+  const handleSaveTag = useCallback(async () => {
+    if (state.kind !== 'success' || isSavingTag) {
+      return;
+    }
+
+    const tagName = MistakeTagService.normalizeMistakeTagName(tagDraft);
+    const tagKey = MistakeTagService.normalizeMistakeTagKey(tagName);
+    if (!tagName) {
+      setTagModalMessage('标签不能为空。');
+      return;
+    }
+
+    setIsSavingTag(true);
+    setTagModalMessage(null);
+    try {
+      const result = await MistakeTagService.addMistakeTag({
+        mistakeId: state.detail.id,
+        name: tagName,
+      });
+
+      if (!result.ok || !result.tags) {
+        const message = result.errorMessage ?? '添加标签失败，请重试。';
+        setTagModalMessage(message);
+        showToast(message, 'error', TOAST_DURATION_LONG);
+        return;
+      }
+
+      updateDetailTags(state.detail.id, result.tags);
+      setIsTagAddModalVisible(false);
+      setTagDraft('');
+      setTagSuggestions((current) =>
+        current.filter(
+          (item) =>
+            MistakeTagService.normalizeMistakeTagKey(item)
+            !== tagKey,
+        ),
+      );
+      const existedBeforeSave = state.detail.tags.some((tag) => tag.normalized_name === tagKey);
+      showToast(existedBeforeSave ? '标签已存在。' : '标签已添加。', 'success');
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Unexpected error while adding tag.', {
+        routeId,
+        error,
+      });
+      const message = error instanceof Error ? error.message : '添加标签失败，请重试。';
+      setTagModalMessage(message);
+      showToast(message, 'error', TOAST_DURATION_LONG);
+    } finally {
+      setIsSavingTag(false);
+    }
+  }, [
+    isSavingTag,
+    routeId,
+    showToast,
+    state,
+    tagDraft,
+    updateDetailTags,
+  ]);
+
+  const handleUseTagSuggestion = useCallback((tagName: string) => {
+    setTagDraft(tagName);
+    setTagModalMessage(null);
+  }, []);
+
+  const handleDeleteTag = useCallback(
+    (tag: MistakeTag) => {
+      if (state.kind !== 'success' || deletingTagId !== null || isSavingTag) {
+        return;
+      }
+
+      Alert.alert('删除标签', `确认删除“${tag.name}”？`, [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setDeletingTagId(tag.id);
+              try {
+                const result = await MistakeTagService.deleteMistakeTag({
+                  mistakeId: state.detail.id,
+                  tagId: tag.id,
+                });
+                if (!result.ok || !result.tags) {
+                  showToast(result.errorMessage ?? '删除标签失败，请重试。', 'error', TOAST_DURATION_LONG);
+                  return;
+                }
+                updateDetailTags(state.detail.id, result.tags);
+                if (result.tags.length <= 0) {
+                  setIsTagManageMode(false);
+                }
+                showToast('标签已删除。', 'success');
+              } catch (error) {
+                Logger.error(PAGE_SCOPE, 'Unexpected error while deleting tag.', {
+                  routeId,
+                  tagId: tag.id,
+                  error,
+                });
+                const message = error instanceof Error ? error.message : '删除标签失败，请重试。';
+                showToast(message, 'error', TOAST_DURATION_LONG);
+              } finally {
+                setDeletingTagId(null);
+              }
+            })();
+          },
+        },
+      ]);
+    },
+    [
+      deletingTagId,
+      isSavingTag,
+      routeId,
+      showToast,
+      state,
+      updateDetailTags,
+    ],
+  );
+
   const handleStartDetailReview = useCallback(() => {
     if (state.kind !== 'success') {
       return;
@@ -3869,6 +4042,102 @@ export default function MistakeDetailScreen() {
                 </View>
               ) : null}
 
+              <View style={styles.tagSectionWrap}>
+                <View style={styles.tagHeaderRow}>
+                  <View style={styles.tagTitleWrap}>
+                    <Text style={styles.noteTitleText}>标签</Text>
+                    <Text style={styles.tagSubtitleText}>用于细化相关错题推荐</Text>
+                  </View>
+                  <View style={styles.tagHeaderActions}>
+                    {state.detail.tags.length > 0 ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={isTagManageMode ? '完成标签管理' : '管理标签'}
+                        disabled={deletingTagId !== null || isSavingTag}
+                        onPress={() => setIsTagManageMode((current) => !current)}
+                        style={({ pressed }) => [
+                          styles.tagHeaderButton,
+                          pressed && deletingTagId === null && !isSavingTag
+                            ? styles.tagHeaderButtonPressed
+                            : null,
+                          (deletingTagId !== null || isSavingTag) ? styles.tagHeaderButtonDisabled : null,
+                        ]}>
+                        <MaterialIcons
+                          name={isTagManageMode ? 'check' : 'edit'}
+                          size={16}
+                          color={colors.success}
+                        />
+                        <Text style={styles.tagHeaderButtonText}>
+                          {isTagManageMode ? '完成' : '管理'}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
+
+                <View style={styles.tagChipRow}>
+                  {state.detail.tags.length > 0 ? (
+                    state.detail.tags.map((tag) => {
+                      if (!isTagManageMode) {
+                        return (
+                          <TagChip
+                            key={tag.id}
+                            label={tag.name}
+                            selected
+                            style={styles.detailTagChip}
+                            textStyle={styles.detailTagChipText}
+                          />
+                        );
+                      }
+
+                      const deleting = deletingTagId === tag.id;
+                      return (
+                        <Pressable
+                          key={tag.id}
+                          accessibilityRole="button"
+                          accessibilityLabel={`删除标签：${tag.name}`}
+                          disabled={deletingTagId !== null || isSavingTag}
+                          onPress={() => handleDeleteTag(tag)}
+                          style={({ pressed }) => [
+                            styles.tagManageChip,
+                            pressed && !deleting && deletingTagId === null ? styles.tagManageChipPressed : null,
+                            deleting ? styles.tagManageChipBusy : null,
+                          ]}>
+                          <Text numberOfLines={1} style={styles.tagManageChipText}>
+                            {tag.name}
+                          </Text>
+                          {deleting ? (
+                            <ActivityIndicator size="small" color={colors.danger} />
+                          ) : (
+                            <MaterialIcons name="close" size={15} color={colors.danger} />
+                          )}
+                        </Pressable>
+                      );
+                    })
+                  ) : (
+                    <Text style={styles.tagEmptyText}>还没有标签</Text>
+                  )}
+
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="添加标签"
+                    disabled={isDeletingMistake || isSavingTag || deletingTagId !== null}
+                    onPress={handleOpenTagAddModal}
+                    style={({ pressed }) => [
+                      styles.addTagButton,
+                      pressed && !isDeletingMistake && !isSavingTag && deletingTagId === null
+                        ? styles.addTagButtonPressed
+                        : null,
+                      (isDeletingMistake || isSavingTag || deletingTagId !== null)
+                        ? styles.addTagButtonDisabled
+                        : null,
+                    ]}>
+                    <MaterialIcons name="add" size={17} color={colors.success} />
+                    <Text style={styles.addTagButtonText}>添加标签</Text>
+                  </Pressable>
+                </View>
+              </View>
+
               <View style={styles.noteEditorWrap}>
                 <View style={styles.noteHeaderRow}>
                   <Text style={styles.noteTitleText}>备注</Text>
@@ -4146,6 +4415,123 @@ export default function MistakeDetailScreen() {
         onSave={handleSaveReviewText}
         onHighlightsChange={handleSaveReviewTextHighlights}
       />
+
+      <Modal
+        visible={isTagAddModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={handleCloseTagAddModal}>
+        <View style={styles.tagModalOverlay}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="关闭添加标签"
+            style={styles.tagModalBackdrop}
+            onPress={handleCloseTagAddModal}
+          />
+          <View style={styles.tagModalSheet}>
+            <View style={styles.tagModalHandle} />
+            <View style={styles.tagModalHeader}>
+              <View style={styles.tagModalHeaderTextWrap}>
+                <Text style={styles.tagModalTitle}>添加标签</Text>
+                <Text style={styles.tagModalSubtitle}>如：回文串、双指针、删除一个字符</Text>
+              </View>
+              {isSavingTag ? <ActivityIndicator size="small" color={colors.success} /> : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="关闭添加标签"
+                disabled={isSavingTag}
+                onPress={handleCloseTagAddModal}
+                style={({ pressed }) => [
+                  styles.tagModalCloseButton,
+                  pressed && !isSavingTag ? styles.tagModalCloseButtonPressed : null,
+                  isSavingTag ? styles.tagModalButtonDisabled : null,
+                ]}>
+                <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+              </Pressable>
+            </View>
+
+            {tagModalMessage ? (
+              <Text maxFontSizeMultiplier={1.1} style={styles.tagModalMessage}>
+                {tagModalMessage}
+              </Text>
+            ) : null}
+
+            <View style={styles.tagInputWrap}>
+              <MaterialIcons name="label-outline" size={20} color={colors.success} />
+              <TextInput
+                value={tagDraft}
+                editable={!isSavingTag}
+                onChangeText={(value) => {
+                  setTagDraft(value);
+                  setTagModalMessage(null);
+                }}
+                placeholder="输入标签名称"
+                placeholderTextColor={colors.textMuted}
+                maxLength={MistakeTagService.MAX_MISTAKE_TAG_NAME_LENGTH}
+                returnKeyType="done"
+                onSubmitEditing={() => {
+                  void handleSaveTag();
+                }}
+                style={styles.tagInput}
+              />
+            </View>
+
+            {tagSuggestions.length > 0 ? (
+              <View style={styles.tagSuggestionSection}>
+                <Text style={styles.tagSuggestionTitle}>最近使用</Text>
+                <View style={styles.tagSuggestionRow}>
+                  {tagSuggestions.map((suggestion) => (
+                    <TagChip
+                      key={suggestion}
+                      label={suggestion}
+                      selected={false}
+                      onPress={() => handleUseTagSuggestion(suggestion)}
+                      style={styles.tagSuggestionChip}
+                    />
+                  ))}
+                </View>
+              </View>
+            ) : null}
+
+            <View style={styles.tagModalFooter}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="取消添加标签"
+                disabled={isSavingTag}
+                onPress={handleCloseTagAddModal}
+                style={({ pressed }) => [
+                  styles.tagSecondaryButton,
+                  pressed && !isSavingTag ? styles.tagModalButtonPressed : null,
+                  isSavingTag ? styles.tagModalButtonDisabled : null,
+                ]}>
+                <Text style={styles.tagSecondaryButtonText}>取消</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="保存标签"
+                disabled={
+                  isSavingTag
+                  || MistakeTagService.normalizeMistakeTagName(tagDraft).length <= 0
+                }
+                onPress={() => {
+                  void handleSaveTag();
+                }}
+                style={({ pressed }) => [
+                  styles.tagPrimaryButton,
+                  pressed && !isSavingTag ? styles.tagModalButtonPressed : null,
+                  (
+                    isSavingTag
+                    || MistakeTagService.normalizeMistakeTagName(tagDraft).length <= 0
+                  )
+                    ? styles.tagModalButtonDisabled
+                    : null,
+                ]}>
+                <Text style={styles.tagPrimaryButtonText}>{isSavingTag ? '保存中...' : '保存'}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <DetailModulePickerModal
         visible={isModulePickerVisible}
@@ -4440,6 +4826,127 @@ const styles = StyleSheet.create({
     ...typography.body,
     color: colors.textSecondary,
   },
+  tagSectionWrap: {
+    marginTop: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  tagHeaderRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  tagTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  tagSubtitleText: {
+    ...typography.caption,
+    flexShrink: 1,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  tagHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  tagHeaderButton: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.xs,
+    gap: 2,
+  },
+  tagHeaderButtonPressed: {
+    backgroundColor: colors.successBg,
+  },
+  tagHeaderButtonDisabled: {
+    opacity: 0.56,
+  },
+  tagHeaderButtonText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '900',
+  },
+  tagChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  detailTagChip: {
+    maxWidth: 132,
+  },
+  detailTagChipText: {
+    fontWeight: '800',
+  },
+  tagManageChip: {
+    maxWidth: 148,
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#F3C8C8',
+    backgroundColor: '#FFF7F7',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: 3,
+  },
+  tagManageChipPressed: {
+    opacity: 0.82,
+  },
+  tagManageChipBusy: {
+    opacity: 0.64,
+  },
+  tagManageChipText: {
+    ...typography.bodySmall,
+    minWidth: 0,
+    color: colors.danger,
+    fontWeight: '800',
+  },
+  tagEmptyText: {
+    ...typography.bodySmall,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  addTagButton: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.successBorder,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    gap: 2,
+  },
+  addTagButtonPressed: {
+    backgroundColor: colors.successBg,
+  },
+  addTagButtonDisabled: {
+    opacity: 0.56,
+  },
+  addTagButtonText: {
+    ...typography.bodySmall,
+    color: colors.success,
+    fontWeight: '800',
+  },
   noteEditorWrap: {
     marginTop: spacing.lg,
     borderRadius: radius.lg,
@@ -4617,6 +5124,154 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.textSecondary,
     fontWeight: '700',
+  },
+  tagModalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.screenPadding,
+    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+  },
+  tagModalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tagModalSheet: {
+    maxHeight: '86%',
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    padding: spacing.lg,
+    gap: spacing.md,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.14,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  },
+  tagModalHandle: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.border,
+  },
+  tagModalHeader: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  tagModalHeaderTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  tagModalTitle: {
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
+  },
+  tagModalSubtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  tagModalCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tagModalCloseButtonPressed: {
+    opacity: 0.78,
+  },
+  tagModalMessage: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '700',
+  },
+  tagInputWrap: {
+    minHeight: 48,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  tagInput: {
+    ...typography.bodySmall,
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    paddingVertical: spacing.sm,
+    fontWeight: '700',
+  },
+  tagSuggestionSection: {
+    gap: spacing.sm,
+  },
+  tagSuggestionTitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '800',
+  },
+  tagSuggestionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  tagSuggestionChip: {
+    maxWidth: 132,
+  },
+  tagModalFooter: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  tagSecondaryButton: {
+    minWidth: 76,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  tagPrimaryButton: {
+    minWidth: 90,
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.black,
+    backgroundColor: colors.black,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  tagModalButtonPressed: {
+    opacity: 0.84,
+  },
+  tagModalButtonDisabled: {
+    opacity: 0.56,
+  },
+  tagSecondaryButtonText: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  tagPrimaryButtonText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '800',
   },
   modulePickerOverlay: {
     flex: 1,

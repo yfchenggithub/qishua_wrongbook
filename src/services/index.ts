@@ -7,6 +7,7 @@ export * as ImageEnhancementService from "./imageEnhancement/scanEnhanceImage";
 export * as CreateMistakeService from "./CreateMistakeService";
 export * as MistakeListService from "./MistakeListService";
 export * as MistakeDetailService from "./MistakeDetailService";
+export * as MistakeTagService from "./MistakeTagService";
 export * as DeveloperModeService from "./DeveloperModeService";
 export * as ExportImageModeService from "./ExportImageModeService";
 export * as SettingsStatsService from "./SettingsStatsService";

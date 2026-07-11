@@ -8,11 +8,13 @@ import { withDatabaseTransaction } from '@/src/db';
 import { DATABASE_VERSION } from '@/src/db/constants';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
+import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ReviewRecord, ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import {
   MistakeImageRepository,
   MistakeRelationRepository,
   MistakeRepository,
+  MistakeTagRepository,
   ReviewRecordRepository,
 } from '@/src/repositories';
 import { ensureMistakeImageDir } from '@/src/services/ImageStorageService';
@@ -51,6 +53,7 @@ import {
   type BackupManifest,
   type BackupMistakeImageRecord,
   type BackupMistakeRelationRecord,
+  type BackupMistakeTagRecord,
   type BackupProgressEvent,
   type BackupProgressStage,
   type BackupVoiceNoteRecord,
@@ -87,7 +90,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [3, DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, 4, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -146,6 +149,18 @@ INSERT INTO mistake_relations (
   source,
   created_at
 ) VALUES (?, ?, ?, ?, ?);
+`;
+
+const INSERT_MISTAKE_TAG_SQL = `
+INSERT INTO mistake_tags (
+  id,
+  mistake_id,
+  name,
+  normalized_name,
+  sort_order,
+  created_at,
+  updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
 `;
 
 type BackupCollectContext = {
@@ -503,6 +518,9 @@ export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
     mistakeRelations: Array.isArray(input.mistakeRelations)
       ? input.mistakeRelations as BackupDataPayload['mistakeRelations']
       : [],
+    mistakeTags: Array.isArray(input.mistakeTags)
+      ? input.mistakeTags as BackupDataPayload['mistakeTags']
+      : [],
     extra: input.extra && typeof input.extra === 'object' ? input.extra : {},
   };
 }
@@ -586,6 +604,21 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
       || !mistakeIds.has(targetMistakeId)
       || (relationSource !== 'system' && relationSource !== 'manual')
     ) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+  }
+
+  for (const tag of data.mistakeTags) {
+    const tagId = ensureRecordId((tag as Partial<BackupMistakeTagRecord>).id);
+    const mistakeId = ensureRecordId((tag as Partial<BackupMistakeTagRecord>).mistake_id);
+    const tagName = normalizeRequiredText((tag as Partial<BackupMistakeTagRecord>).name);
+    const normalizedTagName = normalizeRequiredText(
+      (tag as Partial<BackupMistakeTagRecord>).normalized_name,
+    );
+    if (!tagId || !mistakeIds.has(mistakeId) || !tagName || !normalizedTagName) {
       throw new BackupRestoreError(
         'CORRUPTED_BACKUP_FILE',
         getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
@@ -740,6 +773,26 @@ async function listAllMistakeRelations(): Promise<BackupMistakeRelationRecord[]>
 
   while (true) {
     const page = await MistakeRelationRepository.listAllRelations({
+      limit: BACKUP_QUERY_PAGE_SIZE,
+      offset,
+    });
+
+    collected.push(...page);
+    if (page.length < BACKUP_QUERY_PAGE_SIZE) {
+      break;
+    }
+    offset += page.length;
+  }
+
+  return collected;
+}
+
+async function listAllMistakeTags(): Promise<MistakeTag[]> {
+  const collected: MistakeTag[] = [];
+  let offset = 0;
+
+  while (true) {
+    const page = await MistakeTagRepository.listAllTags({
       limit: BACKUP_QUERY_PAGE_SIZE,
       offset,
     });
@@ -1464,6 +1517,17 @@ function validateRestorePackage(options: {
     }
   }
 
+  for (const tag of data.mistakeTags) {
+    if (
+      !normalizeOptionalText(tag.id)
+      || !normalizeOptionalText(tag.mistake_id)
+      || !normalizeOptionalText(tag.name)
+      || !normalizeOptionalText(tag.normalized_name)
+    ) {
+      missingRequiredFieldsCount += 1;
+    }
+  }
+
   let imageTotalBytes = 0;
   for (const image of data.mistakeImages) {
     const archivePath = normalizeArchiveEntryPath(ensureBackupImageRelativePath(ensureRecordId(image.backupRelativePath)));
@@ -1728,6 +1792,7 @@ async function runRestoreDatabaseTransaction(options: {
       const dbClearStartedAt = nowMs();
       try {
         await db.runAsync('DELETE FROM mistake_relations;');
+        await db.runAsync('DELETE FROM mistake_tags;');
         await db.runAsync('DELETE FROM review_records;');
         await db.runAsync('DELETE FROM mistake_images;');
         await db.runAsync('DELETE FROM mistakes;');
@@ -1818,6 +1883,30 @@ async function runRestoreDatabaseTransaction(options: {
               tableName: 'review_records',
               importedCount: index + 1,
               totalCount: data.reviewRecords.length,
+              durationMs: nowMs() - importStartedAt,
+            });
+          }
+        }
+
+        for (let index = 0; index < data.mistakeTags.length; index += 1) {
+          const tag = data.mistakeTags[index];
+          await db.runAsync(
+            INSERT_MISTAKE_TAG_SQL,
+            tag.id,
+            tag.mistake_id,
+            tag.name,
+            tag.normalized_name,
+            tag.sort_order,
+            tag.created_at,
+            tag.updated_at,
+          );
+
+          if ((index + 1) % DB_IMPORT_PROGRESS_INTERVAL === 0 || index === data.mistakeTags.length - 1) {
+            logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_progress', {
+              restoreSessionId,
+              tableName: 'mistake_tags',
+              importedCount: index + 1,
+              totalCount: data.mistakeTags.length,
               durationMs: nowMs() - importStartedAt,
             });
           }
@@ -1996,11 +2085,12 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
 
   try {
     emitProgress('collect_db', '正在读取错题、图片和复做记录...', 0, 0);
-    const [mistakes, mistakeImages, reviewRecords, mistakeRelations] = await Promise.all([
+    const [mistakes, mistakeImages, reviewRecords, mistakeRelations, mistakeTags] = await Promise.all([
       listAllMistakes(),
       listAllMistakeImages(),
       listAllReviewRecords(),
       listAllMistakeRelations(),
+      listAllMistakeTags(),
     ]);
 
     context.counts = {
@@ -2050,9 +2140,11 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       mistakeImages: imageArtifacts.backupMistakeImages,
       reviewRecords,
       mistakeRelations,
+      mistakeTags,
       extra: {
         reason,
         mistakeRelationCount: mistakeRelations.length,
+        mistakeTagCount: mistakeTags.length,
         voiceNoteCount: voiceArtifacts.backupVoiceNotes.length,
         voiceFileCount: voiceArtifacts.copiedVoiceFileCount,
       },

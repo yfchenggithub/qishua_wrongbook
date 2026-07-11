@@ -106,6 +106,20 @@ CREATE TABLE IF NOT EXISTS mistake_relations (
 );
 `;
 
+export const CREATE_MISTAKE_TAGS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS mistake_tags (
+  id TEXT PRIMARY KEY,
+  mistake_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  normalized_name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0 CHECK (sort_order >= 0),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(mistake_id, normalized_name),
+  FOREIGN KEY(mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+);
+`;
+
 export const CREATE_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
 CREATE INDEX IF NOT EXISTS idx_mistakes_next_review_at ON mistakes(next_review_at);
@@ -126,6 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_custom_modules_sort_order ON custom_modules(sort_
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_source_mistake ON mistake_relations(source_mistake_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_target_mistake ON mistake_relations(target_mistake_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_source ON mistake_relations(source);
+CREATE INDEX IF NOT EXISTS idx_mistake_tags_mistake_order ON mistake_tags(mistake_id, sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_mistake_tags_normalized_name ON mistake_tags(normalized_name);
 `;
 
 export const CREATE_SCHEMA_SQL = `
@@ -137,5 +153,6 @@ ${CREATE_REVIEW_SHEET_ITEMS_TABLE_SQL}
 ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
 ${CREATE_CUSTOM_MODULES_TABLE_SQL}
 ${CREATE_MISTAKE_RELATIONS_TABLE_SQL}
+${CREATE_MISTAKE_TAGS_TABLE_SQL}
 ${CREATE_INDEXES_SQL}
 `;

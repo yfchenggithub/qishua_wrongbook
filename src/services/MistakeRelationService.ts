@@ -1,6 +1,7 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeRelation, MistakeRelationSource } from '@/src/models/MistakeRelation';
+import type { MistakeTag } from '@/src/models/MistakeTag';
 import type {
   RelatedMistakeItem,
   RelatedMistakeSourceInfo,
@@ -10,6 +11,7 @@ import {
   MistakeImageRepository,
   MistakeRelationRepository,
   MistakeRepository,
+  MistakeTagRepository,
 } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 
@@ -100,8 +102,41 @@ function mapMistakeToSourceInfo(mistake: Mistake): RelatedMistakeSourceInfo {
   };
 }
 
-function buildMatchReasons(base: Mistake, candidate: Mistake): string[] {
+function buildSharedTagNames(baseTags: MistakeTag[] = [], candidateTags: MistakeTag[] = []): string[] {
+  if (baseTags.length <= 0 || candidateTags.length <= 0) {
+    return [];
+  }
+
+  const candidateByKey = new Map<string, MistakeTag>();
+  for (const tag of candidateTags) {
+    candidateByKey.set(tag.normalized_name, tag);
+  }
+
+  const shared: string[] = [];
+  const seenKeys = new Set<string>();
+  for (const baseTag of baseTags) {
+    if (seenKeys.has(baseTag.normalized_name)) {
+      continue;
+    }
+    const matched = candidateByKey.get(baseTag.normalized_name);
+    if (!matched) {
+      continue;
+    }
+    shared.push(baseTag.name || matched.name);
+    seenKeys.add(baseTag.normalized_name);
+  }
+
+  return shared;
+}
+
+function buildMatchReasons(
+  base: Mistake,
+  candidate: Mistake,
+  baseTags: MistakeTag[] = [],
+  candidateTags: MistakeTag[] = [],
+): string[] {
   const reasons: string[] = [];
+  const sharedTags = buildSharedTagNames(baseTags, candidateTags);
   const baseModule = normalizeOptionalText(base.module);
   const candidateModule = normalizeOptionalText(candidate.module);
   const baseReason = normalizeOptionalText(base.error_reason ?? null);
@@ -111,6 +146,9 @@ function buildMatchReasons(base: Mistake, candidate: Mistake): string[] {
     ? Math.floor(candidate.difficulty)
     : null;
 
+  for (const tagName of sharedTags.slice(0, 3)) {
+    reasons.push(`同标签：${tagName}`);
+  }
   if (baseModule && candidateModule && baseModule === candidateModule) {
     reasons.push('同模块');
   }
@@ -128,9 +166,18 @@ function buildMatchReasons(base: Mistake, candidate: Mistake): string[] {
   return reasons;
 }
 
-function scoreCandidate(base: Mistake, candidate: Mistake): number {
+function scoreCandidate(
+  base: Mistake,
+  candidate: Mistake,
+  baseTags: MistakeTag[] = [],
+  candidateTags: MistakeTag[] = [],
+): number {
   let score = 0;
-  const reasons = buildMatchReasons(base, candidate);
+  const sharedTagCount = buildSharedTagNames(baseTags, candidateTags).length;
+  const reasons = buildMatchReasons(base, candidate, baseTags, candidateTags);
+  if (sharedTagCount > 0) {
+    score += 60 + Math.max(0, sharedTagCount - 1) * 25;
+  }
   if (reasons.includes('同模块')) {
     score += 40;
   }
@@ -150,6 +197,7 @@ function scoreCandidate(base: Mistake, candidate: Mistake): number {
 async function mapMistakesToItems(params: {
   baseMistake: Mistake;
   mistakes: Mistake[];
+  tagsByMistakeId?: Map<string, MistakeTag[]>;
   relationsByTargetId?: Map<string, MistakeRelation>;
   fallbackReasons?: string[];
   includeScore?: boolean;
@@ -160,7 +208,9 @@ async function mapMistakesToItems(params: {
 
   return params.mistakes.map((mistake) => {
     const relation = params.relationsByTargetId?.get(mistake.id) ?? null;
-    const matchReasons = buildMatchReasons(params.baseMistake, mistake);
+    const baseTags = params.tagsByMistakeId?.get(params.baseMistake.id) ?? [];
+    const candidateTags = params.tagsByMistakeId?.get(mistake.id) ?? [];
+    const matchReasons = buildMatchReasons(params.baseMistake, mistake, baseTags, candidateTags);
     const resolvedReasons =
       matchReasons.length > 0 ? matchReasons : (params.fallbackReasons ?? []);
     return {
@@ -179,7 +229,9 @@ async function mapMistakesToItems(params: {
       relationSource: relation?.source ?? null,
       relationCreatedAt: relation?.created_at ?? null,
       matchReasons: resolvedReasons,
-      score: params.includeScore ? scoreCandidate(params.baseMistake, mistake) : null,
+      score: params.includeScore
+        ? scoreCandidate(params.baseMistake, mistake, baseTags, candidateTags)
+        : null,
     };
   });
 }
@@ -233,10 +285,15 @@ export async function getRelatedMistakes(
     for (const relation of filteredRelations) {
       relationByTargetId.set(relationTargetIdForCurrent(relation, mistakeId), relation);
     }
+    const tagsByMistakeId = await MistakeTagRepository.listTagsByMistakeIds([
+      mistakeId,
+      ...targetMistakes.map((mistake) => mistake.id),
+    ]);
 
     const items = await mapMistakesToItems({
       baseMistake,
       mistakes: targetMistakes,
+      tagsByMistakeId,
       relationsByTargetId: relationByTargetId,
       fallbackReasons: ['已关联'],
       includeScore: false,
@@ -297,12 +354,29 @@ export async function getSuggestedRelatedMistakes(
       sortOrder: 'desc',
       limit: CANDIDATE_SCAN_LIMIT,
     });
-    const scored = candidates
-      .filter((candidate) => candidate.id !== mistakeId && !relatedIds.has(candidate.id))
+    const candidatePool = candidates.filter(
+      (candidate) => candidate.id !== mistakeId && !relatedIds.has(candidate.id),
+    );
+    const tagsByMistakeId = await MistakeTagRepository.listTagsByMistakeIds([
+      mistakeId,
+      ...candidatePool.map((candidate) => candidate.id),
+    ]);
+    const baseTags = tagsByMistakeId.get(mistakeId) ?? [];
+    const scored = candidatePool
       .map((candidate) => ({
         mistake: candidate,
-        score: scoreCandidate(baseMistake, candidate),
-        reasons: buildMatchReasons(baseMistake, candidate),
+        score: scoreCandidate(
+          baseMistake,
+          candidate,
+          baseTags,
+          tagsByMistakeId.get(candidate.id) ?? [],
+        ),
+        reasons: buildMatchReasons(
+          baseMistake,
+          candidate,
+          baseTags,
+          tagsByMistakeId.get(candidate.id) ?? [],
+        ),
       }))
       .filter((item) => item.score > 0 && item.reasons.length > 0)
       .sort((left, right) => {
@@ -319,6 +393,7 @@ export async function getSuggestedRelatedMistakes(
     const items = await mapMistakesToItems({
       baseMistake,
       mistakes: scored.map((item) => item.mistake),
+      tagsByMistakeId,
       includeScore: true,
     });
 
@@ -371,9 +446,14 @@ export async function searchMistakesForManualRelation(params: {
     const candidates = mistakes.filter(
       (mistake) => mistake.id !== mistakeId && !relatedIds.has(mistake.id),
     );
+    const tagsByMistakeId = await MistakeTagRepository.listTagsByMistakeIds([
+      mistakeId,
+      ...candidates.map((mistake) => mistake.id),
+    ]);
     const items = await mapMistakesToItems({
       baseMistake,
       mistakes: candidates,
+      tagsByMistakeId,
       fallbackReasons: ['手动选择'],
       includeScore: false,
     });

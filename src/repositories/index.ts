@@ -8,5 +8,6 @@ export {
 export { CustomModuleRepository } from '@/src/repositories/CustomModuleRepository';
 export { MistakeImageRepository } from '@/src/repositories/MistakeImageRepository';
 export { MistakeRelationRepository } from '@/src/repositories/MistakeRelationRepository';
+export { MistakeTagRepository } from '@/src/repositories/MistakeTagRepository';
 export { ReviewRecordRepository } from '@/src/repositories/ReviewRecordRepository';
 export { ReviewSheetRepository } from '@/src/repositories/ReviewSheetRepository';

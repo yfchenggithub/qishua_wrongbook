@@ -66,6 +66,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "mistakeImages": [],
   "reviewRecords": [],
   "mistakeRelations": [],
+  "mistakeTags": [],
   "extra": {}
 }
 ```
@@ -119,7 +120,17 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `source`
 - `created_at`
 
-### 5.6 extra
+### 5.6 mistakeTags（按当前 schema 字段）
+每条记录字段：
+- `id`
+- `mistake_id`
+- `name`
+- `normalized_name`
+- `sort_order`
+- `created_at`
+- `updated_at`
+
+### 5.7 extra
 - 预留扩展字段，当前可为空对象 `{}`。
 
 ## 6. 图片处理规则

@@ -1,5 +1,6 @@
 import type { Mistake, MistakeImageType } from '@/src/models/Mistake';
 import type { MistakeRelation } from '@/src/models/MistakeRelation';
+import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ReviewRecord } from '@/src/models/ReviewRecord';
 
 export const BACKUP_FILE_EXTENSION = '.qsbk' as const;
@@ -45,6 +46,7 @@ export interface BackupMistakeImageRecord {
 
 export type BackupReviewRecord = ReviewRecord;
 export type BackupMistakeRelationRecord = MistakeRelation;
+export type BackupMistakeTagRecord = MistakeTag;
 
 export interface BackupVoiceNoteRecord {
   id: string;
@@ -62,6 +64,7 @@ export interface BackupDataPayload {
   mistakeImages: BackupMistakeImageRecord[];
   reviewRecords: BackupReviewRecord[];
   mistakeRelations: BackupMistakeRelationRecord[];
+  mistakeTags: BackupMistakeTagRecord[];
   extra: Record<string, unknown>;
 }
 

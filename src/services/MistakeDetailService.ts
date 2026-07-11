@@ -14,6 +14,7 @@ import {
   MistakeImageRepository,
   MistakeRelationRepository,
   MistakeRepository,
+  MistakeTagRepository,
   ReviewRecordRepository,
 } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
@@ -396,6 +397,7 @@ async function mapMistakeToDetailViewModel(
   imageSlots: DetailImageSlot[],
 ): Promise<MistakeDetailViewModel> {
   const relatedSummary = await MistakeRelationRepository.getRelationSummaryByMistakeId(mistake.id);
+  const tags = await MistakeTagRepository.listTagsByMistakeId(mistake.id);
   return {
     id: mistake.id,
     module: mistake.module,
@@ -412,6 +414,7 @@ async function mapMistakeToDetailViewModel(
     nextReviewAt: mistake.next_review_at ?? null,
     createdAt: mistake.created_at,
     updatedAt: mistake.updated_at,
+    tags,
     imageSlots,
     reviewRecords: [],
     relatedSummary,
