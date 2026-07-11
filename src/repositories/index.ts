@@ -2,6 +2,7 @@ export {
   MistakeRepository,
   type ListMistakesOptions,
   type MistakeStats,
+  type MistakeTagCount,
   type UpdateReviewProgressInTransactionParams,
   type UpdateReviewProgressParams,
 } from '@/src/repositories/MistakeRepository';

@@ -59,6 +59,7 @@ export interface ListMistakesOptions {
   status?: MistakeStatus | 'all';
   module?: string | null;
   keyword?: string | null;
+  tagKeys?: string[];
   dueOnly?: boolean;
   limit?: number;
   offset?: number;
@@ -76,6 +77,13 @@ export interface MistakeStats {
 export interface MistakeModuleCount {
   module: string;
   count: number;
+}
+
+export interface MistakeTagCount {
+  name: string;
+  normalizedName: string;
+  count: number;
+  latestUpdatedAt?: string | null;
 }
 
 export interface TodayReviewQueueQuery {
@@ -132,6 +140,13 @@ type CountRow = {
 type ModuleCountRow = {
   module: string | null;
   total: number | null;
+};
+
+type TagCountRow = {
+  name: string | null;
+  normalized_name: string | null;
+  total: number | null;
+  latest_updated_at: string | null;
 };
 
 type ModuleQuestionCounterRow = {
@@ -431,6 +446,24 @@ function normalizeModuleFilter(value: string | null | undefined): string | null 
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeTagKeys(values: string[] | undefined): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const key = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').toLocaleLowerCase() : '';
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(key);
+  }
+  return normalized;
+}
+
 function normalizeStatusFilter(
   value: ListMistakesOptions['status'] | undefined,
 ): MistakeStatus | 'all' {
@@ -505,9 +538,35 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
   const keyword = normalizeKeyword(options?.keyword);
   if (keyword) {
     const likeKeyword = `%${keyword}%`;
-    whereClauses.push('(title LIKE ? OR module LIKE ? OR error_reason LIKE ? OR note LIKE ?)');
-    bindParams.push(likeKeyword, likeKeyword, likeKeyword, likeKeyword);
+    const likeTagKeyword = `%${keyword.toLocaleLowerCase()}%`;
+    whereClauses.push(`(
+  title LIKE ?
+  OR module LIKE ?
+  OR error_reason LIKE ?
+  OR note LIKE ?
+  OR EXISTS (
+    SELECT 1
+    FROM mistake_tags tag_search
+    WHERE tag_search.mistake_id = mistakes.id
+      AND (
+        tag_search.name LIKE ?
+        OR tag_search.normalized_name LIKE ?
+      )
+  )
+)`);
+    bindParams.push(likeKeyword, likeKeyword, likeKeyword, likeKeyword, likeKeyword, likeTagKeyword);
   }
+
+  const tagKeys = normalizeTagKeys(options?.tagKeys);
+  tagKeys.forEach((tagKey, index) => {
+    whereClauses.push(`EXISTS (
+  SELECT 1
+  FROM mistake_tags tag_filter_${index}
+  WHERE tag_filter_${index}.mistake_id = mistakes.id
+    AND tag_filter_${index}.normalized_name = ?
+)`);
+    bindParams.push(tagKey);
+  });
 
   if (whereClauses.length === 0) {
     return {
@@ -520,6 +579,15 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
     whereSql: `\nWHERE ${whereClauses.join('\n  AND ')}`,
     bindParams,
   };
+}
+
+function buildMistakesSubqueryWhere(conditions: QueryConditions, relationSql: string): string {
+  if (!conditions.whereSql) {
+    return `\nWHERE ${relationSql}`;
+  }
+
+  return `${conditions.whereSql}
+  AND ${relationSql}`;
 }
 
 export const MistakeRepository = {
@@ -698,6 +766,50 @@ ORDER BY total DESC, module ASC;`,
       }, []);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'countMistakesByModule failed.', { options, error });
+      throw error;
+    }
+  },
+
+  async countMistakeTags(options?: ListMistakesOptions): Promise<MistakeTagCount[]> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const conditions = buildListConditions(options);
+      const subqueryWhere = buildMistakesSubqueryWhere(conditions, 'mistakes.id = tag.mistake_id');
+
+      const rows = await db.getAllAsync<TagCountRow>(
+        `SELECT
+  tag.normalized_name,
+  MIN(tag.name) AS name,
+  COUNT(DISTINCT tag.mistake_id) AS total,
+  MAX(tag.updated_at) AS latest_updated_at
+FROM mistake_tags tag
+WHERE EXISTS (
+  SELECT 1
+  FROM mistakes${subqueryWhere}
+)
+GROUP BY tag.normalized_name
+ORDER BY total DESC, latest_updated_at DESC, name ASC;`,
+        ...conditions.bindParams,
+      );
+
+      return rows.reduce<MistakeTagCount[]>((tagCounts, row) => {
+        const normalizedName = normalizeModuleFilter(row.normalized_name);
+        const name = normalizeModuleFilter(row.name);
+        const count = Number(row.total ?? 0);
+        if (!normalizedName || !name || count <= 0) {
+          return tagCounts;
+        }
+        tagCounts.push({
+          name,
+          normalizedName,
+          count,
+          latestUpdatedAt: row.latest_updated_at ?? null,
+        });
+        return tagCounts;
+      }, []);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'countMistakeTags failed.', { options, error });
       throw error;
     }
   },

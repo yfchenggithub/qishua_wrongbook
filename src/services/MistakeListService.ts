@@ -1,5 +1,6 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
+import type { MistakeTag } from '@/src/models/MistakeTag';
 import type {
   MistakeListFilter,
   MistakeListItem,
@@ -9,8 +10,10 @@ import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
 import {
   MistakeImageRepository,
   MistakeRepository,
+  MistakeTagRepository,
   ReviewRecordRepository,
   type ListMistakesOptions,
+  type MistakeTagCount,
 } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import {
@@ -55,6 +58,12 @@ export interface MistakeModuleCount {
   count: number;
 }
 
+export interface MistakeTagFilterCount {
+  name: string;
+  normalizedName: string;
+  count: number;
+}
+
 export interface HomeTaskSummary {
   hasAnyMistake: boolean;
   todayDueCount: number;
@@ -85,6 +94,24 @@ function normalizeModule(module: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function normalizeTagKeys(values: string[] | undefined): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const tagKey = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ').toLocaleLowerCase() : '';
+    if (!tagKey || seen.has(tagKey)) {
+      continue;
+    }
+    normalized.push(tagKey);
+    seen.add(tagKey);
+  }
+  return normalized;
+}
+
 function normalizeOptionalText(value: string | null | undefined): string | null {
   if (typeof value !== 'string') {
     return null;
@@ -96,10 +123,12 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
 function buildListQueryOptions(filter: MistakeListFilter): ListMistakesOptions {
   const keyword = normalizeKeyword(filter.keyword);
   const module = normalizeModule(filter.module);
+  const tagKeys = normalizeTagKeys(filter.tagKeys);
 
   const baseOptions: ListMistakesOptions = {
     keyword,
     module,
+    tagKeys,
   };
 
   if (filter.segment === 'due') {
@@ -242,12 +271,14 @@ function buildUpcomingDayLabel(dayOffset: number): string {
 
 async function mapMistakeWithCoverToListItem(mistake: Mistake): Promise<MistakeListItem> {
   const coverImage = await MistakeImageRepository.getCoverImageForMistake(mistake.id);
+  const tags = await MistakeTagRepository.listTagsByMistakeId(mistake.id);
   return {
     id: mistake.id,
     module: mistake.module,
     title: buildTitle(mistake.module, mistake.title),
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,
+    tags,
     difficulty: mistake.difficulty,
     thumbnailUri: coverImage?.uri ?? null,
     reviewCount: mistake.review_count,
@@ -261,13 +292,18 @@ async function mapMistakeWithCoverToListItem(mistake: Mistake): Promise<MistakeL
   };
 }
 
-export function mapMistakeToListItem(mistake: Mistake, thumbnailUri?: string | null): MistakeListItem {
+export function mapMistakeToListItem(
+  mistake: Mistake,
+  thumbnailUri?: string | null,
+  tags: MistakeTag[] = [],
+): MistakeListItem {
   return {
     id: mistake.id,
     module: mistake.module,
     title: buildTitle(mistake.module, mistake.title),
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,
+    tags,
     difficulty: mistake.difficulty,
     thumbnailUri: thumbnailUri ?? null,
     reviewCount: mistake.review_count,
@@ -293,8 +329,15 @@ export async function getMistakeListItems(filter: MistakeListFilter): Promise<Mi
     const coverMap = await MistakeImageRepository.getCoverImagesForMistakes(
       mistakes.map((mistake) => mistake.id),
     );
+    const tagsMap = await MistakeTagRepository.listTagsByMistakeIds(
+      mistakes.map((mistake) => mistake.id),
+    );
     const listItems = mistakes.map((mistake) =>
-      mapMistakeToListItem(mistake, coverMap.get(mistake.id)?.uri ?? null),
+      mapMistakeToListItem(
+        mistake,
+        coverMap.get(mistake.id)?.uri ?? null,
+        tagsMap.get(mistake.id) ?? [],
+      ),
     );
     Logger.info(SERVICE_SCOPE, 'Loaded mistake list items successfully.', {
       segment: filter.segment,
@@ -349,6 +392,43 @@ export async function getMistakeModuleCounts(filter: MistakeListFilter): Promise
     return moduleCounts;
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getMistakeModuleCounts failed.', { filter, error });
+    throw error;
+  }
+}
+
+function mapTagCount(row: MistakeTagCount): MistakeTagFilterCount {
+  return {
+    name: row.name,
+    normalizedName: row.normalizedName,
+    count: row.count,
+  };
+}
+
+export async function getMistakeTagFilterCounts(
+  filter: MistakeListFilter,
+): Promise<MistakeTagFilterCount[]> {
+  try {
+    Logger.info(SERVICE_SCOPE, 'Start loading mistake tag filter counts.', {
+      segment: filter.segment,
+      keywordPreview: toKeywordPreview(filter.keyword),
+      module: filter.module ?? null,
+      tagCount: filter.tagKeys?.length ?? 0,
+    });
+    const options = buildListQueryOptions({
+      ...filter,
+      tagKeys: [],
+    });
+    const tagCounts = await MistakeRepository.countMistakeTags(options);
+    const mapped = tagCounts.map(mapTagCount);
+    Logger.info(SERVICE_SCOPE, 'Loaded mistake tag filter counts successfully.', {
+      segment: filter.segment,
+      keywordPreview: toKeywordPreview(filter.keyword),
+      module: filter.module ?? null,
+      count: mapped.length,
+    });
+    return mapped;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'getMistakeTagFilterCounts failed.', { filter, error });
     throw error;
   }
 }

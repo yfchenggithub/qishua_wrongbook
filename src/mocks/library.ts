@@ -27,7 +27,7 @@ export const libraryMock = {
     title: '错题库',
     subtitle: '只记录错题、做法、答案和 7 次复做',
   },
-  searchPlaceholder: '搜索：模块 / 错因 / 来源',
+  searchPlaceholder: '搜索：模块 / 错因 / 来源 / 标签',
   filters: [
     { label: '全部', value: 'all' },
     { label: '待复做', value: 'pending' },
@@ -83,4 +83,3 @@ export const libraryMock = {
     },
   ] satisfies LibraryMistakeMock[],
 } as const;
-

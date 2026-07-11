@@ -142,6 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_mistake_relations_target_mistake ON mistake_relat
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_source ON mistake_relations(source);
 CREATE INDEX IF NOT EXISTS idx_mistake_tags_mistake_order ON mistake_tags(mistake_id, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_tags_normalized_name ON mistake_tags(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_mistake_tags_normalized_mistake ON mistake_tags(normalized_name, mistake_id);
 `;
 
 export const CREATE_SCHEMA_SQL = `

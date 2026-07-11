@@ -1,4 +1,5 @@
 import type { MistakeStatus } from '@/src/models/Mistake';
+import type { MistakeTag } from '@/src/models/MistakeTag';
 
 export type MistakeListStatus = 'due_today' | 'upcoming' | 'mastered' | 'archived';
 
@@ -8,6 +9,7 @@ export interface MistakeListItem {
   title: string;
   subtitle: string;
   errorReason?: string | null;
+  tags: MistakeTag[];
   difficulty: number;
   thumbnailUri?: string | null;
   reviewCount: number;
@@ -24,4 +26,5 @@ export interface MistakeListFilter {
   segment: 'all' | 'due' | 'mastered';
   keyword: string;
   module?: string | null;
+  tagKeys?: string[];
 }

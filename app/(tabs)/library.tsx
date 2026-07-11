@@ -28,19 +28,29 @@ import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
-import type { MistakeModuleCount } from '@/src/services/MistakeListService';
+import type { MistakeModuleCount, MistakeTagFilterCount } from '@/src/services/MistakeListService';
+import { normalizeMistakeTagKey } from '@/src/services/MistakeTagService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const SEARCH_DEBOUNCE_MS = 350;
 const INLINE_MODULE_FILTER_OPTION_LIMIT = 3;
+const INLINE_TAG_FILTER_OPTION_LIMIT = 6;
 const PAGE_SCOPE = 'LibraryScreen';
 
 type LibraryModuleFilterValue = string | null;
+type ListLoadMode = 'initial' | 'refresh' | 'filter';
 
 interface LibraryModuleFilterOption {
   key: string;
   value: LibraryModuleFilterValue;
+  label: string;
+  count: number;
+}
+
+interface LibraryTagFilterOption {
+  key: string;
+  value: string;
   label: string;
   count: number;
 }
@@ -67,11 +77,13 @@ function buildLibraryListFilter(
   filterValue: LibraryFilterValue,
   keyword: string,
   module: LibraryModuleFilterValue,
+  tagKeys: string[] = [],
 ): MistakeListFilter {
   return {
     segment: mapSegmentValueToFilterSegment(filterValue),
     keyword,
     module,
+    tagKeys,
   };
 }
 
@@ -136,6 +148,33 @@ function formatLibraryModuleFilterHint(
 
   const countText = option ? `，共 ${option.count} 题` : '';
   return `已筛选：“${selectedModuleFilter}”模块${countText}`;
+}
+
+function buildLibraryTagFilterOptions(
+  tagCounts: MistakeTagFilterCount[],
+): LibraryTagFilterOption[] {
+  return tagCounts.reduce<LibraryTagFilterOption[]>((options, item) => {
+    const label = typeof item.name === 'string' ? item.name.trim() : '';
+    const normalizedName = typeof item.normalizedName === 'string'
+      ? item.normalizedName.trim()
+      : '';
+    const count = Number.isFinite(item.count) ? Math.max(0, Math.floor(item.count)) : 0;
+    if (!label || !normalizedName || count <= 0) {
+      return options;
+    }
+
+    options.push({
+      key: `tag:${normalizedName}`,
+      value: normalizedName,
+      label,
+      count,
+    });
+    return options;
+  }, []);
+}
+
+function formatLibraryTagFilterAccessibilityLabel(option: LibraryTagFilterOption): string {
+  return `筛选标签：${option.label}，共${option.count}道错题`;
 }
 
 function normalizeMistakeId(id: string): string | null {
@@ -260,6 +299,17 @@ function MistakeLibraryCard({
                 {item.title}
               </Text>
             </View>
+            {item.tags.length > 0 ? (
+              <View style={styles.cardTagRow}>
+                {item.tags.slice(0, 2).map((tag) => (
+                  <View key={tag.id} style={styles.cardTagPill}>
+                    <Text numberOfLines={1} style={styles.cardTagText}>
+                      {tag.name}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            ) : null}
             <View style={styles.progressRow}>
               <Text
                 numberOfLines={1}
@@ -380,18 +430,97 @@ function LibraryModuleFilterSheet({
   );
 }
 
+function LibraryTagFilterSheet({
+  visible,
+  options,
+  selectedValues,
+  onClose,
+  onToggleOption,
+}: {
+  visible: boolean;
+  options: LibraryTagFilterOption[];
+  selectedValues: string[];
+  onClose: () => void;
+  onToggleOption: (value: string) => void;
+}) {
+  const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.moduleSheetOverlay}>
+        <Pressable style={styles.moduleSheetBackdrop} onPress={onClose} />
+        <View style={styles.moduleSheet}>
+          <View style={styles.moduleSheetHandle} />
+          <View style={styles.moduleSheetHeader}>
+            <View style={styles.moduleSheetHeaderTextWrap}>
+              <Text style={styles.moduleSheetTitle}>选择标签</Text>
+              <Text style={styles.moduleSheetSubtitle}>{`共 ${options.length} 个标签`}</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭标签选择"
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.moduleSheetCloseButton,
+                pressed ? styles.moduleSheetCloseButtonPressed : null,
+              ]}>
+              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            style={styles.moduleFilterSheetScroll}
+            contentContainerStyle={styles.moduleFilterSheetContent}>
+            {options.map((option) => {
+              const selected = selectedSet.has(option.value);
+              return (
+                <Pressable
+                  key={option.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={formatLibraryTagFilterAccessibilityLabel(option)}
+                  onPress={() => onToggleOption(option.value)}
+                  style={({ pressed }) => [
+                    styles.tagFilterSheetChip,
+                    selected ? styles.tagFilterChipSelected : null,
+                    pressed ? styles.moduleFilterChipPressed : null,
+                  ]}>
+                  <Text
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.1}
+                    style={[
+                      styles.tagFilterChipText,
+                      selected ? styles.tagFilterChipTextSelected : null,
+                    ]}>
+                    {option.label}
+                  </Text>
+                  {selected ? <MaterialIcons name="check" size={16} color={colors.success} /> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function LibraryScreen() {
   const router = useRouter();
   const [searchText, setSearchText] = useState('');
   const [debouncedKeyword, setDebouncedKeyword] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<LibraryFilterValue>('all');
   const [selectedModuleFilter, setSelectedModuleFilter] = useState<LibraryModuleFilterValue>(null);
+  const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
   const [moduleFilterOptions, setModuleFilterOptions] = useState<LibraryModuleFilterOption[]>([
     { key: 'all', value: null, label: '全部', count: 0 },
   ]);
+  const [tagFilterOptions, setTagFilterOptions] = useState<LibraryTagFilterOption[]>([]);
   const [isModuleFilterLoading, setIsModuleFilterLoading] = useState(false);
+  const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   const [moduleFilterErrorMessage, setModuleFilterErrorMessage] = useState<string | null>(null);
+  const [tagFilterErrorMessage, setTagFilterErrorMessage] = useState<string | null>(null);
   const [moduleFilterSheetVisible, setModuleFilterSheetVisible] = useState(false);
+  const [tagFilterSheetVisible, setTagFilterSheetVisible] = useState(false);
   const [items, setItems] = useState<MistakeListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -402,15 +531,16 @@ export default function LibraryScreen() {
   const hasFocusedRef = useRef(false);
   const requestIdRef = useRef(0);
   const moduleFilterRequestIdRef = useRef(0);
+  const tagFilterRequestIdRef = useRef(0);
 
   const loadList = useCallback(
-    async (filter: MistakeListFilter, mode: 'initial' | 'refresh') => {
+    async (filter: MistakeListFilter, mode: ListLoadMode) => {
       const requestId = requestIdRef.current + 1;
       requestIdRef.current = requestId;
 
       if (mode === 'initial') {
         setIsLoading(true);
-      } else {
+      } else if (mode === 'refresh') {
         setIsRefreshing(true);
       }
       setErrorMessage(null);
@@ -482,6 +612,45 @@ export default function LibraryScreen() {
     }
   }, []);
 
+  const loadTagFilterOptions = useCallback(async (filter: MistakeListFilter) => {
+    const requestId = tagFilterRequestIdRef.current + 1;
+    tagFilterRequestIdRef.current = requestId;
+    setIsTagFilterLoading(true);
+    setTagFilterErrorMessage(null);
+
+    try {
+      const tagCounts = await MistakeListService.getMistakeTagFilterCounts(filter);
+      if (requestId !== tagFilterRequestIdRef.current) {
+        return;
+      }
+
+      const nextOptions = buildLibraryTagFilterOptions(tagCounts);
+      const validTagKeys = new Set(nextOptions.map((option) => option.value));
+      setTagFilterOptions(nextOptions);
+      setSelectedTagFilters((currentValues) => {
+        const nextValues = currentValues.filter((tagKey) => validTagKeys.has(tagKey));
+        if (nextValues.length === currentValues.length) {
+          return currentValues;
+        }
+        return nextValues;
+      });
+    } catch (error) {
+      if (requestId !== tagFilterRequestIdRef.current) {
+        return;
+      }
+      Logger.error(PAGE_SCOPE, 'Failed to load library tag filter options.', {
+        filter,
+        error,
+      });
+      setTagFilterErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (requestId !== tagFilterRequestIdRef.current) {
+        return;
+      }
+      setIsTagFilterLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedKeyword(searchText.trim());
@@ -491,17 +660,27 @@ export default function LibraryScreen() {
   }, [searchText]);
 
   useEffect(() => {
-    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, selectedModuleFilter);
-    const mode: 'initial' | 'refresh' = hasLoadedRef.current ? 'refresh' : 'initial';
+    const filter = buildLibraryListFilter(
+      selectedFilter,
+      debouncedKeyword,
+      selectedModuleFilter,
+      selectedTagFilters,
+    );
+    const mode: ListLoadMode = hasLoadedRef.current ? 'filter' : 'initial';
     hasLoadedRef.current = true;
 
     void loadList(filter, mode);
-  }, [debouncedKeyword, loadList, selectedFilter, selectedModuleFilter]);
+  }, [debouncedKeyword, loadList, selectedFilter, selectedModuleFilter, selectedTagFilters]);
 
   useEffect(() => {
-    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, null);
+    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, null, selectedTagFilters);
     void loadModuleFilterOptions(filter);
-  }, [debouncedKeyword, loadModuleFilterOptions, selectedFilter]);
+  }, [debouncedKeyword, loadModuleFilterOptions, selectedFilter, selectedTagFilters]);
+
+  useEffect(() => {
+    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, selectedModuleFilter, []);
+    void loadTagFilterOptions(filter);
+  }, [debouncedKeyword, loadTagFilterOptions, selectedFilter, selectedModuleFilter]);
 
   useFocusEffect(
     useCallback(() => {
@@ -510,12 +689,37 @@ export default function LibraryScreen() {
         return undefined;
       }
 
-      const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, selectedModuleFilter);
-      const moduleOptionsFilter = buildLibraryListFilter(selectedFilter, debouncedKeyword, null);
-      void loadList(filter, 'refresh');
+      const filter = buildLibraryListFilter(
+        selectedFilter,
+        debouncedKeyword,
+        selectedModuleFilter,
+        selectedTagFilters,
+      );
+      const moduleOptionsFilter = buildLibraryListFilter(
+        selectedFilter,
+        debouncedKeyword,
+        null,
+        selectedTagFilters,
+      );
+      const tagOptionsFilter = buildLibraryListFilter(
+        selectedFilter,
+        debouncedKeyword,
+        selectedModuleFilter,
+        [],
+      );
+      void loadList(filter, 'filter');
       void loadModuleFilterOptions(moduleOptionsFilter);
+      void loadTagFilterOptions(tagOptionsFilter);
       return undefined;
-    }, [debouncedKeyword, loadList, loadModuleFilterOptions, selectedFilter, selectedModuleFilter]),
+    }, [
+      debouncedKeyword,
+      loadList,
+      loadModuleFilterOptions,
+      loadTagFilterOptions,
+      selectedFilter,
+      selectedModuleFilter,
+      selectedTagFilters,
+    ]),
   );
 
   const handleClearSearch = useCallback(() => {
@@ -527,12 +731,62 @@ export default function LibraryScreen() {
     setSelectedModuleFilter(value);
   }, []);
 
+  const handleToggleTagFilter = useCallback((value: string) => {
+    const normalized = normalizeMistakeTagKey(value);
+    if (!normalized) {
+      return;
+    }
+
+    setSelectedTagFilters((currentValues) =>
+      currentValues.includes(normalized)
+        ? currentValues.filter((tagKey) => tagKey !== normalized)
+        : [...currentValues, normalized],
+    );
+  }, []);
+
+  const handleRemoveTagFilter = useCallback((value: string) => {
+    const normalized = normalizeMistakeTagKey(value);
+    setSelectedTagFilters((currentValues) => {
+      const nextValues = currentValues.filter((tagKey) => tagKey !== normalized);
+      return nextValues.length === currentValues.length ? currentValues : nextValues;
+    });
+  }, []);
+
+  const handleClearTagFilters = useCallback(() => {
+    setSelectedTagFilters((currentValues) => (currentValues.length <= 0 ? currentValues : []));
+  }, []);
+
   const handleRetry = useCallback(() => {
-    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, selectedModuleFilter);
-    const moduleOptionsFilter = buildLibraryListFilter(selectedFilter, debouncedKeyword, null);
+    const filter = buildLibraryListFilter(
+      selectedFilter,
+      debouncedKeyword,
+      selectedModuleFilter,
+      selectedTagFilters,
+    );
+    const moduleOptionsFilter = buildLibraryListFilter(
+      selectedFilter,
+      debouncedKeyword,
+      null,
+      selectedTagFilters,
+    );
+    const tagOptionsFilter = buildLibraryListFilter(
+      selectedFilter,
+      debouncedKeyword,
+      selectedModuleFilter,
+      [],
+    );
     void loadModuleFilterOptions(moduleOptionsFilter);
+    void loadTagFilterOptions(tagOptionsFilter);
     void loadList(filter, 'refresh');
-  }, [debouncedKeyword, loadList, loadModuleFilterOptions, selectedFilter, selectedModuleFilter]);
+  }, [
+    debouncedKeyword,
+    loadList,
+    loadModuleFilterOptions,
+    loadTagFilterOptions,
+    selectedFilter,
+    selectedModuleFilter,
+    selectedTagFilters,
+  ]);
 
   const handleGoAddMistake = useCallback(() => {
     router.push('/add' as never);
@@ -640,7 +894,50 @@ export default function LibraryScreen() {
     return inlineOptions;
   }, [moduleFilterOptions, selectedModuleFilter]);
 
+  const selectedTagFilterOptions = useMemo<LibraryTagFilterOption[]>(() => {
+    const optionByValue = new Map(tagFilterOptions.map((option) => [option.value, option]));
+
+    return selectedTagFilters.map((value) => {
+      const option = optionByValue.get(value);
+      if (option) {
+        return option;
+      }
+
+      return {
+        key: `tag:selected:${value}`,
+        value,
+        label: value,
+        count: 0,
+      };
+    });
+  }, [selectedTagFilters, tagFilterOptions]);
+
+  const inlineTagFilterOptions = useMemo<LibraryTagFilterOption[]>(() => {
+    if (tagFilterOptions.length <= INLINE_TAG_FILTER_OPTION_LIMIT) {
+      return tagFilterOptions;
+    }
+
+    const inlineOptions: LibraryTagFilterOption[] = [];
+    const addOption = (option: LibraryTagFilterOption | null | undefined) => {
+      if (!option || inlineOptions.some((item) => item.value === option.value)) {
+        return;
+      }
+      if (inlineOptions.length < INLINE_TAG_FILTER_OPTION_LIMIT) {
+        inlineOptions.push(option);
+      }
+    };
+
+    selectedTagFilterOptions.forEach(addOption);
+    for (const option of tagFilterOptions) {
+      addOption(option);
+    }
+
+    return inlineOptions;
+  }, [selectedTagFilterOptions, tagFilterOptions]);
+
   const shouldShowModuleFilterMore = moduleFilterOptions.length > inlineModuleFilterOptions.length;
+  const shouldShowTagFilterMore = tagFilterOptions.length > inlineTagFilterOptions.length;
+  const selectedTagFilterCount = selectedTagFilters.length;
   const selectedModuleFilterOption =
     moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
   const moduleFilterHintText = moduleFilterErrorMessage
@@ -654,6 +951,13 @@ export default function LibraryScreen() {
     if (debouncedKeyword.length > 0) {
       return {
         message: '没有找到相关错题',
+        showAddButton: false,
+      };
+    }
+
+    if (selectedTagFilterCount > 0) {
+      return {
+        message: '\u5f53\u524d\u6807\u7b7e\u4e0b\u6ca1\u6709\u9519\u9898',
         showAddButton: false,
       };
     }
@@ -683,7 +987,7 @@ export default function LibraryScreen() {
       message: '暂无错题，去新增页录入第一题',
       showAddButton: true,
     };
-  }, [debouncedKeyword.length, selectedFilter, selectedModuleFilter]);
+  }, [debouncedKeyword.length, selectedFilter, selectedModuleFilter, selectedTagFilterCount]);
 
   const listEmpty = useMemo(() => {
     if (isLoading) {
@@ -746,12 +1050,13 @@ export default function LibraryScreen() {
           <View style={styles.screenContent}>
             <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
 
-            <View style={styles.searchWrap}>
+            <View style={styles.searchPanel}>
+              <View style={styles.searchWrap}>
               <MaterialIcons size={24} name="search" color={colors.textMuted} />
               <TextInput
                 value={searchText}
                 onChangeText={setSearchText}
-                placeholder={libraryMock.searchPlaceholder}
+                  placeholder={libraryMock.searchPlaceholder}
                 placeholderTextColor={colors.textMuted}
                 style={styles.searchInput}
                 maxFontSizeMultiplier={1.2}
@@ -766,6 +1071,38 @@ export default function LibraryScreen() {
                   accessibilityLabel="清空搜索">
                   <MaterialIcons size={20} name="close" color={colors.textMuted} />
                 </Pressable>
+              ) : null}
+              </View>
+
+              {selectedTagFilterOptions.length > 0 ? (
+                <View style={styles.activeFilterRow}>
+                  {selectedTagFilterOptions.map((option) => (
+                    <Pressable
+                      key={option.key}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Remove tag filter: ${option.label}`}
+                      onPress={() => handleRemoveTagFilter(option.value)}
+                      style={({ pressed }) => [
+                        styles.activeFilterChip,
+                        pressed ? styles.moduleFilterChipPressed : null,
+                      ]}>
+                      <Text numberOfLines={1} style={styles.activeFilterChipText}>
+                        {option.label}
+                      </Text>
+                      <MaterialIcons name="close" size={14} color={colors.success} />
+                    </Pressable>
+                  ))}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear tag filters"
+                    onPress={handleClearTagFilters}
+                    style={({ pressed }) => [
+                      styles.activeFilterClearButton,
+                      pressed ? styles.moduleFilterChipPressed : null,
+                    ]}>
+                    <Text style={styles.activeFilterClearText}>{'\u6e05\u7a7a'}</Text>
+                  </Pressable>
+                </View>
               ) : null}
             </View>
 
@@ -824,6 +1161,74 @@ export default function LibraryScreen() {
               <Text numberOfLines={1} style={styles.moduleFilterHint}>
                 {moduleFilterHintText}
               </Text>
+              <View style={styles.filterDivider} />
+              <View style={styles.tagFilterHeaderRow}>
+                <View style={styles.tagFilterTitleWrap}>
+                  <MaterialIcons name="sell" size={20} color="#334155" />
+                  <Text style={styles.tagFilterTitle}>{'\u6807\u7b7e\u7b5b\u9009'}</Text>
+                </View>
+                {isTagFilterLoading ? (
+                  <ActivityIndicator size="small" color={colors.textMuted} />
+                ) : null}
+              </View>
+              {tagFilterErrorMessage ? (
+                <Text numberOfLines={2} style={styles.tagFilterErrorText}>
+                  {'\u6807\u7b7e\u7edf\u8ba1\u5931\u8d25\uff1a'}
+                  {tagFilterErrorMessage}
+                </Text>
+              ) : null}
+              {tagFilterOptions.length > 0 ? (
+                <View style={styles.tagFilterOptions}>
+                  {inlineTagFilterOptions.map((option) => {
+                    const selected = selectedTagFilters.includes(option.value);
+                    return (
+                      <Pressable
+                        key={option.key}
+                        accessibilityRole="button"
+                        accessibilityLabel={formatLibraryTagFilterAccessibilityLabel(option)}
+                        onPress={() => handleToggleTagFilter(option.value)}
+                        style={({ pressed }) => [
+                          styles.tagFilterChip,
+                          selected ? styles.tagFilterChipSelected : null,
+                          pressed ? styles.moduleFilterChipPressed : null,
+                        ]}>
+                        <Text
+                          numberOfLines={1}
+                          style={[
+                            styles.tagFilterChipText,
+                            selected ? styles.tagFilterChipTextSelected : null,
+                          ]}>
+                          {option.label}
+                        </Text>
+                        {selected ? (
+                          <MaterialIcons name="check" size={15} color={colors.success} />
+                        ) : null}
+                      </Pressable>
+                    );
+                  })}
+                  {shouldShowTagFilterMore ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Show more tags"
+                      onPress={() => setTagFilterSheetVisible(true)}
+                      style={({ pressed }) => [
+                        styles.tagFilterMoreButton,
+                        pressed ? styles.moduleFilterChipPressed : null,
+                      ]}>
+                      <MaterialIcons name="more-horiz" size={18} color="#334155" />
+                      <Text numberOfLines={1} style={styles.tagFilterMoreText}>
+                        {'\u66f4\u591a'}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : (
+                <Text style={styles.tagFilterEmptyText}>
+                  {isTagFilterLoading
+                    ? '\u6b63\u5728\u52a0\u8f7d\u6807\u7b7e...'
+                    : '\u6682\u65e0\u53ef\u7b5b\u9009\u6807\u7b7e'}
+                </Text>
+              )}
             </CardContainer>
 
             <SegmentControl
@@ -850,6 +1255,13 @@ export default function LibraryScreen() {
           handleSelectModuleFilter(value);
         }}
       />
+      <LibraryTagFilterSheet
+        visible={tagFilterSheetVisible}
+        options={tagFilterOptions}
+        selectedValues={selectedTagFilters}
+        onClose={() => setTagFilterSheetVisible(false)}
+        onToggleOption={handleToggleTagFilter}
+      />
     </ScreenContainer>
   );
 }
@@ -863,16 +1275,20 @@ const styles = StyleSheet.create({
   listContent: {
     paddingBottom: layout.bottomTabHeight,
   },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
+  searchPanel: {
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
-    minHeight: 52,
     paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: 40,
   },
   searchInput: {
     flex: 1,
@@ -887,6 +1303,45 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.surfaceMuted,
+  },
+  activeFilterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  activeFilterChip: {
+    maxWidth: '70%',
+    minHeight: 30,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  activeFilterChipText: {
+    ...typography.bodySmall,
+    color: colors.success,
+    fontWeight: '800',
+    flexShrink: 1,
+  },
+  activeFilterClearButton: {
+    minHeight: 30,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    marginLeft: 'auto',
+  },
+  activeFilterClearText: {
+    ...typography.bodySmall,
+    color: colors.success,
+    fontWeight: '800',
   },
   moduleFilterCard: {
     borderRadius: radius.xl,
@@ -968,6 +1423,90 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontWeight: '600',
   },
+  filterDivider: {
+    height: 1,
+    backgroundColor: '#EEF2F7',
+    marginVertical: spacing.xs,
+  },
+  tagFilterHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  tagFilterTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  tagFilterTitle: {
+    ...typography.body,
+    color: '#1F2937',
+    fontWeight: '800',
+  },
+  tagFilterOptions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  tagFilterChip: {
+    minHeight: 34,
+    maxWidth: '48%',
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: colors.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  tagFilterChipSelected: {
+    borderColor: colors.success,
+    backgroundColor: colors.successBg,
+  },
+  tagFilterChipText: {
+    ...typography.bodySmall,
+    color: '#334155',
+    fontWeight: '700',
+    flexShrink: 1,
+  },
+  tagFilterChipTextSelected: {
+    color: colors.success,
+    fontWeight: '800',
+  },
+  tagFilterMoreButton: {
+    minHeight: 34,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  tagFilterMoreText: {
+    ...typography.bodySmall,
+    color: '#334155',
+    fontWeight: '800',
+  },
+  tagFilterEmptyText: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '600',
+  },
+  tagFilterErrorText: {
+    ...typography.caption,
+    color: colors.danger,
+    fontWeight: '600',
+  },
   moduleFilterSheetScroll: {
     maxHeight: 420,
   },
@@ -993,6 +1532,21 @@ const styles = StyleSheet.create({
   moduleFilterSheetChipSelected: {
     borderColor: colors.success,
     backgroundColor: '#DCFCE7',
+  },
+  tagFilterSheetChip: {
+    minWidth: 118,
+    maxWidth: '48%',
+    minHeight: 40,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    backgroundColor: colors.surface,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
   },
   moduleSheetOverlay: {
     flex: 1,
@@ -1205,6 +1759,26 @@ const styles = StyleSheet.create({
   titleRow: {
     minWidth: 0,
     flexShrink: 1,
+  },
+  cardTagRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  cardTagPill: {
+    maxWidth: '48%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.successBg,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  cardTagText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '800',
+    lineHeight: 16,
   },
   difficultyPill: {
     borderRadius: radius.pill,
