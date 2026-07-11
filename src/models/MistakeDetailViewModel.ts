@@ -1,4 +1,5 @@
 import type { MistakeStatus, ReviewResult } from '@/src/models/Mistake';
+import type { MistakeRelationSummary } from '@/src/models/MistakeRelation';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
 
@@ -63,4 +64,5 @@ export interface MistakeDetailViewModel {
   updatedAt: string;
   imageSlots: DetailImageSlot[];
   reviewRecords: DetailReviewRecordItem[];
+  relatedSummary: MistakeRelationSummary;
 }

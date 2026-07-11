@@ -1161,12 +1161,19 @@ export default function MistakeDetailScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { pauseForInterruption, resumeAfterInterruption } = useMusicInterruption();
-  const { id, switchFrom } = useLocalSearchParams<{
+  const { id, switchFrom, relatedFromId, relatedFromTitle } = useLocalSearchParams<{
     id?: string | string[];
     switchFrom?: string | string[];
+    relatedFromId?: string | string[];
+    relatedFromTitle?: string | string[];
   }>();
   const routeId = useMemo(() => normalizeRouteId(id), [id]);
   const routeSwitchFrom = useMemo(() => normalizeSwitchFrom(switchFrom), [switchFrom]);
+  const routeRelatedFromId = useMemo(() => normalizeRouteId(relatedFromId), [relatedFromId]);
+  const routeRelatedFromTitle = useMemo(
+    () => normalizeRouteId(relatedFromTitle),
+    [relatedFromTitle],
+  );
 
   const [state, setState] = useState<DetailPageState>({ kind: 'loading' });
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -3045,6 +3052,38 @@ export default function MistakeDetailScreen() {
     } as never);
   }, [canStartDetailReview, router, showToast, state]);
 
+  const handleOpenRelatedMistakes = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    router.push(`/mistake-related/${state.detail.id}` as never);
+  }, [router, state]);
+
+  const handleAddRelatedMistake = useCallback(() => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    router.push(
+      {
+        pathname: '/mistake-related/add',
+        params: {
+          id: state.detail.id,
+          mode: 'system',
+        },
+      } as never,
+    );
+  }, [router, state]);
+
+  const handleOpenRelatedSourceMistake = useCallback(() => {
+    if (!routeRelatedFromId || routeRelatedFromId === routeId) {
+      return;
+    }
+
+    router.push(`/mistake/${routeRelatedFromId}` as never);
+  }, [routeId, routeRelatedFromId, router]);
+
   const browseCurrentIndex = useMemo(() => {
     if (state.kind !== 'success') {
       return -1;
@@ -3589,6 +3628,15 @@ export default function MistakeDetailScreen() {
     }
   }, [isSavingTitle, routeId, showToast, state, titleInput]);
 
+  const relatedFromHintTitle =
+    routeRelatedFromId && routeRelatedFromId !== routeId
+      ? routeRelatedFromTitle ?? '上一道相关错题'
+      : null;
+  const relatedSummary = state.kind === 'success'
+    ? state.detail.relatedSummary
+    : { total: 0, system: 0, manual: 0 };
+  const relatedEntryActionText = relatedSummary.total > 0 ? '查看全部' : '去添加';
+
   const activeReviewTextRecord =
     state.kind === 'success' && reviewTextEditorRecordId
       ? state.detail.reviewRecords.find((record) => record.id === reviewTextEditorRecordId) ?? null
@@ -3730,6 +3778,20 @@ export default function MistakeDetailScreen() {
                   </View>
                 ) : null}
               </View>
+              {relatedFromHintTitle ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`相关于：${relatedFromHintTitle}`}
+                  onPress={handleOpenRelatedSourceMistake}
+                  style={({ pressed }) => [
+                    styles.relatedFromPill,
+                    pressed ? styles.relatedFromPillPressed : null,
+                  ]}>
+                  <Text numberOfLines={1} style={styles.relatedFromText}>
+                    相关于：{relatedFromHintTitle}
+                  </Text>
+                </Pressable>
+              ) : null}
               <View style={styles.summaryInfoRow}>
                 <View style={styles.summaryDateWrap}>
                   <MaterialIcons name="calendar-month" size={18} color={colors.textMuted} />
@@ -3842,6 +3904,65 @@ export default function MistakeDetailScreen() {
                   numberOfLines={2}
                 />
               </View>
+            </CardContainer>
+
+            <CardContainer style={styles.relatedCard} padding={spacing.lg}>
+              <View style={styles.relatedHeaderRow}>
+                <View style={styles.relatedTitleWrap}>
+                  <SectionTitle title="相关错题" />
+                  <Text style={styles.relatedSubtitle}>查看相似题，举一反三</Text>
+                </View>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={relatedEntryActionText}
+                  onPress={
+                    relatedSummary.total > 0
+                      ? handleOpenRelatedMistakes
+                      : handleAddRelatedMistake
+                  }
+                  style={({ pressed }) => [
+                    styles.relatedHeaderAction,
+                    pressed ? styles.relatedHeaderActionPressed : null,
+                  ]}>
+                  <Text style={styles.relatedHeaderActionText}>{relatedEntryActionText}</Text>
+                  <MaterialIcons name="chevron-right" size={18} color={colors.success} />
+                </Pressable>
+              </View>
+
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="查看相关错题"
+                onPress={handleOpenRelatedMistakes}
+                style={({ pressed }) => [
+                  styles.relatedSummaryBox,
+                  pressed ? styles.relatedSummaryBoxPressed : null,
+                ]}>
+                <View style={styles.relatedCountRow}>
+                  <Text style={styles.relatedCountText}>共 {relatedSummary.total} 题</Text>
+                  <View style={styles.relatedChipRow}>
+                    <View style={styles.relatedChipGreen}>
+                      <Text numberOfLines={1} style={styles.relatedChipGreenText}>
+                        {state.detail.module}
+                      </Text>
+                    </View>
+                    {state.detail.errorReason ? (
+                      <View style={styles.relatedChipBlue}>
+                        <Text numberOfLines={1} style={styles.relatedChipBlueText}>
+                          {state.detail.errorReason}
+                        </Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.relatedChipOrange}>
+                      <Text numberOfLines={1} style={styles.relatedChipOrangeText}>
+                        难度 {state.detail.difficulty}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+                <Text style={styles.relatedSourceLine}>
+                  系统推荐 {relatedSummary.system} 题 · 手动添加 {relatedSummary.manual} 题
+                </Text>
+              </Pressable>
             </CardContainer>
 
             <CardContainer style={styles.imagesSectionCard} padding={spacing.lg}>
@@ -4372,6 +4493,130 @@ const styles = StyleSheet.create({
   },
   noteReadPlaceholderText: {
     color: colors.textMuted,
+  },
+  relatedFromPill: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.sm,
+    maxWidth: '100%',
+    borderRadius: radius.pill,
+    backgroundColor: colors.successBg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  relatedFromPillPressed: {
+    opacity: 0.82,
+  },
+  relatedFromText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '900',
+  },
+  relatedCard: {
+    borderRadius: radius.xl,
+    gap: spacing.md,
+  },
+  relatedHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  relatedTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  relatedSubtitle: {
+    ...typography.caption,
+    color: colors.textMuted,
+    fontWeight: '700',
+  },
+  relatedHeaderAction: {
+    minHeight: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
+    gap: 2,
+  },
+  relatedHeaderActionPressed: {
+    backgroundColor: colors.successBg,
+  },
+  relatedHeaderActionText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '900',
+  },
+  relatedSummaryBox: {
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  relatedSummaryBoxPressed: {
+    opacity: 0.86,
+  },
+  relatedCountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  relatedCountText: {
+    ...typography.body,
+    color: colors.textPrimary,
+    fontWeight: '900',
+  },
+  relatedChipRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  relatedChipGreen: {
+    maxWidth: 116,
+    borderRadius: radius.pill,
+    backgroundColor: colors.successBg,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  relatedChipGreenText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '800',
+  },
+  relatedChipBlue: {
+    maxWidth: 112,
+    borderRadius: radius.pill,
+    backgroundColor: '#EEF2FF',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  relatedChipBlueText: {
+    ...typography.caption,
+    color: '#4F46E5',
+    fontWeight: '800',
+  },
+  relatedChipOrange: {
+    borderRadius: radius.pill,
+    backgroundColor: '#FFF7ED',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  relatedChipOrangeText: {
+    ...typography.caption,
+    color: '#C2410C',
+    fontWeight: '800',
+  },
+  relatedSourceLine: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '700',
   },
   modulePickerOverlay: {
     flex: 1,

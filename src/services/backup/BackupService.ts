@@ -9,7 +9,12 @@ import { DATABASE_VERSION } from '@/src/db/constants';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { ReviewRecord, ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
-import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
+import {
+  MistakeImageRepository,
+  MistakeRelationRepository,
+  MistakeRepository,
+  ReviewRecordRepository,
+} from '@/src/repositories';
 import { ensureMistakeImageDir } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
 import {
@@ -45,6 +50,7 @@ import {
   type BackupImageArchiveFile,
   type BackupManifest,
   type BackupMistakeImageRecord,
+  type BackupMistakeRelationRecord,
   type BackupProgressEvent,
   type BackupProgressStage,
   type BackupVoiceNoteRecord,
@@ -81,7 +87,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -130,6 +136,16 @@ INSERT INTO mistake_images (
   sort_order,
   created_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_MISTAKE_RELATION_SQL = `
+INSERT INTO mistake_relations (
+  id,
+  source_mistake_id,
+  target_mistake_id,
+  source,
+  created_at
+) VALUES (?, ?, ?, ?, ?);
 `;
 
 type BackupCollectContext = {
@@ -484,6 +500,9 @@ export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
     mistakes: input.mistakes as BackupDataPayload['mistakes'],
     mistakeImages: input.mistakeImages as BackupDataPayload['mistakeImages'],
     reviewRecords: input.reviewRecords as BackupDataPayload['reviewRecords'],
+    mistakeRelations: Array.isArray(input.mistakeRelations)
+      ? input.mistakeRelations as BackupDataPayload['mistakeRelations']
+      : [],
     extra: input.extra && typeof input.extra === 'object' ? input.extra : {},
   };
 }
@@ -544,6 +563,29 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
       (image as Partial<BackupMistakeImageRecord>).review_record_id,
     );
     if (reviewRecordId && !reviewIds.has(reviewRecordId)) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+  }
+
+  for (const relation of data.mistakeRelations) {
+    const sourceMistakeId = ensureRecordId(
+      (relation as Partial<BackupMistakeRelationRecord>).source_mistake_id,
+    );
+    const targetMistakeId = ensureRecordId(
+      (relation as Partial<BackupMistakeRelationRecord>).target_mistake_id,
+    );
+    const relationSource = normalizeRequiredText(
+      (relation as Partial<BackupMistakeRelationRecord>).source,
+    );
+    if (
+      sourceMistakeId === targetMistakeId
+      || !mistakeIds.has(sourceMistakeId)
+      || !mistakeIds.has(targetMistakeId)
+      || (relationSource !== 'system' && relationSource !== 'manual')
+    ) {
       throw new BackupRestoreError(
         'CORRUPTED_BACKUP_FILE',
         getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
@@ -678,6 +720,26 @@ async function listAllReviewRecords(): Promise<ReviewRecord[]> {
 
   while (true) {
     const page = await ReviewRecordRepository.listAllReviewRecords({
+      limit: BACKUP_QUERY_PAGE_SIZE,
+      offset,
+    });
+
+    collected.push(...page);
+    if (page.length < BACKUP_QUERY_PAGE_SIZE) {
+      break;
+    }
+    offset += page.length;
+  }
+
+  return collected;
+}
+
+async function listAllMistakeRelations(): Promise<BackupMistakeRelationRecord[]> {
+  const collected: BackupMistakeRelationRecord[] = [];
+  let offset = 0;
+
+  while (true) {
+    const page = await MistakeRelationRepository.listAllRelations({
       limit: BACKUP_QUERY_PAGE_SIZE,
       offset,
     });
@@ -1665,6 +1727,7 @@ async function runRestoreDatabaseTransaction(options: {
     await withDatabaseTransaction(async (db) => {
       const dbClearStartedAt = nowMs();
       try {
+        await db.runAsync('DELETE FROM mistake_relations;');
         await db.runAsync('DELETE FROM review_records;');
         await db.runAsync('DELETE FROM mistake_images;');
         await db.runAsync('DELETE FROM mistakes;');
@@ -1779,6 +1842,28 @@ async function runRestoreDatabaseTransaction(options: {
               tableName: 'mistake_images',
               importedCount: index + 1,
               totalCount: restoredImages.length,
+              durationMs: nowMs() - importStartedAt,
+            });
+          }
+        }
+
+        for (let index = 0; index < data.mistakeRelations.length; index += 1) {
+          const relation = data.mistakeRelations[index];
+          await db.runAsync(
+            INSERT_MISTAKE_RELATION_SQL,
+            relation.id,
+            relation.source_mistake_id,
+            relation.target_mistake_id,
+            relation.source,
+            relation.created_at,
+          );
+
+          if ((index + 1) % DB_IMPORT_PROGRESS_INTERVAL === 0 || index === data.mistakeRelations.length - 1) {
+            logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_progress', {
+              restoreSessionId,
+              tableName: 'mistake_relations',
+              importedCount: index + 1,
+              totalCount: data.mistakeRelations.length,
               durationMs: nowMs() - importStartedAt,
             });
           }
@@ -1911,10 +1996,11 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
 
   try {
     emitProgress('collect_db', '正在读取错题、图片和复做记录...', 0, 0);
-    const [mistakes, mistakeImages, reviewRecords] = await Promise.all([
+    const [mistakes, mistakeImages, reviewRecords, mistakeRelations] = await Promise.all([
       listAllMistakes(),
       listAllMistakeImages(),
       listAllReviewRecords(),
+      listAllMistakeRelations(),
     ]);
 
     context.counts = {
@@ -1963,8 +2049,10 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       mistakes,
       mistakeImages: imageArtifacts.backupMistakeImages,
       reviewRecords,
+      mistakeRelations,
       extra: {
         reason,
+        mistakeRelationCount: mistakeRelations.length,
         voiceNoteCount: voiceArtifacts.backupVoiceNotes.length,
         voiceFileCount: voiceArtifacts.copiedVoiceFileCount,
       },

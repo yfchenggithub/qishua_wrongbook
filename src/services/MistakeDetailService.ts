@@ -10,7 +10,12 @@ import type {
 import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
-import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
+import {
+  MistakeImageRepository,
+  MistakeRelationRepository,
+  MistakeRepository,
+  ReviewRecordRepository,
+} from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
 import * as MistakeListService from '@/src/services/MistakeListService';
@@ -386,7 +391,11 @@ async function buildImageSlots(_mistake: Mistake, images: MistakeImage[]): Promi
   return slots;
 }
 
-function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSlot[]): MistakeDetailViewModel {
+async function mapMistakeToDetailViewModel(
+  mistake: Mistake,
+  imageSlots: DetailImageSlot[],
+): Promise<MistakeDetailViewModel> {
+  const relatedSummary = await MistakeRelationRepository.getRelationSummaryByMistakeId(mistake.id);
   return {
     id: mistake.id,
     module: mistake.module,
@@ -405,6 +414,7 @@ function mapMistakeToDetailViewModel(mistake: Mistake, imageSlots: DetailImageSl
     updatedAt: mistake.updated_at,
     imageSlots,
     reviewRecords: [],
+    relatedSummary,
   };
 }
 
@@ -440,12 +450,12 @@ async function mapReviewRecords(
   return mapped;
 }
 
-function mapMistakeToDetailViewModelWithRecords(
+async function mapMistakeToDetailViewModelWithRecords(
   mistake: Mistake,
   imageSlots: DetailImageSlot[],
   reviewRecords: DetailReviewRecordItem[],
-): MistakeDetailViewModel {
-  const base = mapMistakeToDetailViewModel(mistake, imageSlots);
+): Promise<MistakeDetailViewModel> {
+  const base = await mapMistakeToDetailViewModel(mistake, imageSlots);
   return {
     ...base,
     reviewRecords,
@@ -483,7 +493,7 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
     const imageSlots = await buildImageSlots(mistake, mistakeImages);
     const mistakeReviewRecords = await ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId);
     const reviewRecords = await mapReviewRecords(mistakeReviewRecords);
-    const detail = mapMistakeToDetailViewModelWithRecords(mistake, imageSlots, reviewRecords);
+    const detail = await mapMistakeToDetailViewModelWithRecords(mistake, imageSlots, reviewRecords);
 
     Logger.info(SERVICE_SCOPE, 'Loaded mistake detail successfully.', {
       mistakeId,
@@ -491,6 +501,7 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
       status: detail.status,
       imageSlotCount: detail.imageSlots.length,
       reviewRecordCount: detail.reviewRecords.length,
+      relatedCount: detail.relatedSummary.total,
     });
 
     return {

@@ -65,6 +65,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "mistakes": [],
   "mistakeImages": [],
   "reviewRecords": [],
+  "mistakeRelations": [],
   "extra": {}
 }
 ```
@@ -110,7 +111,15 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `note`
 - `created_at`
 
-### 5.5 extra
+### 5.5 mistakeRelations（按当前 schema 字段）
+每条记录字段：
+- `id`
+- `source_mistake_id`
+- `target_mistake_id`
+- `source`
+- `created_at`
+
+### 5.6 extra
 - 预留扩展字段，当前可为空对象 `{}`。
 
 ## 6. 图片处理规则
@@ -171,6 +180,15 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 | `review_records.result` | `reviewRecords[].result` | 直接映射 |
 | `review_records.note` | `reviewRecords[].note` | 直接映射 |
 | `review_records.created_at` | `reviewRecords[].created_at` | 直接映射 |
+
+### 8.4 mistake_relations
+| 数据库表字段 | data.json 字段 | 说明 |
+| --- | --- | --- |
+| `mistake_relations.id` | `mistakeRelations[].id` | 直接映射 |
+| `mistake_relations.source_mistake_id` | `mistakeRelations[].source_mistake_id` | 直接映射 |
+| `mistake_relations.target_mistake_id` | `mistakeRelations[].target_mistake_id` | 直接映射 |
+| `mistake_relations.source` | `mistakeRelations[].source` | 直接映射 |
+| `mistake_relations.created_at` | `mistakeRelations[].created_at` | 直接映射 |
 
 ## 9. 分阶段落地建议
 - 阶段一（本次）：文档 + 类型 + 骨架 + 依赖检查。

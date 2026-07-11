@@ -92,6 +92,20 @@ CREATE TABLE IF NOT EXISTS custom_modules (
 );
 `;
 
+export const CREATE_MISTAKE_RELATIONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS mistake_relations (
+  id TEXT PRIMARY KEY,
+  source_mistake_id TEXT NOT NULL,
+  target_mistake_id TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('system', 'manual')),
+  created_at TEXT NOT NULL,
+  CHECK (source_mistake_id <> target_mistake_id),
+  UNIQUE(source_mistake_id, target_mistake_id),
+  FOREIGN KEY(source_mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE,
+  FOREIGN KEY(target_mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+);
+`;
+
 export const CREATE_INDEXES_SQL = `
   CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
 CREATE INDEX IF NOT EXISTS idx_mistakes_next_review_at ON mistakes(next_review_at);
@@ -109,6 +123,9 @@ CREATE INDEX IF NOT EXISTS idx_review_sheets_is_submitted ON review_sheets(is_su
 CREATE INDEX IF NOT EXISTS idx_review_sheet_items_sheet_order ON review_sheet_items(sheet_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_review_sheet_items_mistake_id ON review_sheet_items(mistake_id);
 CREATE INDEX IF NOT EXISTS idx_custom_modules_sort_order ON custom_modules(sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_mistake_relations_source_mistake ON mistake_relations(source_mistake_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mistake_relations_target_mistake ON mistake_relations(target_mistake_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mistake_relations_source ON mistake_relations(source);
 `;
 
 export const CREATE_SCHEMA_SQL = `
@@ -119,5 +136,6 @@ ${CREATE_REVIEW_SHEETS_TABLE_SQL}
 ${CREATE_REVIEW_SHEET_ITEMS_TABLE_SQL}
 ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
 ${CREATE_CUSTOM_MODULES_TABLE_SQL}
+${CREATE_MISTAKE_RELATIONS_TABLE_SQL}
 ${CREATE_INDEXES_SQL}
 `;

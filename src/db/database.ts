@@ -13,6 +13,7 @@ const REQUIRED_TABLES = [
   'review_sheet_items',
   'module_question_counters',
   'custom_modules',
+  'mistake_relations',
 ] as const;
 
 type UserVersionRow = {
@@ -112,6 +113,7 @@ DROP TABLE IF EXISTS mistake_images;
 DROP TABLE IF EXISTS review_records;
 DROP TABLE IF EXISTS review_sheet_items;
 DROP TABLE IF EXISTS review_sheets;
+DROP TABLE IF EXISTS mistake_relations;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
 DROP TABLE IF EXISTS custom_modules;
@@ -273,6 +275,7 @@ DROP TABLE IF EXISTS review_records;
 DROP TABLE IF EXISTS mistake_images;
 DROP TABLE IF EXISTS review_sheet_items;
 DROP TABLE IF EXISTS review_sheets;
+DROP TABLE IF EXISTS mistake_relations;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
 DROP TABLE IF EXISTS custom_modules;
@@ -294,7 +297,7 @@ export async function checkDatabaseHealth(): Promise<DatabaseHealthReport> {
     const version = await readUserVersion(db);
 
     const tableRows = await db.getAllAsync<TableRow>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'module_question_counters', 'custom_modules')`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'module_question_counters', 'custom_modules', 'mistake_relations')`,
     );
     const tables = tableRows.map((row) => row.name);
 
