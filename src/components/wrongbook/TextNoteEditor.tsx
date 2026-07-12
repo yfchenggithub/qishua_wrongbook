@@ -577,6 +577,12 @@ export function TextNoteEditorModal({
     }
   };
 
+  const handleCancelSelection = () => {
+    readInputRef.current?.blur();
+    setHighlightSelection(null);
+    setHighlightMessage(null);
+  };
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={handleRequestClose}>
       <KeyboardAvoidingView
@@ -652,14 +658,13 @@ export function TextNoteEditorModal({
                   <TextInput
                     ref={readInputRef}
                     accessibilityLabel={`${title}内容，选中文字后可标记颜色`}
-                    caretHidden
-                    contextMenuHidden
                     editable={!effectiveBusy && value.trim().length > 0}
                     multiline
                     onChangeText={() => {}}
                     onSelectionChange={handleReadSelectionChange}
                     scrollEnabled={false}
                     selectionColor="rgba(124, 58, 237, 0.24)"
+                    selectionHandleColor="#7C3AED"
                     showSoftInputOnFocus={false}
                     style={[
                       styles.modalReadSelectionInput,
@@ -727,6 +732,16 @@ export function TextNoteEditorModal({
                     ]}>
                     <MaterialIcons name="format-color-reset" size={16} color={colors.textPrimary} />
                     <Text style={styles.selectionToolbarButtonText}>清除格式</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="取消文字选择"
+                    onPress={handleCancelSelection}
+                    style={({ pressed }) => [
+                      styles.selectionToolbarIconButton,
+                      pressed && styles.buttonPressed,
+                    ]}>
+                    <MaterialIcons name="close" size={18} color={colors.textSecondary} />
                   </Pressable>
                   {isAwaitingHighlightSave ? (
                     <ActivityIndicator size="small" color="#7C3AED" />
@@ -1079,6 +1094,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     paddingHorizontal: spacing.sm,
     paddingVertical: 4,
+  },
+  selectionToolbarIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   selectionToolbarSwatch: {
     width: 14,

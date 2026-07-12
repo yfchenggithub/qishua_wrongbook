@@ -7,10 +7,12 @@ import {
   BackHandler,
   type GestureResponderEvent,
   Image,
+  KeyboardAvoidingView,
   Linking,
   Modal,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -3939,7 +3941,7 @@ export default function MistakeDetailScreen() {
                       styles.summaryTitlePressable,
                       pressed && styles.summaryTitlePressablePressed,
                     ]}>
-                    <Text numberOfLines={1} ellipsizeMode="tail" style={styles.summaryTitle}>
+                    <Text style={styles.summaryTitle}>
                       {state.detail.title}
                     </Text>
                   </Pressable>
@@ -4421,7 +4423,9 @@ export default function MistakeDetailScreen() {
         transparent
         animationType="fade"
         onRequestClose={handleCloseTagAddModal}>
-        <View style={styles.tagModalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.tagModalOverlay}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="关闭添加标签"
@@ -4450,48 +4454,54 @@ export default function MistakeDetailScreen() {
               </Pressable>
             </View>
 
-            {tagModalMessage ? (
-              <Text maxFontSizeMultiplier={1.1} style={styles.tagModalMessage}>
-                {tagModalMessage}
-              </Text>
-            ) : null}
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              style={styles.tagModalBodyScroll}
+              contentContainerStyle={styles.tagModalBodyContent}>
+              {tagModalMessage ? (
+                <Text maxFontSizeMultiplier={1.1} style={styles.tagModalMessage}>
+                  {tagModalMessage}
+                </Text>
+              ) : null}
 
-            <View style={styles.tagInputWrap}>
-              <MaterialIcons name="label-outline" size={20} color={colors.success} />
-              <TextInput
-                value={tagDraft}
-                editable={!isSavingTag}
-                onChangeText={(value) => {
-                  setTagDraft(value);
-                  setTagModalMessage(null);
-                }}
-                placeholder="输入标签名称"
-                placeholderTextColor={colors.textMuted}
-                maxLength={MistakeTagService.MAX_MISTAKE_TAG_NAME_LENGTH}
-                returnKeyType="done"
-                onSubmitEditing={() => {
-                  void handleSaveTag();
-                }}
-                style={styles.tagInput}
-              />
-            </View>
-
-            {tagSuggestions.length > 0 ? (
-              <View style={styles.tagSuggestionSection}>
-                <Text style={styles.tagSuggestionTitle}>最近使用</Text>
-                <View style={styles.tagSuggestionRow}>
-                  {tagSuggestions.map((suggestion) => (
-                    <TagChip
-                      key={suggestion}
-                      label={suggestion}
-                      selected={false}
-                      onPress={() => handleUseTagSuggestion(suggestion)}
-                      style={styles.tagSuggestionChip}
-                    />
-                  ))}
-                </View>
+              <View style={styles.tagInputWrap}>
+                <MaterialIcons name="label-outline" size={20} color={colors.success} />
+                <TextInput
+                  value={tagDraft}
+                  editable={!isSavingTag}
+                  onChangeText={(value) => {
+                    setTagDraft(value);
+                    setTagModalMessage(null);
+                  }}
+                  placeholder="输入标签名称"
+                  placeholderTextColor={colors.textMuted}
+                  maxLength={MistakeTagService.MAX_MISTAKE_TAG_NAME_LENGTH}
+                  returnKeyType="done"
+                  onSubmitEditing={() => {
+                    void handleSaveTag();
+                  }}
+                  style={styles.tagInput}
+                />
               </View>
-            ) : null}
+
+              {tagSuggestions.length > 0 ? (
+                <View style={styles.tagSuggestionSection}>
+                  <Text style={styles.tagSuggestionTitle}>最近使用</Text>
+                  <View style={styles.tagSuggestionRow}>
+                    {tagSuggestions.map((suggestion) => (
+                      <TagChip
+                        key={suggestion}
+                        label={suggestion}
+                        selected={false}
+                        onPress={() => handleUseTagSuggestion(suggestion)}
+                        style={styles.tagSuggestionChip}
+                      />
+                    ))}
+                  </View>
+                </View>
+              ) : null}
+            </ScrollView>
 
             <View style={styles.tagModalFooter}>
               <Pressable
@@ -4530,7 +4540,7 @@ export default function MistakeDetailScreen() {
               </Pressable>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <DetailModulePickerModal
@@ -4707,6 +4717,7 @@ const styles = StyleSheet.create({
   },
   summaryTitle: {
     ...typography.titleMedium,
+    flexShrink: 1,
     fontSize: 22,
     lineHeight: 30,
     color: colors.success,
@@ -4715,6 +4726,7 @@ const styles = StyleSheet.create({
   },
   summaryTitlePressable: {
     flex: 1,
+    minWidth: 0,
     minHeight: 32,
     justifyContent: 'center',
   },
@@ -5147,6 +5159,14 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 12 },
     elevation: 8,
+  },
+  tagModalBodyScroll: {
+    flexGrow: 0,
+    flexShrink: 1,
+    minHeight: 0,
+  },
+  tagModalBodyContent: {
+    gap: spacing.md,
   },
   tagModalHandle: {
     alignSelf: 'center',
