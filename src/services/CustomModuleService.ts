@@ -4,7 +4,7 @@ import { CustomModuleRepository } from '@/src/repositories/CustomModuleRepositor
 import { Logger } from '@/src/services/Logger';
 
 const SERVICE_SCOPE = 'CustomModuleService';
-export const MAX_CUSTOM_MODULE_COUNT = 20;
+export const MAX_CUSTOM_MODULE_COUNT = 2000;
 export const MAX_CUSTOM_MODULE_NAME_LENGTH = 16;
 
 export const CUSTOM_MODULE_TEMPLATES = [
