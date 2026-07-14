@@ -147,6 +147,8 @@ type DetailReviewRecordWithImages = DetailReviewRecordItem & {
 const MANAGED_IMAGE_ORDER: ManagedDetailType[] = ['question', 'my_solution', 'answer'];
 const DETAIL_ANCHOR_ACTIVE_OFFSET = 112;
 const DETAIL_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const DETAIL_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 68;
+const DETAIL_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 148;
 const DETAIL_ANCHOR_HIGHLIGHT_DURATION_MS = 1400;
 const DETAIL_ANCHOR_LABELS: Record<DetailAnchorId, string> = {
   overview: '概览',
@@ -157,12 +159,13 @@ const DETAIL_ANCHOR_LABELS: Record<DetailAnchorId, string> = {
 const DETAIL_ANCHOR_ITEMS: readonly {
   id: DetailAnchorId;
   label: string;
+  shortLabel: string;
   icon: MaterialIconName;
 }[] = [
-  { id: 'overview', label: DETAIL_ANCHOR_LABELS.overview, icon: 'view-list' },
-  { id: 'related', label: DETAIL_ANCHOR_LABELS.related, icon: 'help-outline' },
-  { id: 'images', label: DETAIL_ANCHOR_LABELS.images, icon: 'photo-library' },
-  { id: 'reviews', label: DETAIL_ANCHOR_LABELS.reviews, icon: 'history' },
+  { id: 'overview', label: DETAIL_ANCHOR_LABELS.overview, shortLabel: '概览', icon: 'view-list' },
+  { id: 'related', label: DETAIL_ANCHOR_LABELS.related, shortLabel: '相关', icon: 'help-outline' },
+  { id: 'images', label: DETAIL_ANCHOR_LABELS.images, shortLabel: '图片', icon: 'photo-library' },
+  { id: 'reviews', label: DETAIL_ANCHOR_LABELS.reviews, shortLabel: '复做', icon: 'history' },
 ];
 const EMPTY_BROWSE_CONTEXT: MistakeDetailService.DetailBrowseContext = {
   mode: 'none',
@@ -645,18 +648,99 @@ function shouldPromptOpenSettings(message?: string): boolean {
 
 function DetailAnchorNav({
   activeAnchorId,
+  collapsed = false,
+  floating = false,
+  onToggleCollapsed,
   onAnchorPress,
 }: {
   activeAnchorId: DetailAnchorId;
+  collapsed?: boolean;
+  floating?: boolean;
+  onToggleCollapsed?: () => void;
   onAnchorPress: (anchorId: DetailAnchorId) => void;
 }) {
+  if (collapsed) {
+    return (
+      <CardContainer
+        style={[
+          styles.anchorNavCard,
+          styles.anchorNavFloatingCard,
+          styles.anchorNavCollapsedCard,
+        ]}
+        padding={spacing.xs}>
+        <View style={styles.anchorNavCollapsedRow}>
+          <View style={styles.anchorNavCollapsedList}>
+            {DETAIL_ANCHOR_ITEMS.map((item) => {
+              const active = item.id === activeAnchorId;
+              return (
+                <Pressable
+                  key={item.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`跳转到${item.label}`}
+                  onPress={() => onAnchorPress(item.id)}
+                  style={({ pressed }) => [
+                    styles.anchorNavCollapsedItem,
+                    active ? styles.anchorNavCollapsedItemActive : null,
+                    pressed ? styles.anchorNavItemPressed : null,
+                  ]}>
+                  <MaterialIcons
+                    name={item.icon}
+                    size={17}
+                    color={active ? colors.success : colors.textSecondary}
+                  />
+                  <Text
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.05}
+                    style={[
+                      styles.anchorNavCollapsedText,
+                      active ? styles.anchorNavCollapsedTextActive : null,
+                    ]}>
+                    {item.shortLabel}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {onToggleCollapsed ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="展开快速导航"
+              onPress={onToggleCollapsed}
+              style={({ pressed }) => [
+                styles.anchorNavToggleButton,
+                pressed ? styles.anchorNavItemPressed : null,
+              ]}>
+              <MaterialIcons name="keyboard-arrow-down" size={22} color={colors.success} />
+            </Pressable>
+          ) : null}
+        </View>
+      </CardContainer>
+    );
+  }
+
   return (
-    <CardContainer style={styles.anchorNavCard} padding={spacing.md}>
+    <CardContainer
+      style={[styles.anchorNavCard, floating ? styles.anchorNavFloatingCard : null]}
+      padding={spacing.md}>
       <View style={styles.anchorNavHeaderRow}>
         <View style={styles.anchorNavTitleWrap}>
           <MaterialIcons name="anchor" size={17} color={colors.success} />
           <Text style={styles.anchorNavTitle}>快速导航</Text>
         </View>
+        {onToggleCollapsed ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="收起快速导航"
+            onPress={onToggleCollapsed}
+            style={({ pressed }) => [
+              styles.anchorNavHeaderButton,
+              pressed ? styles.anchorNavItemPressed : null,
+            ]}>
+            <Text style={styles.anchorNavHeaderButtonText}>收起</Text>
+            <MaterialIcons name="keyboard-arrow-up" size={18} color={colors.success} />
+          </Pressable>
+        ) : null}
       </View>
 
       <View style={styles.anchorNavList}>
@@ -1302,10 +1386,13 @@ export default function MistakeDetailScreen() {
     useState<MistakeDetailService.DetailBrowseContext>(EMPTY_BROWSE_CONTEXT);
   const [activeAnchorId, setActiveAnchorId] = useState<DetailAnchorId>('overview');
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<DetailAnchorId | null>(null);
+  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
+  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
 
   const requestIdRef = useRef(0);
   const browseRequestIdRef = useRef(0);
   const detailScrollRef = useRef<ScrollView | null>(null);
+  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const anchorLayoutsRef = useRef<Partial<Record<DetailAnchorId, number>>>({});
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1344,9 +1431,12 @@ export default function MistakeDetailScreen() {
     touchMoveCountRef.current = 0;
     topEdgePullDistanceRef.current = 0;
     bottomEdgePullDistanceRef.current = 0;
+    anchorNavLayoutRef.current = null;
     anchorLayoutsRef.current = {};
     setActiveAnchorId('overview');
     setHighlightedAnchorId(null);
+    setIsFloatingAnchorVisible(false);
+    setIsAnchorNavCollapsed(true);
   }, [routeId]);
 
   useEffect(() => {
@@ -1452,6 +1542,14 @@ export default function MistakeDetailScreen() {
     };
   }, []);
 
+  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    anchorNavLayoutRef.current = {
+      y: Math.max(0, Math.round(y)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }, []);
+
   const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): DetailAnchorId => {
     if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
       return 'reviews';
@@ -1478,8 +1576,15 @@ export default function MistakeDetailScreen() {
         return;
       }
 
+      let scrollOffset: number = DETAIL_ANCHOR_SCROLL_OFFSET;
+      if (isFloatingAnchorVisible) {
+        scrollOffset = isAnchorNavCollapsed
+          ? DETAIL_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
+          : DETAIL_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
+      }
+
       detailScrollRef.current?.scrollTo({
-        y: Math.max(0, targetY - DETAIL_ANCHOR_SCROLL_OFFSET),
+        y: Math.max(0, targetY - scrollOffset),
         animated: true,
       });
       setActiveAnchorId(anchorId);
@@ -1495,8 +1600,12 @@ export default function MistakeDetailScreen() {
 
       showToast(`已跳转到 ${label}`, 'success', TOAST_DURATION_SHORT);
     },
-    [showToast],
+    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
   );
+
+  const handleToggleAnchorNavCollapsed = useCallback(() => {
+    setIsAnchorNavCollapsed((current) => !current);
+  }, []);
 
   const loadModuleOptionsForPicker = useCallback(async () => {
     setIsModuleOptionsLoading(true);
@@ -3710,6 +3819,15 @@ export default function MistakeDetailScreen() {
     lastScrollYRef.current = y;
     const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
     setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
+    const anchorNavLayout = anchorNavLayoutRef.current;
+    const nextFloatingAnchorVisible = anchorNavLayout
+      ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
+      : false;
+    setIsFloatingAnchorVisible((current) =>
+      current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
+    if (!nextFloatingAnchorVisible) {
+      setIsAnchorNavCollapsed((current) => (current ? current : true));
+    }
 
     if (scrollBoundaryLockRef.current === 'bottom' && y < maxScrollY - BOTTOM_RELEASE_DISTANCE) {
       scrollBoundaryLockRef.current = null;
@@ -3962,6 +4080,8 @@ export default function MistakeDetailScreen() {
     state.kind === 'success' && reviewTextEditorRecordId
       ? state.detail.reviewRecords.find((record) => record.id === reviewTextEditorRecordId) ?? null
       : null;
+  const shouldShowFloatingAnchorNav = state.kind === 'success' && isFloatingAnchorVisible;
+  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
   return (
     <View style={styles.pageRoot}>
       <Animated.View
@@ -4016,7 +4136,9 @@ export default function MistakeDetailScreen() {
 
         {state.kind === 'success' ? (
           <>
-            <DetailAnchorNav activeAnchorId={activeAnchorId} onAnchorPress={handleAnchorPress} />
+            <View onLayout={handleAnchorNavLayout}>
+              <DetailAnchorNav activeAnchorId={activeAnchorId} onAnchorPress={handleAnchorPress} />
+            </View>
 
             <View onLayout={(event) => handleAnchorLayout('overview', event)}>
             <CardContainer
@@ -4560,6 +4682,23 @@ export default function MistakeDetailScreen() {
         </ScreenContainer>
       </Animated.View>
 
+      {shouldShowFloatingAnchorNav ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.floatingAnchorWrap,
+            { top: floatingAnchorTop },
+          ]}>
+          <DetailAnchorNav
+            activeAnchorId={activeAnchorId}
+            collapsed={isAnchorNavCollapsed}
+            floating
+            onToggleCollapsed={handleToggleAnchorNavCollapsed}
+            onAnchorPress={handleAnchorPress}
+          />
+        </View>
+      ) : null}
+
       <TextNoteEditorModal
         visible={isNoteModalVisible}
         title="错题备注"
@@ -4802,6 +4941,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#FBFFFC',
     gap: spacing.md,
   },
+  anchorNavFloatingCard: {
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 9,
+  },
+  anchorNavCollapsedCard: {
+    borderRadius: radius.lg,
+    gap: 0,
+  },
+  floatingAnchorWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    zIndex: 30,
+    elevation: 30,
+  },
   anchorNavHeaderRow: {
     minHeight: 22,
     flexDirection: 'row',
@@ -4816,6 +4973,21 @@ const styles = StyleSheet.create({
   anchorNavTitle: {
     ...typography.bodySmall,
     color: colors.textPrimary,
+    fontWeight: '900',
+  },
+  anchorNavHeaderButton: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    paddingLeft: spacing.sm,
+    paddingRight: spacing.xs,
+    gap: 1,
+  },
+  anchorNavHeaderButtonText: {
+    ...typography.caption,
+    color: colors.success,
     fontWeight: '900',
   },
   anchorNavList: {
@@ -4868,6 +5040,52 @@ const styles = StyleSheet.create({
   },
   anchorNavUnderlineActive: {
     backgroundColor: colors.success,
+  },
+  anchorNavCollapsedRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  anchorNavCollapsedList: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  anchorNavCollapsedItem: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 38,
+    borderRadius: radius.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    paddingHorizontal: 2,
+  },
+  anchorNavCollapsedItemActive: {
+    backgroundColor: colors.successBg,
+  },
+  anchorNavCollapsedText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 11,
+    lineHeight: 14,
+    fontWeight: '800',
+  },
+  anchorNavCollapsedTextActive: {
+    color: colors.success,
+    fontWeight: '900',
+  },
+  anchorNavToggleButton: {
+    width: 34,
+    height: 38,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.successBg,
   },
   anchorTargetHighlighted: {
     borderColor: colors.success,
