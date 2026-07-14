@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -26,6 +26,7 @@ export interface ScreenContainerProps {
   onTouchStart?: ScrollViewProps['onTouchStart'];
   onTouchMove?: ScrollViewProps['onTouchMove'];
   onTouchEnd?: ScrollViewProps['onTouchEnd'];
+  scrollRef?: Ref<ScrollView>;
   scrollEventThrottle?: number;
 }
 
@@ -44,12 +45,14 @@ export function ScreenContainer({
   onTouchStart,
   onTouchMove,
   onTouchEnd,
+  scrollRef,
   scrollEventThrottle = 16,
 }: ScreenContainerProps) {
   return (
     <SafeAreaView edges={safeAreaEdges} style={[styles.safeArea, style]}>
       {scroll ? (
         <ScrollView
+          ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={[styles.contentBase, withPadding && styles.padded, contentStyle]}
           showsVerticalScrollIndicator={showsVerticalScrollIndicator}

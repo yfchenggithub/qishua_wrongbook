@@ -1,5 +1,5 @@
 ﻿import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -8,6 +8,7 @@ import {
   type GestureResponderEvent,
   Image,
   KeyboardAvoidingView,
+  type LayoutChangeEvent,
   Linking,
   Modal,
   type NativeScrollEvent,
@@ -122,6 +123,8 @@ type DetailImagePreviewItem = {
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
 type ReviewImageSource = 'camera' | 'album';
+type DetailAnchorId = 'overview' | 'related' | 'images' | 'reviews';
+type MaterialIconName = ComponentProps<typeof MaterialIcons>['name'];
 type DetailModulePickerOption = {
   value: string;
   label: string;
@@ -142,6 +145,25 @@ type DetailReviewRecordWithImages = DetailReviewRecordItem & {
 };
 
 const MANAGED_IMAGE_ORDER: ManagedDetailType[] = ['question', 'my_solution', 'answer'];
+const DETAIL_ANCHOR_ACTIVE_OFFSET = 112;
+const DETAIL_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const DETAIL_ANCHOR_HIGHLIGHT_DURATION_MS = 1400;
+const DETAIL_ANCHOR_LABELS: Record<DetailAnchorId, string> = {
+  overview: '概览',
+  related: '相关错题',
+  images: '图片管理',
+  reviews: '复做记录',
+};
+const DETAIL_ANCHOR_ITEMS: readonly {
+  id: DetailAnchorId;
+  label: string;
+  icon: MaterialIconName;
+}[] = [
+  { id: 'overview', label: DETAIL_ANCHOR_LABELS.overview, icon: 'view-list' },
+  { id: 'related', label: DETAIL_ANCHOR_LABELS.related, icon: 'help-outline' },
+  { id: 'images', label: DETAIL_ANCHOR_LABELS.images, icon: 'photo-library' },
+  { id: 'reviews', label: DETAIL_ANCHOR_LABELS.reviews, icon: 'history' },
+];
 const EMPTY_BROWSE_CONTEXT: MistakeDetailService.DetailBrowseContext = {
   mode: 'none',
   ids: [],
@@ -618,6 +640,58 @@ function shouldPromptOpenSettings(message?: string): boolean {
     || normalized.includes('open settings')
     || normalized.includes('去设置')
     || normalized.includes('系统设置')
+  );
+}
+
+function DetailAnchorNav({
+  activeAnchorId,
+  onAnchorPress,
+}: {
+  activeAnchorId: DetailAnchorId;
+  onAnchorPress: (anchorId: DetailAnchorId) => void;
+}) {
+  return (
+    <CardContainer style={styles.anchorNavCard} padding={spacing.md}>
+      <View style={styles.anchorNavHeaderRow}>
+        <View style={styles.anchorNavTitleWrap}>
+          <MaterialIcons name="anchor" size={17} color={colors.success} />
+          <Text style={styles.anchorNavTitle}>快速导航</Text>
+        </View>
+      </View>
+
+      <View style={styles.anchorNavList}>
+        {DETAIL_ANCHOR_ITEMS.map((item) => {
+          const active = item.id === activeAnchorId;
+          return (
+            <Pressable
+              key={item.id}
+              accessibilityRole="button"
+              accessibilityLabel={`跳转到${item.label}`}
+              onPress={() => onAnchorPress(item.id)}
+              style={({ pressed }) => [
+                styles.anchorNavItem,
+                active ? styles.anchorNavItemActive : null,
+                pressed ? styles.anchorNavItemPressed : null,
+              ]}>
+              <View style={[styles.anchorNavIconBubble, active ? styles.anchorNavIconBubbleActive : null]}>
+                <MaterialIcons
+                  name={item.icon}
+                  size={23}
+                  color={active ? colors.white : colors.success}
+                />
+              </View>
+              <Text
+                numberOfLines={1}
+                maxFontSizeMultiplier={1.1}
+                style={[styles.anchorNavItemText, active ? styles.anchorNavItemTextActive : null]}>
+                {item.label}
+              </Text>
+              <View style={[styles.anchorNavUnderline, active ? styles.anchorNavUnderlineActive : null]} />
+            </Pressable>
+          );
+        })}
+      </View>
+    </CardContainer>
   );
 }
 
@@ -1226,9 +1300,13 @@ export default function MistakeDetailScreen() {
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [browseContext, setBrowseContext] =
     useState<MistakeDetailService.DetailBrowseContext>(EMPTY_BROWSE_CONTEXT);
+  const [activeAnchorId, setActiveAnchorId] = useState<DetailAnchorId>('overview');
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<DetailAnchorId | null>(null);
 
   const requestIdRef = useRef(0);
   const browseRequestIdRef = useRef(0);
+  const detailScrollRef = useRef<ScrollView | null>(null);
+  const anchorLayoutsRef = useRef<Partial<Record<DetailAnchorId, number>>>({});
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1249,6 +1327,7 @@ export default function MistakeDetailScreen() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const allowNextLeaveRef = useRef(false);
   const switchToastKeyRef = useRef<string | null>(null);
   const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
@@ -1265,6 +1344,9 @@ export default function MistakeDetailScreen() {
     touchMoveCountRef.current = 0;
     topEdgePullDistanceRef.current = 0;
     bottomEdgePullDistanceRef.current = 0;
+    anchorLayoutsRef.current = {};
+    setActiveAnchorId('overview');
+    setHighlightedAnchorId(null);
   }, [routeId]);
 
   useEffect(() => {
@@ -1356,6 +1438,64 @@ export default function MistakeDetailScreen() {
       }, duration);
     },
     [hideToast, toastOpacity, toastTranslateY],
+  );
+
+  const handleAnchorLayout = useCallback((anchorId: DetailAnchorId, event: LayoutChangeEvent) => {
+    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
+    if (anchorLayoutsRef.current[anchorId] === nextY) {
+      return;
+    }
+
+    anchorLayoutsRef.current = {
+      ...anchorLayoutsRef.current,
+      [anchorId]: nextY,
+    };
+  }, []);
+
+  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): DetailAnchorId => {
+    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
+      return 'reviews';
+    }
+
+    const thresholdY = scrollY + DETAIL_ANCHOR_ACTIVE_OFFSET;
+    let nextAnchorId: DetailAnchorId = 'overview';
+    for (const item of DETAIL_ANCHOR_ITEMS) {
+      const anchorY = anchorLayoutsRef.current[item.id];
+      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
+        nextAnchorId = item.id;
+      }
+    }
+
+    return nextAnchorId;
+  }, []);
+
+  const handleAnchorPress = useCallback(
+    (anchorId: DetailAnchorId) => {
+      const targetY = anchorLayoutsRef.current[anchorId];
+      const label = DETAIL_ANCHOR_LABELS[anchorId];
+      if (typeof targetY !== 'number') {
+        showToast(`${label}位置准备中，请稍后再试。`, 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      detailScrollRef.current?.scrollTo({
+        y: Math.max(0, targetY - DETAIL_ANCHOR_SCROLL_OFFSET),
+        animated: true,
+      });
+      setActiveAnchorId(anchorId);
+      setHighlightedAnchorId(anchorId);
+
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+      }
+      anchorHighlightTimerRef.current = setTimeout(() => {
+        setHighlightedAnchorId(null);
+        anchorHighlightTimerRef.current = null;
+      }, DETAIL_ANCHOR_HIGHLIGHT_DURATION_MS);
+
+      showToast(`已跳转到 ${label}`, 'success', TOAST_DURATION_SHORT);
+    },
+    [showToast],
   );
 
   const loadModuleOptionsForPicker = useCallback(async () => {
@@ -2749,6 +2889,10 @@ export default function MistakeDetailScreen() {
         clearTimeout(voicePlaybackResetTimerRef.current);
         voicePlaybackResetTimerRef.current = null;
       }
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+        anchorHighlightTimerRef.current = null;
+      }
       voiceRecordingStartedAtRef.current = null;
       voiceStopInProgressRef.current = false;
       void Promise.all([
@@ -3564,6 +3708,8 @@ export default function MistakeDetailScreen() {
     const maxScrollY = Math.max(0, contentHeight - viewportHeight);
     maxScrollYRef.current = maxScrollY;
     lastScrollYRef.current = y;
+    const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
+    setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
 
     if (scrollBoundaryLockRef.current === 'bottom' && y < maxScrollY - BOTTOM_RELEASE_DISTANCE) {
       scrollBoundaryLockRef.current = null;
@@ -3571,7 +3717,7 @@ export default function MistakeDetailScreen() {
     if (scrollBoundaryLockRef.current === 'top' && y > TOP_PULL_RELEASE_DISTANCE) {
       scrollBoundaryLockRef.current = null;
     }
-  }, []);
+  }, [resolveActiveAnchorId]);
 
   const handlePressDeleteMistake = useCallback(() => {
     if (state.kind !== 'success' || isDeletingMistake) {
@@ -3828,6 +3974,7 @@ export default function MistakeDetailScreen() {
         ]}>
         <ScreenContainer
           scroll
+          scrollRef={detailScrollRef}
           contentStyle={styles.screenContent}
           onScroll={handleDetailScroll}
           onScrollBeginDrag={handleDetailScrollBeginDrag}
@@ -3869,7 +4016,15 @@ export default function MistakeDetailScreen() {
 
         {state.kind === 'success' ? (
           <>
-            <CardContainer style={styles.summaryCard} padding={spacing.xl}>
+            <DetailAnchorNav activeAnchorId={activeAnchorId} onAnchorPress={handleAnchorPress} />
+
+            <View onLayout={(event) => handleAnchorLayout('overview', event)}>
+            <CardContainer
+              style={[
+                styles.summaryCard,
+                highlightedAnchorId === 'overview' ? styles.anchorTargetHighlighted : null,
+              ]}
+              padding={spacing.xl}>
               <View style={styles.summaryHeaderRow}>
                 <Pressable
                   accessibilityRole="button"
@@ -4176,8 +4331,15 @@ export default function MistakeDetailScreen() {
                 />
               </View>
             </CardContainer>
+            </View>
 
-            <CardContainer style={styles.relatedCard} padding={spacing.lg}>
+            <View onLayout={(event) => handleAnchorLayout('related', event)}>
+            <CardContainer
+              style={[
+                styles.relatedCard,
+                highlightedAnchorId === 'related' ? styles.anchorTargetHighlighted : null,
+              ]}
+              padding={spacing.lg}>
               <View style={styles.relatedHeaderRow}>
                 <View style={styles.relatedTitleWrap}>
                   <SectionTitle title="相关错题" />
@@ -4235,8 +4397,15 @@ export default function MistakeDetailScreen() {
                 </Text>
               </Pressable>
             </CardContainer>
+            </View>
 
-            <CardContainer style={styles.imagesSectionCard} padding={spacing.lg}>
+            <View onLayout={(event) => handleAnchorLayout('images', event)}>
+            <CardContainer
+              style={[
+                styles.imagesSectionCard,
+                highlightedAnchorId === 'images' ? styles.anchorTargetHighlighted : null,
+              ]}
+              padding={spacing.lg}>
               <View style={styles.imagesHeaderRow}>
                 <SectionTitle title="图片管理" />
                 <Pressable
@@ -4305,8 +4474,15 @@ export default function MistakeDetailScreen() {
                 })}
               </View>
             </CardContainer>
+            </View>
 
-            <CardContainer style={styles.reviewRecordsCard} padding={spacing.lg}>
+            <View onLayout={(event) => handleAnchorLayout('reviews', event)}>
+            <CardContainer
+              style={[
+                styles.reviewRecordsCard,
+                highlightedAnchorId === 'reviews' ? styles.anchorTargetHighlighted : null,
+              ]}
+              padding={spacing.lg}>
               <SectionTitle title="复做记录" />
               <View style={styles.reviewRecordsNextReviewWrap}>
                 <Text style={styles.reviewRecordsNextReviewLabel}>下一次复做</Text>
@@ -4369,6 +4545,7 @@ export default function MistakeDetailScreen() {
                 </Text>
               ) : null}
             </CardContainer>
+            </View>
 
           </>
         ) : null}
@@ -4618,6 +4795,87 @@ const styles = StyleSheet.create({
   loadingText: {
     ...typography.body,
     color: colors.textSecondary,
+  },
+  anchorNavCard: {
+    borderRadius: radius.xl,
+    borderColor: colors.successBorder,
+    backgroundColor: '#FBFFFC',
+    gap: spacing.md,
+  },
+  anchorNavHeaderRow: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  anchorNavTitleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  anchorNavTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '900',
+  },
+  anchorNavList: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: spacing.sm,
+  },
+  anchorNavItem: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 72,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
+  },
+  anchorNavItemActive: {
+    backgroundColor: colors.successBg,
+  },
+  anchorNavItemPressed: {
+    opacity: 0.82,
+  },
+  anchorNavIconBubble: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.pill,
+    backgroundColor: '#EEF8F2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  anchorNavIconBubbleActive: {
+    backgroundColor: colors.success,
+  },
+  anchorNavItemText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  anchorNavItemTextActive: {
+    color: colors.success,
+    fontWeight: '900',
+  },
+  anchorNavUnderline: {
+    width: 30,
+    height: 3,
+    borderRadius: radius.pill,
+    backgroundColor: 'transparent',
+  },
+  anchorNavUnderlineActive: {
+    backgroundColor: colors.success,
+  },
+  anchorTargetHighlighted: {
+    borderColor: colors.success,
+    shadowColor: colors.success,
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
   },
   stateCard: {
     borderRadius: radius.xl,
