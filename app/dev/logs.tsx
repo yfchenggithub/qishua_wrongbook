@@ -2,7 +2,6 @@
 import { Stack, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,8 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AppToast } from '@/src/components';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import {
   clearRuntimeLogs,
   getRuntimeLogs,
@@ -34,7 +35,6 @@ const METADATA_COPY_LIMIT = 1000;
 const ISO_DATETIME_TOKEN_PATTERN =
   /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})/g;
 
-type ToastType = 'success' | 'info' | 'warning' | 'error';
 type LogLevelFilter = 'all' | RuntimeLogItem['level'];
 type LogTimeOrder = 'desc' | 'asc';
 
@@ -55,19 +55,6 @@ const LOG_COUNT_SCOPES: { key: 'all' | 'recent50'; label: string }[] = [
   { key: 'all', label: '全部日志' },
   { key: 'recent50', label: '仅看最近 50 条' },
 ];
-
-function getToastBackgroundColor(type: ToastType): string {
-  if (type === 'success') {
-    return '#138a3f';
-  }
-  if (type === 'warning') {
-    return '#b45309';
-  }
-  if (type === 'error') {
-    return '#b42318';
-  }
-  return '#222222';
-}
 
 function getLevelBadgeStyle(level: RuntimeLogItem['level']): {
   text: string;
@@ -369,17 +356,16 @@ export default function RuntimeLogsPage() {
   const [timeOrder, setTimeOrder] = useState<LogTimeOrder>('desc');
   const [countScope, setCountScope] = useState<'all' | 'recent50'>('all');
   const [keyword, setKeyword] = useState('');
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastType, setToastType] = useState<ToastType>('info');
-  const [toastVisible, setToastVisible] = useState(false);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const filterHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipFirstSearchHintRef = useRef(true);
   const skipFirstFilterHintRef = useRef(true);
   const latestCountRef = useRef<{ total: number; filtered: number }>({ total: logs.length, filtered: logs.length });
+  const { props: toastProps, showToast } = useAppToast({
+    defaultDuration: TOAST_DURATION_DEFAULT,
+    enterDuration: 160,
+    exitDuration: 140,
+  });
 
   const toastBottomOffset = Math.max(insets.bottom + spacing.lg, layout.bottomTabHeight * 0.2);
 
@@ -427,62 +413,6 @@ export default function RuntimeLogsPage() {
     latestCountRef.current = { total: logs.length, filtered: logsForRender.length };
   }, [logs.length, logsForRender.length]);
 
-  const hideToast = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }, [toastOpacity, toastTranslateY]);
-
-  const showToast = useCallback(
-    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
-      const normalized = message.trim();
-      if (!normalized) {
-        return;
-      }
-
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-
-      setToastMessage(normalized);
-      setToastType(type);
-      setToastVisible(true);
-      toastOpacity.setValue(0);
-      toastTranslateY.setValue(8);
-
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 160,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 0,
-          duration: 160,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toastTimerRef.current = setTimeout(() => {
-        hideToast();
-        toastTimerRef.current = null;
-      }, duration);
-    },
-    [hideToast, toastOpacity, toastTranslateY],
-  );
-
   const showCountHintToast = useCallback(() => {
     const { total, filtered } = latestCountRef.current;
     showToast(`当前日志条数：${total}，筛选后：${filtered}`, 'info', TOAST_DURATION_HINT);
@@ -498,10 +428,6 @@ export default function RuntimeLogsPage() {
 
   useEffect(() => {
     return () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
       if (searchHintTimerRef.current) {
         clearTimeout(searchHintTimerRef.current);
         searchHintTimerRef.current = null;
@@ -773,24 +699,10 @@ export default function RuntimeLogsPage() {
         </View>
       </ScrollView>
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: toastBottomOffset,
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}>
-          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
-              {toastMessage}
-            </Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={toastBottomOffset}
+      />
     </SafeAreaView>
   );
 }
@@ -984,26 +896,5 @@ const styles = StyleSheet.create({
   searchMatchText: {
     color: '#b42318',
     fontWeight: '700',
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    alignItems: 'center',
-    zIndex: 99,
-  },
-  toastBubble: {
-    maxWidth: '100%',
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.32)',
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '700',
-    textAlign: 'center',
   },
 });

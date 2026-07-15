@@ -22,6 +22,8 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  AppToast,
+  type AppToastType,
   BrandHeader,
   calculateImagePreviewHeight,
   CardContainer,
@@ -36,6 +38,7 @@ import {
   TextNoteEditorModal,
   TextNotePreview,
 } from '@/src/components';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import {
   BOTTOM_RELEASE_DISTANCE,
   BOTTOM_TRIGGER_DISTANCE,
@@ -81,7 +84,7 @@ const VOICE_RECORDING_MAX_DURATION_MS = 30 * 60 * 1000;
 const BUTTON_HINT_LIFT_DISTANCE = 4;
 const INLINE_MODULE_FILTER_OPTION_LIMIT = 3;
 
-type ToastType = 'success' | 'info' | 'error';
+type ToastType = AppToastType;
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
 type SessionResultKey = 'known' | 'fuzzy' | 'unknown';
 
@@ -183,16 +186,6 @@ const REVIEW_ACTIONS: {
     tone: 'known',
   },
 ];
-
-function getToastBackgroundColor(type: ToastType): string {
-  if (type === 'success') {
-    return 'rgba(24, 38, 30, 0.95)';
-  }
-  if (type === 'error') {
-    return 'rgba(88, 28, 28, 0.95)';
-  }
-  return 'rgba(38, 44, 53, 0.95)';
-}
 
 function toShortErrorMessage(input?: string): string {
   const fallback = '读取失败，请稍后重试。';
@@ -1161,9 +1154,6 @@ export default function ReviewSessionPage() {
   } | null>(null);
   const [previewImage, setPreviewImage] = useState<PreviewImageState | null>(null);
   const [activePreviewImageAction, setActivePreviewImageAction] = useState<'save' | 'share' | null>(null);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastType, setToastType] = useState<ToastType>('info');
-  const [toastVisible, setToastVisible] = useState(false);
   const [voiceNote, setVoiceNote] = useState<VoiceNoteEntity | null>(null);
   const [isVoiceRecording, setIsVoiceRecording] = useState(false);
   const [isVoiceRecordingPaused, setIsVoiceRecordingPaused] = useState(false);
@@ -1185,9 +1175,6 @@ export default function ReviewSessionPage() {
   const queueRequestIdRef = useRef(0);
   const currentRequestIdRef = useRef(0);
   const sessionScrollRef = useRef<ScrollView | null>(null);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const anchorLayoutsRef = useRef<Partial<Record<SessionAnchorId, number>>>({});
   const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1210,6 +1197,7 @@ export default function ReviewSessionPage() {
   const allowNextLeaveRef = useRef(false);
   const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
   const currentIndexRef = useRef(0);
+  const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
 
   const totalCount = queue.length;
   const allTodayItemsSubmitted =
@@ -1334,62 +1322,6 @@ export default function ReviewSessionPage() {
     setIsAnchorNavCollapsed(true);
   }, [currentQueueItemId]);
 
-  const hideToast = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }, [toastOpacity, toastTranslateY]);
-
-  const showToast = useCallback(
-    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
-      const normalizedMessage = message.trim();
-      if (!normalizedMessage) {
-        return;
-      }
-
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-
-      setToastMessage(normalizedMessage);
-      setToastType(type);
-      setToastVisible(true);
-      toastOpacity.setValue(0);
-      toastTranslateY.setValue(8);
-
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 0,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toastTimerRef.current = setTimeout(() => {
-        hideToast();
-        toastTimerRef.current = null;
-      }, duration);
-    },
-    [hideToast, toastOpacity, toastTranslateY],
-  );
-
   const resetEdgePullNavigationState = useCallback(() => {
     scrollBoundaryLockRef.current = null;
     topEdgePullDistanceRef.current = 0;
@@ -1438,7 +1370,7 @@ export default function ReviewSessionPage() {
       const targetY = anchorLayoutsRef.current[anchorId];
       const label = SESSION_ANCHOR_LABELS[anchorId];
       if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试。`, 'info', TOAST_DURATION_SHORT);
+        showToast(`${label}位置准备中，请稍后再试。`, 'anchor', TOAST_DURATION_SHORT);
         return;
       }
 
@@ -1471,7 +1403,7 @@ export default function ReviewSessionPage() {
         anchorHighlightTimerRef.current = null;
       }, SESSION_ANCHOR_HIGHLIGHT_DURATION_MS);
 
-      showToast(`已跳转到 ${label}`, 'success', TOAST_DURATION_SHORT);
+      showToast(`已跳转到 ${label}`, 'anchor', TOAST_DURATION_SHORT);
     },
     [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
   );
@@ -2754,10 +2686,6 @@ export default function ReviewSessionPage() {
 
   useEffect(
     () => () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
       if (anchorHighlightTimerRef.current) {
         clearTimeout(anchorHighlightTimerRef.current);
         anchorHighlightTimerRef.current = null;
@@ -3803,22 +3731,10 @@ export default function ReviewSessionPage() {
         </FloatingBottomCta>
       ) : null}
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: toastBottomOffset,
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}>
-          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
-            <Text style={styles.toastText}>{toastMessage}</Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={toastBottomOffset}
+      />
     </View>
   );
 }
@@ -4778,28 +4694,5 @@ const styles = StyleSheet.create({
   },
   disabledControl: {
     opacity: 0.6,
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
-    alignItems: 'center',
-  },
-  toastBubble: {
-    maxWidth: '86%',
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    shadowColor: colors.black,
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '600',
-    textAlign: 'center',
   },
 });

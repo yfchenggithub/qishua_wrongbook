@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
-  Animated,
   type LayoutChangeEvent,
   LayoutAnimation,
   type NativeScrollEvent,
@@ -18,6 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  AppToast,
   BrandHeader,
   CardContainer,
   ProgressDots,
@@ -27,6 +27,7 @@ import {
   SectionTitle,
   StatusPill,
 } from '@/src/components';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
 import { todayMock } from '@/src/mocks/today';
@@ -46,7 +47,6 @@ const TOAST_DURATION_DEFAULT = 2200;
 const TOAST_DURATION_LONG = 3200;
 const BACKUP_STALE_DAYS = 7;
 
-type ToastType = 'success' | 'info' | 'error';
 type TodayAnchorId = 'overview' | 'task' | 'queue' | 'upcoming';
 
 const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
@@ -94,16 +94,6 @@ function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success
     return 'dark';
   }
   return 'light';
-}
-
-function getToastBackgroundColor(type: ToastType): string {
-  if (type === 'success') {
-    return 'rgba(24, 38, 30, 0.95)';
-  }
-  if (type === 'error') {
-    return 'rgba(88, 28, 28, 0.95)';
-  }
-  return 'rgba(38, 44, 53, 0.95)';
 }
 
 function buildExportModeHintText(mode: PrintEnhanceMode | null): string {
@@ -389,9 +379,6 @@ export default function TodayScreen() {
   const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
   const [isBackupSafetyExpanded, setIsBackupSafetyExpanded] = useState(false);
   const [isStartingSession, setIsStartingSession] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastType, setToastType] = useState<ToastType>('info');
-  const [toastVisible, setToastVisible] = useState(false);
   const [activeAnchorId, setActiveAnchorId] = useState<TodayAnchorId>('overview');
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<TodayAnchorId | null>(null);
   const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
@@ -400,13 +387,11 @@ export default function TodayScreen() {
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const hasSuccessfulLoadRef = useRef(false);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const todayScrollRef = useRef<ScrollView | null>(null);
   const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const anchorLayoutsRef = useRef<Partial<Record<TodayAnchorId, number>>>({});
   const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -489,68 +474,8 @@ export default function TodayScreen() {
     }, [loadBackupHistory, loadExportMode, loadHomeData]),
   );
 
-  const hideToast = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }, [toastOpacity, toastTranslateY]);
-
-  const showToast = useCallback(
-    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
-      const normalizedMessage = message.trim();
-      if (!normalizedMessage) {
-        return;
-      }
-
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-
-      setToastMessage(normalizedMessage);
-      setToastType(type);
-      setToastVisible(true);
-      toastOpacity.setValue(0);
-      toastTranslateY.setValue(8);
-
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 0,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toastTimerRef.current = setTimeout(() => {
-        hideToast();
-        toastTimerRef.current = null;
-      }, duration);
-    },
-    [hideToast, toastOpacity, toastTranslateY],
-  );
-
   useEffect(
     () => () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
       if (anchorHighlightTimerRef.current) {
         clearTimeout(anchorHighlightTimerRef.current);
         anchorHighlightTimerRef.current = null;
@@ -622,7 +547,7 @@ export default function TodayScreen() {
       const targetY = anchorLayoutsRef.current[anchorId];
       const label = TODAY_ANCHOR_LABELS[anchorId];
       if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试`, 'info');
+        showToast(`${label}位置准备中，请稍后再试`, 'anchor');
         return;
       }
 
@@ -655,7 +580,7 @@ export default function TodayScreen() {
         anchorHighlightTimerRef.current = null;
       }, TODAY_ANCHOR_HIGHLIGHT_DURATION_MS);
 
-      showToast(`已跳转到 ${label}`, 'success');
+      showToast(`已跳转到 ${label}`, 'anchor');
     },
     [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
   );
@@ -1251,24 +1176,10 @@ export default function TodayScreen() {
         </View>
       ) : null}
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: toastBottomOffset,
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}>
-          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
-              {toastMessage}
-            </Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={toastBottomOffset}
+      />
     </View>
   );
 }
@@ -1731,28 +1642,5 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.success,
     fontWeight: '700',
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
-    alignItems: 'center',
-  },
-  toastBubble: {
-    maxWidth: '86%',
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    shadowColor: colors.black,
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '600',
-    textAlign: 'center',
   },
 });

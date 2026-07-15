@@ -1,9 +1,8 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import * as Clipboard from 'expo-clipboard';
 import { Stack, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
-  Animated,
   Image,
   Modal,
   Pressable,
@@ -13,7 +12,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { CardContainer, ScreenContainer } from '@/src/components';
+import { AppToast, CardContainer, ScreenContainer } from '@/src/components';
 import {
   APP_NAME,
   APP_BUILD_DATE,
@@ -22,6 +21,7 @@ import {
   OFFICIAL_ACCOUNT_SEARCH_TEXT,
   SUPPORT_EMAIL,
 } from '@/src/constants/app';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 const TOAST_DURATION_DEFAULT = 1800;
@@ -32,66 +32,11 @@ export default function AboutSupportScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [isPreviewVisible, setIsPreviewVisible] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const hideToast = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }, [toastOpacity, toastTranslateY]);
-
-  const showToast = useCallback(
-    (message: string, duration = TOAST_DURATION_DEFAULT) => {
-      const normalized = message.trim();
-      if (!normalized) {
-        return;
-      }
-
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-
-      setToastMessage(normalized);
-      setToastVisible(true);
-      toastOpacity.setValue(0);
-      toastTranslateY.setValue(8);
-
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 160,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 0,
-          duration: 160,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toastTimerRef.current = setTimeout(() => {
-        hideToast();
-        toastTimerRef.current = null;
-      }, duration);
-    },
-    [hideToast, toastOpacity, toastTranslateY],
-  );
+  const { props: toastProps, showToast } = useAppToast({
+    defaultDuration: TOAST_DURATION_DEFAULT,
+    enterDuration: 160,
+    exitDuration: 140,
+  });
 
   const copyText = useCallback(
     async (value: string, successMessage: string) => {
@@ -121,14 +66,6 @@ export default function AboutSupportScreen() {
   const handleCopyImageCombinerUrl = useCallback(() => {
     void copyText(IMAGE_COMBINER_URL, '图片合并网址已复制');
   }, [copyText]);
-
-  useEffect(() => {
-    return () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-      }
-    };
-  }, []);
 
   return (
     <>
@@ -347,26 +284,10 @@ export default function AboutSupportScreen() {
         </View>
       </Modal>
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: Math.max(
-                insets.bottom + TOAST_VERTICAL_OFFSET,
-                spacing.xl,
-              ),
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}
-        >
-          <View style={styles.toastBubble}>
-            <Text style={styles.toastText}>{toastMessage}</Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={Math.max(insets.bottom + TOAST_VERTICAL_OFFSET, spacing.xl)}
+      />
     </>
   );
 }
@@ -723,27 +644,5 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.86,
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    alignItems: 'center',
-    zIndex: 10,
-  },
-  toastBubble: {
-    maxWidth: '100%',
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(24, 27, 33, 0.94)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.2)',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '700',
-    textAlign: 'center',
   },
 });

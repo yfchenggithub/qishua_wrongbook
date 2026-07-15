@@ -6,7 +6,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   type LayoutChangeEvent,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
@@ -21,12 +20,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  AppToast,
   BrandHeader,
   CardContainer,
   QuickAnchorNav,
   type QuickAnchorNavItem,
   ScreenContainer,
 } from '@/src/components';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import { APP_BUILD_DATE, APP_NAME, DATA_MODE_LABEL } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
@@ -42,7 +43,7 @@ import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
 import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
-import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
@@ -93,8 +94,6 @@ const SETTINGS_ANCHOR_ITEMS: readonly QuickAnchorNavItem<SettingsAnchorId>[] = [
   { id: 'reminder', label: SETTINGS_ANCHOR_LABELS.reminder, shortLabel: '提醒', icon: 'notifications-active' },
   { id: 'storage', label: SETTINGS_ANCHOR_LABELS.storage, shortLabel: '存储', icon: 'storage' },
 ];
-
-type ToastType = 'success' | 'info' | 'warning' | 'error';
 
 type DevRoute = '/dev/db' | '/dev/images' | '/dev/logs';
 
@@ -268,19 +267,6 @@ const DEV_ENTRIES: DevEntry[] = [
     href: '/dev/logs',
   },
 ];
-
-function getToastBackgroundColor(type: ToastType): string {
-  if (type === 'success') {
-    return '#138a3f';
-  }
-  if (type === 'warning') {
-    return '#b45309';
-  }
-  if (type === 'error') {
-    return '#b42318';
-  }
-  return '#222222';
-}
 
 function formatClock(date: Date | null): string {
   if (!date) {
@@ -507,9 +493,6 @@ export default function SettingsScreen() {
   const [isReminderTimeBusy, setIsReminderTimeBusy] = useState(false);
   const [isReminderPermissionGranted, setIsReminderPermissionGranted] = useState(false);
   const [showReminderPermissionHint, setShowReminderPermissionHint] = useState(false);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastType, setToastType] = useState<ToastType>('info');
-  const [toastVisible, setToastVisible] = useState(false);
   const [activeAnchorId, setActiveAnchorId] = useState<SettingsAnchorId>('backup');
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<SettingsAnchorId | null>(null);
   const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
@@ -523,66 +506,12 @@ export default function SettingsScreen() {
   const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const anchorLayoutsRef = useRef<Partial<Record<SettingsAnchorId, number>>>({});
   const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { props: toastProps, showToast } = useAppToast({
+    defaultDuration: TOAST_DURATION_DEFAULT,
+    enterDuration: 160,
+    exitDuration: 140,
+  });
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
-
-  const hideToast = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 140,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }, [toastOpacity, toastTranslateY]);
-
-  const showToast = useCallback(
-    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
-      const normalized = message.trim();
-      if (!normalized) {
-        return;
-      }
-
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-
-      setToastMessage(normalized);
-      setToastType(type);
-      setToastVisible(true);
-      toastOpacity.setValue(0);
-      toastTranslateY.setValue(8);
-
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 160,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 0,
-          duration: 160,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toastTimerRef.current = setTimeout(() => {
-        hideToast();
-        toastTimerRef.current = null;
-      }, duration);
-    },
-    [hideToast, toastOpacity, toastTranslateY],
-  );
 
   const handleAnchorLayout = useCallback((anchorId: SettingsAnchorId, event: LayoutChangeEvent) => {
     const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
@@ -647,7 +576,7 @@ export default function SettingsScreen() {
       const targetY = anchorLayoutsRef.current[anchorId];
       const label = SETTINGS_ANCHOR_LABELS[anchorId];
       if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试。`, 'info');
+        showToast(`${label}位置准备中，请稍后再试。`, 'anchor');
         return;
       }
 
@@ -680,7 +609,7 @@ export default function SettingsScreen() {
         anchorHighlightTimerRef.current = null;
       }, SETTINGS_ANCHOR_HIGHLIGHT_DURATION_MS);
 
-      showToast(`已跳转到 ${label}`, 'success');
+      showToast(`已跳转到 ${label}`, 'anchor');
     },
     [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
   );
@@ -722,10 +651,6 @@ export default function SettingsScreen() {
 
   useEffect(() => {
     return () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
       if (anchorHighlightTimerRef.current) {
         clearTimeout(anchorHighlightTimerRef.current);
         anchorHighlightTimerRef.current = null;
@@ -2958,24 +2883,10 @@ export default function SettingsScreen() {
         </View>
       ) : null}
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: toastBottomOffset,
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}>
-          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
-              {toastMessage}
-            </Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={toastBottomOffset}
+      />
     </View>
   );
 }
@@ -3739,28 +3650,6 @@ const styles = StyleSheet.create({
     color: '#2A8E4A',
     fontWeight: '600',
     flex: 1,
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.lg,
-    right: spacing.lg,
-    alignItems: 'center',
-    zIndex: 99,
-  },
-  toastBubble: {
-    maxWidth: '100%',
-    borderRadius: radius.pill,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.32)',
-    ...shadows.card,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '700',
-    textAlign: 'center',
   },
   disabledButton: {
     opacity: 0.55,

@@ -2,7 +2,6 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  Animated,
   Image,
   type LayoutChangeEvent,
   Linking,
@@ -17,6 +16,8 @@ import {
 } from 'react-native';
 
 import {
+  AppToast,
+  type AppToastType,
   BrandHeader,
   CardContainer,
   CustomModuleManagerModal,
@@ -29,6 +30,7 @@ import {
   SectionTitle,
   TagChip,
 } from '@/src/components';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import {
   DIFFICULTY_OPTIONS,
   ERROR_REASON_OPTIONS,
@@ -88,7 +90,7 @@ type LastTapInfo = {
   time: number;
 };
 
-type ToastType = 'success' | 'info' | 'warning' | 'error';
+type ToastType = AppToastType;
 type SharedImageSearchParams = {
   sharedImageUri?: string | string[];
   sharedImageNonce?: string | string[];
@@ -170,20 +172,6 @@ function buildCanonicalQuestionTitle(moduleValue: string | null, questionNo: num
     ? Math.floor(questionNo)
     : 1;
   return `${getModuleLabel(moduleValue)} · 第 ${normalizedQuestionNo} 题`;
-}
-
-function getToastBackgroundColor(type: ToastType): string {
-  switch (type) {
-    case 'success':
-      return 'rgba(27, 35, 48, 0.92)';
-    case 'warning':
-      return 'rgba(82, 58, 16, 0.94)';
-    case 'error':
-      return 'rgba(88, 28, 28, 0.94)';
-    case 'info':
-    default:
-      return 'rgba(38, 44, 53, 0.92)';
-  }
 }
 
 function isCancelLikeMessage(message?: string): boolean {
@@ -596,21 +584,16 @@ export default function AddScreen() {
   const [customModuleModalVisible, setCustomModuleModalVisible] = useState(false);
   const [customModuleBusy, setCustomModuleBusy] = useState(false);
   const [customModuleMessage, setCustomModuleMessage] = useState<string | null>(null);
-  const [toastMessage, setToastMessage] = useState<string>('');
-  const [toastType, setToastType] = useState<ToastType>('info');
-  const [toastVisible, setToastVisible] = useState(false);
   const [saveBarHeight, setSaveBarHeight] = useState(0);
   const [activeAnchorId, setActiveAnchorId] = useState<AddAnchorId>('question');
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<AddAnchorId | null>(null);
   const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
   const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const addScrollRef = useRef<ScrollView | null>(null);
   const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const anchorLayoutsRef = useRef<Partial<Record<AddAnchorId, number>>>({});
   const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
   const pendingAnchorPressRef = useRef<AddAnchorId | null>(null);
   const lastHandledSharedImageKeyRef = useRef<string | null>(null);
   const lastHandledSharedErrorKeyRef = useRef<string | null>(null);
@@ -713,59 +696,6 @@ export default function AddScreen() {
 
   function handleClosePreview() {
     setPreviewPhoto(null);
-  }
-
-  function hideToast() {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }
-
-  function showToast(message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) {
-    const trimmed = message.trim();
-    if (!trimmed) {
-      return;
-    }
-
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-
-    setToastMessage(trimmed);
-    setToastType(type);
-    setToastVisible(true);
-    toastOpacity.setValue(0);
-    toastTranslateY.setValue(8);
-
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 0,
-        duration: 180,
-        useNativeDriver: true,
-      }),
-    ]).start();
-
-    toastTimerRef.current = setTimeout(() => {
-      hideToast();
-      toastTimerRef.current = null;
-    }, duration);
   }
 
   async function handleCreateCustomModule(moduleName: string): Promise<boolean> {
@@ -897,10 +827,6 @@ export default function AddScreen() {
 
   useEffect(() => {
     return () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
       if (anchorHighlightTimerRef.current) {
         clearTimeout(anchorHighlightTimerRef.current);
         anchorHighlightTimerRef.current = null;
@@ -1005,7 +931,7 @@ export default function AddScreen() {
       anchorHighlightTimerRef.current = null;
     }, ADD_ANCHOR_HIGHLIGHT_DURATION_MS);
 
-    showToast(`已跳转到 ${label}`, 'success');
+    showToast(`已跳转到 ${label}`, 'anchor');
     return true;
   }
 
@@ -1040,7 +966,7 @@ export default function AddScreen() {
         setShowOptionalInfo(true);
         return;
       }
-      showToast(`${ADD_ANCHOR_LABELS[anchorId]}位置准备中，请稍后再试`, 'info');
+      showToast(`${ADD_ANCHOR_LABELS[anchorId]}位置准备中，请稍后再试`, 'anchor');
     }
   }
 
@@ -2003,24 +1929,10 @@ export default function AddScreen() {
         />
       </FloatingBottomCta>
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: toastBottomOffset,
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}>
-          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
-              {toastMessage}
-            </Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={toastBottomOffset}
+      />
     </View>
   );
 }
@@ -2389,28 +2301,5 @@ const styles = StyleSheet.create({
   },
   disabledButton: {
     opacity: 0.5,
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
-    alignItems: 'center',
-  },
-  toastBubble: {
-    maxWidth: '86%',
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    shadowColor: colors.black,
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '600',
-    textAlign: 'center',
   },
 });

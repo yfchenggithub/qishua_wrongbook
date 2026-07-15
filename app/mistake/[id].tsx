@@ -25,6 +25,8 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  AppToast,
+  type AppToastType,
   BrandHeader,
   CardContainer,
   MistakeImageBrowser,
@@ -40,6 +42,7 @@ import {
   TextNoteEditorModal,
   TextNotePreview,
 } from '@/src/components';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import { useMistakeDetailImages } from '@/src/hooks/useMistakeDetailImages';
 import {
   DIFFICULTY_OPTIONS,
@@ -101,7 +104,7 @@ const VOICE_FILE_MISSING_MESSAGE = '语音文件不存在，可能已被删除�
 const PAGE_SWITCH_ANIMATION_DISTANCE = 34;
 const PAGE_SWITCH_ANIMATION_DURATION_MS = 180;
 
-type ToastType = 'success' | 'info' | 'error';
+type ToastType = AppToastType;
 type ScrollBoundary = 'top' | 'bottom';
 type DetailSwitchFrom = 'top' | 'bottom' | null;
 
@@ -460,16 +463,6 @@ function buildDetailImagePreviewItems(detail: MistakeDetailViewModel): DetailIma
   }
 
   return previewItems;
-}
-
-function getToastBackgroundColor(type: ToastType): string {
-  if (type === 'success') {
-    return 'rgba(24, 38, 30, 0.95)';
-  }
-  if (type === 'error') {
-    return 'rgba(88, 28, 28, 0.95)';
-  }
-  return 'rgba(38, 44, 53, 0.95)';
 }
 
 function buildSwitchToastMessage(
@@ -1207,9 +1200,6 @@ export default function MistakeDetailScreen() {
   const [imageBrowserInitialIndex, setImageBrowserInitialIndex] = useState(0);
   const [imageBrowserItems, setImageBrowserItems] = useState<DetailImagePreviewItem[]>([]);
   const [activeImageBrowserAction, setActiveImageBrowserAction] = useState<'save' | 'share' | null>(null);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastType, setToastType] = useState<ToastType>('info');
-  const [toastVisible, setToastVisible] = useState(false);
   const [isTitleEditing, setIsTitleEditing] = useState(false);
   const [titleInput, setTitleInput] = useState('');
   const [isSavingTitle, setIsSavingTitle] = useState(false);
@@ -1274,13 +1264,11 @@ export default function MistakeDetailScreen() {
   const bottomEdgePullDistanceRef = useRef(0);
   const pageEnterTranslateY = useRef(new Animated.Value(0)).current;
   const pageEnterOpacity = useRef(new Animated.Value(1)).current;
-  const toastOpacity = useRef(new Animated.Value(0)).current;
-  const toastTranslateY = useRef(new Animated.Value(8)).current;
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const allowNextLeaveRef = useRef(false);
   const switchToastKeyRef = useRef<string | null>(null);
   const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
+  const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
 
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
@@ -1337,62 +1325,6 @@ export default function MistakeDetailScreen() {
     router.replace('/(tabs)/library' as never);
   }, [router]);
 
-  const hideToast = useCallback(() => {
-    Animated.parallel([
-      Animated.timing(toastOpacity, {
-        toValue: 0,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-      Animated.timing(toastTranslateY, {
-        toValue: 8,
-        duration: 160,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setToastVisible(false);
-    });
-  }, [toastOpacity, toastTranslateY]);
-
-  const showToast = useCallback(
-    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
-      const normalizedMessage = message.trim();
-      if (!normalizedMessage) {
-        return;
-      }
-
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-
-      setToastMessage(normalizedMessage);
-      setToastType(type);
-      setToastVisible(true);
-      toastOpacity.setValue(0);
-      toastTranslateY.setValue(8);
-
-      Animated.parallel([
-        Animated.timing(toastOpacity, {
-          toValue: 1,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-        Animated.timing(toastTranslateY, {
-          toValue: 0,
-          duration: 180,
-          useNativeDriver: true,
-        }),
-      ]).start();
-
-      toastTimerRef.current = setTimeout(() => {
-        hideToast();
-        toastTimerRef.current = null;
-      }, duration);
-    },
-    [hideToast, toastOpacity, toastTranslateY],
-  );
-
   const handleAnchorLayout = useCallback((anchorId: DetailAnchorId, event: LayoutChangeEvent) => {
     const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
     if (anchorLayoutsRef.current[anchorId] === nextY) {
@@ -1435,7 +1367,7 @@ export default function MistakeDetailScreen() {
       const targetY = anchorLayoutsRef.current[anchorId];
       const label = DETAIL_ANCHOR_LABELS[anchorId];
       if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试。`, 'info', TOAST_DURATION_SHORT);
+        showToast(`${label}位置准备中，请稍后再试。`, 'anchor', TOAST_DURATION_SHORT);
         return;
       }
 
@@ -1468,7 +1400,7 @@ export default function MistakeDetailScreen() {
         anchorHighlightTimerRef.current = null;
       }, DETAIL_ANCHOR_HIGHLIGHT_DURATION_MS);
 
-      showToast(`已跳转到 ${label}`, 'success', TOAST_DURATION_SHORT);
+      showToast(`已跳转到 ${label}`, 'anchor', TOAST_DURATION_SHORT);
     },
     [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
   );
@@ -2856,10 +2788,6 @@ export default function MistakeDetailScreen() {
 
   useEffect(
     () => () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
       if (titleTapTimerRef.current) {
         clearTimeout(titleTapTimerRef.current);
         titleTapTimerRef.current = null;
@@ -4760,24 +4688,10 @@ export default function MistakeDetailScreen() {
         }}
       />
 
-      {toastVisible ? (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.toastContainer,
-            {
-              bottom: toastBottomOffset,
-              opacity: toastOpacity,
-              transform: [{ translateY: toastTranslateY }],
-            },
-          ]}>
-          <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
-              {toastMessage}
-            </Text>
-          </View>
-        </Animated.View>
-      ) : null}
+      <AppToast
+        {...toastProps}
+        bottomOffset={toastBottomOffset}
+      />
     </View>
   );
 }
@@ -6060,28 +5974,5 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontSize: 10,
     lineHeight: 12,
-  },
-  toastContainer: {
-    position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
-    alignItems: 'center',
-  },
-  toastBubble: {
-    maxWidth: '86%',
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    shadowColor: colors.black,
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 4,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '600',
-    textAlign: 'center',
   },
 });

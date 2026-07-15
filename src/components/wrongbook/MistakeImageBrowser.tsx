@@ -18,6 +18,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { AppToast } from '@/src/components/ui/AppToast';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import { colors, spacing, typography } from '@/src/styles/tokens';
 
 export type MistakeImageBrowserItem = {
@@ -603,11 +605,13 @@ export function MistakeImageBrowser({
   }, [items]);
 
   const [activeIndex, setActiveIndex] = useState(0);
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
   const switchingRef = useRef(false);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const stageHeightRef = useRef(0);
+  const {
+    props: toastProps,
+    showToast: showBrowserToast,
+    hideToast,
+  } = useAppToast({ defaultDuration: 1400, animated: false });
   const stageTranslateY = useSharedValue(0);
   const stageOpacity = useSharedValue(1);
 
@@ -634,25 +638,6 @@ export function MistakeImageBrowser({
 
   const clearSwitchingFlag = useCallback(() => {
     switchingRef.current = false;
-  }, []);
-
-  const showBrowserToast = useCallback((message: string) => {
-    const nextMessage = message.trim();
-    if (!nextMessage) {
-      return;
-    }
-
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-
-    setToastMessage(nextMessage);
-    setToastVisible(true);
-    toastTimerRef.current = setTimeout(() => {
-      setToastVisible(false);
-      toastTimerRef.current = null;
-    }, 1400);
   }, []);
 
   const animateSwitchToIndex = useCallback(
@@ -722,22 +707,8 @@ export function MistakeImageBrowser({
     switchingRef.current = false;
     stageTranslateY.value = 0;
     stageOpacity.value = 1;
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-    setToastVisible(false);
-  }, [stageOpacity, stageTranslateY, visible]);
-
-  useEffect(
-    () => () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-    },
-    [],
-  );
+    hideToast();
+  }, [hideToast, stageOpacity, stageTranslateY, visible]);
 
   const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
   const canSwipePrev = activeIndex > 0;
@@ -823,13 +794,10 @@ export function MistakeImageBrowser({
             </View>
           ) : null}
 
-          {toastVisible ? (
-            <View pointerEvents="none" style={styles.toastWrap}>
-              <View style={styles.toastBubble}>
-                <Text style={styles.toastText}>{toastMessage}</Text>
-              </View>
-            </View>
-          ) : null}
+          <AppToast
+            {...toastProps}
+            bottomOffset={spacing.xl}
+          />
         </View>
       </GestureHandlerRootView>
     </Modal>
@@ -951,27 +919,6 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 11,
     lineHeight: 14,
-    fontWeight: '600',
-  },
-  toastWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: spacing.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toastBubble: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.32)',
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: '#F3F4F6',
     fontWeight: '600',
   },
 });

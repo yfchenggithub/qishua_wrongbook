@@ -10,6 +10,8 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 
+import { AppToast } from '@/src/components/ui/AppToast';
+import { useAppToast } from '@/src/hooks/useAppToast';
 import { Logger } from '@/src/services/Logger';
 import { colors, spacing, typography } from '@/src/styles/tokens';
 
@@ -148,11 +150,13 @@ export function ImagePreviewModal({
   const [imageFailed, setImageFailed] = useState(false);
   const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
   const [containerSizeState, setContainerSizeState] = useState<Size>({ width: 0, height: 0 });
-  const [toastMessage, setToastMessage] = useState('');
-  const [toastVisible, setToastVisible] = useState(false);
   const lastTapRef = useRef(0);
   const gestureSessionRef = useRef(0);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const {
+    props: toastProps,
+    showToast: showPreviewToast,
+    hideToast,
+  } = useAppToast({ defaultDuration: 1400, animated: false });
 
   const scale = useSharedValue(MIN_SCALE);
   const pinchStartScale = useSharedValue(MIN_SCALE);
@@ -241,42 +245,8 @@ export function ImagePreviewModal({
     if (visible) {
       return;
     }
-
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-    setToastVisible(false);
-  }, [visible]);
-
-  useEffect(
-    () => () => {
-      if (toastTimerRef.current) {
-        clearTimeout(toastTimerRef.current);
-        toastTimerRef.current = null;
-      }
-    },
-    [],
-  );
-
-  const showPreviewToast = useCallback((message: string) => {
-    const nextMessage = message.trim();
-    if (!nextMessage) {
-      return;
-    }
-
-    if (toastTimerRef.current) {
-      clearTimeout(toastTimerRef.current);
-      toastTimerRef.current = null;
-    }
-
-    setToastMessage(nextMessage);
-    setToastVisible(true);
-    toastTimerRef.current = setTimeout(() => {
-      setToastVisible(false);
-      toastTimerRef.current = null;
-    }, 1400);
-  }, []);
+    hideToast();
+  }, [hideToast, visible]);
 
   const handleImageLongPress = useCallback(() => {
     if (!normalizedUri || !onImageLongPress) {
@@ -759,13 +729,10 @@ export function ImagePreviewModal({
             </Pressable>
           )}
 
-          {toastVisible ? (
-            <View pointerEvents="none" style={styles.toastWrap}>
-              <View style={styles.toastBubble}>
-                <Text style={styles.toastText}>{toastMessage}</Text>
-              </View>
-            </View>
-          ) : null}
+          <AppToast
+            {...toastProps}
+            bottomOffset={spacing.xl}
+          />
         </View>
       </GestureHandlerRootView>
     </Modal>
@@ -854,27 +821,6 @@ const styles = StyleSheet.create({
     color: '#E5E7EB',
     fontSize: 11,
     lineHeight: 14,
-    fontWeight: '600',
-  },
-  toastWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: spacing.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  toastBubble: {
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.32)',
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  toastText: {
-    ...typography.bodySmall,
-    color: '#F3F4F6',
     fontWeight: '600',
   },
 });
