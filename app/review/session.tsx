@@ -30,6 +30,8 @@ import {
   type ImagePreviewModalImageActionItem,
   type ImagePreviewModalLongPressHelpers,
   PrimaryButton,
+  QuickAnchorNav,
+  type QuickAnchorNavItem,
   ScreenContainer,
   TextNoteEditorModal,
   TextNotePreview,
@@ -129,6 +131,32 @@ const EMPTY_RESULT_STATS: SessionResultStats = {
   fuzzy: 0,
   unknown: 0,
 };
+
+type SessionAnchorId = 'filter' | 'progress' | 'question' | 'solution' | 'voice' | 'text';
+
+const SESSION_ANCHOR_ACTIVE_OFFSET = 104;
+const SESSION_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const SESSION_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
+const SESSION_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
+const SESSION_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
+
+const SESSION_ANCHOR_LABELS: Record<SessionAnchorId, string> = {
+  filter: '模块筛选',
+  progress: '当前题',
+  question: '题目图片',
+  solution: '我的做法',
+  voice: '语音讲解',
+  text: '文字讲解',
+};
+
+const SESSION_ANCHOR_ITEMS: readonly QuickAnchorNavItem<SessionAnchorId>[] = [
+  { id: 'filter', label: SESSION_ANCHOR_LABELS.filter, shortLabel: '筛选', icon: 'filter-list' },
+  { id: 'progress', label: SESSION_ANCHOR_LABELS.progress, shortLabel: '题目', icon: 'fact-check' },
+  { id: 'question', label: SESSION_ANCHOR_LABELS.question, shortLabel: '题图', icon: 'image' },
+  { id: 'solution', label: SESSION_ANCHOR_LABELS.solution, shortLabel: '做法', icon: 'edit-note' },
+  { id: 'voice', label: SESSION_ANCHOR_LABELS.voice, shortLabel: '语音', icon: 'record-voice-over' },
+  { id: 'text', label: SESSION_ANCHOR_LABELS.text, shortLabel: '文字', icon: 'article' },
+];
 
 const REVIEW_ACTIONS: {
   label: string;
@@ -1149,12 +1177,20 @@ export default function ReviewSessionPage() {
   const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
   const [isReviewSolutionImageBusy, setIsReviewSolutionImageBusy] = useState(false);
   const [actionBarHeight, setActionBarHeight] = useState(0);
+  const [activeAnchorId, setActiveAnchorId] = useState<SessionAnchorId>('filter');
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<SessionAnchorId | null>(null);
+  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
+  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
 
   const queueRequestIdRef = useRef(0);
   const currentRequestIdRef = useRef(0);
+  const sessionScrollRef = useRef<ScrollView | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
+  const anchorLayoutsRef = useRef<Partial<Record<SessionAnchorId, number>>>({});
+  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const buttonsHintAnim = useRef(new Animated.Value(0)).current;
   const isScrollDraggingRef = useRef(false);
   const lastScrollYRef = useRef(0);
@@ -1291,6 +1327,13 @@ export default function ReviewSessionPage() {
     currentIndexRef.current = currentIndex;
   }, [currentIndex]);
 
+  useEffect(() => {
+    setActiveAnchorId('filter');
+    setHighlightedAnchorId(null);
+    setIsFloatingAnchorVisible(false);
+    setIsAnchorNavCollapsed(true);
+  }, [currentQueueItemId]);
+
   const hideToast = useCallback(() => {
     Animated.parallel([
       Animated.timing(toastOpacity, {
@@ -1351,6 +1394,90 @@ export default function ReviewSessionPage() {
     scrollBoundaryLockRef.current = null;
     topEdgePullDistanceRef.current = 0;
     bottomEdgePullDistanceRef.current = 0;
+  }, []);
+
+  const handleAnchorLayout = useCallback((anchorId: SessionAnchorId, event: LayoutChangeEvent) => {
+    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
+    if (anchorLayoutsRef.current[anchorId] === nextY) {
+      return;
+    }
+
+    anchorLayoutsRef.current = {
+      ...anchorLayoutsRef.current,
+      [anchorId]: nextY,
+    };
+  }, []);
+
+  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    anchorNavLayoutRef.current = {
+      y: Math.max(0, Math.round(y)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }, []);
+
+  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): SessionAnchorId => {
+    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
+      return 'text';
+    }
+
+    const thresholdY = scrollY + SESSION_ANCHOR_ACTIVE_OFFSET;
+    let nextAnchorId: SessionAnchorId = 'filter';
+    for (const item of SESSION_ANCHOR_ITEMS) {
+      const anchorY = anchorLayoutsRef.current[item.id];
+      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
+        nextAnchorId = item.id;
+      }
+    }
+
+    return nextAnchorId;
+  }, []);
+
+  const handleAnchorPress = useCallback(
+    (anchorId: SessionAnchorId) => {
+      const targetY = anchorLayoutsRef.current[anchorId];
+      const label = SESSION_ANCHOR_LABELS[anchorId];
+      if (typeof targetY !== 'number') {
+        showToast(`${label}位置准备中，请稍后再试。`, 'info', TOAST_DURATION_SHORT);
+        return;
+      }
+
+      const anchorNavLayout = anchorNavLayoutRef.current;
+      const floatingTriggerY = anchorNavLayout
+        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
+        : Number.POSITIVE_INFINITY;
+      const willShowFloatingAnchor =
+        Math.max(0, targetY - SESSION_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
+
+      let scrollOffset: number = SESSION_ANCHOR_SCROLL_OFFSET;
+      if (isFloatingAnchorVisible || willShowFloatingAnchor) {
+        scrollOffset = isAnchorNavCollapsed
+          ? SESSION_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
+          : SESSION_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
+      }
+
+      sessionScrollRef.current?.scrollTo({
+        y: Math.max(0, targetY - scrollOffset),
+        animated: true,
+      });
+      setActiveAnchorId(anchorId);
+      setHighlightedAnchorId(anchorId);
+
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+      }
+      anchorHighlightTimerRef.current = setTimeout(() => {
+        setHighlightedAnchorId(null);
+        anchorHighlightTimerRef.current = null;
+      }, SESSION_ANCHOR_HIGHLIGHT_DURATION_MS);
+
+      showToast(`已跳转到 ${label}`, 'success', TOAST_DURATION_SHORT);
+    },
+    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
+  );
+
+  const handleToggleAnchorNavCollapsed = useCallback(() => {
+    setIsAnchorNavCollapsed((current) => !current);
   }, []);
 
   const handleTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -1440,6 +1567,18 @@ export default function ReviewSessionPage() {
       const maxOffsetY = Math.max(0, contentSize.height - layoutMeasurement.height);
       lastScrollYRef.current = y;
       maxScrollYRef.current = maxOffsetY;
+      const nextAnchorId = resolveActiveAnchorId(y, maxOffsetY);
+      setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
+
+      const anchorNavLayout = anchorNavLayoutRef.current;
+      const nextFloatingAnchorVisible = anchorNavLayout
+        ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
+        : false;
+      setIsFloatingAnchorVisible((current) =>
+        current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
+      if (!nextFloatingAnchorVisible) {
+        setIsAnchorNavCollapsed((current) => (current ? current : true));
+      }
 
       if (scrollBoundaryLockRef.current === 'top' && y > TOP_PULL_RELEASE_DISTANCE) {
         scrollBoundaryLockRef.current = null;
@@ -1451,7 +1590,7 @@ export default function ReviewSessionPage() {
         scrollBoundaryLockRef.current = null;
       }
     },
-    [],
+    [resolveActiveAnchorId],
   );
 
   const handleScrollEndDrag = useCallback(
@@ -2619,6 +2758,10 @@ export default function ReviewSessionPage() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+        anchorHighlightTimerRef.current = null;
+      }
       clearVoicePlaybackResetTimer();
       void VoiceNoteService.stopPlaying();
       void VoiceNoteService.stopAndDiscardRecording();
@@ -3096,6 +3239,9 @@ export default function ReviewSessionPage() {
     ? '已暂停，想好后点继续，当前录音不会丢'
     : '说出关键条件、解题思路和容易错的地方';
   const voiceRecordingToggleText = isVoiceBusy ? '处理中...' : isVoiceRecordingPaused ? '继续' : '暂停';
+  const shouldShowSessionAnchorNav = sessionState === 'ready' && !isCompleted;
+  const shouldShowFloatingAnchorNav = shouldShowSessionAnchorNav && isFloatingAnchorVisible;
+  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
 
   return (
     <View style={styles.pageRoot}>
@@ -3103,6 +3249,7 @@ export default function ReviewSessionPage() {
       <View pointerEvents="none" style={styles.pageGlowBottom} />
       <ScreenContainer
         scroll
+        scrollRef={sessionScrollRef}
         style={styles.screenSafeArea}
         contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
         onScroll={handleScroll}
@@ -3125,6 +3272,17 @@ export default function ReviewSessionPage() {
           />
           <MusicEntryButton onPress={() => setMusicSheetVisible(true)} />
         </View>
+
+        {shouldShowSessionAnchorNav ? (
+          <View onLayout={handleAnchorNavLayout}>
+            <QuickAnchorNav
+              items={SESSION_ANCHOR_ITEMS}
+              activeAnchorId={activeAnchorId}
+              horizontalCompact
+              onAnchorPress={handleAnchorPress}
+            />
+          </View>
+        ) : null}
 
         {sessionState === 'loading' ? (
           <CardContainer style={styles.stateCard} padding={spacing.lg}>
@@ -3181,101 +3339,115 @@ export default function ReviewSessionPage() {
 
         {sessionState === 'ready' && !isCompleted ? (
           <>
-            <CardContainer style={styles.moduleFilterCard} padding={spacing.md}>
-              <View style={styles.moduleFilterHeaderRow}>
-                <MaterialIcons name="filter-list" size={20} color="#334155" />
-                <Text style={styles.moduleFilterTitle}>模块筛选</Text>
-              </View>
-              <View style={styles.moduleFilterOptions}>
-                {inlineModuleFilterOptions.map((option) => {
-                  const selected = selectedModuleFilter === option.value;
-                  return (
+            <View onLayout={(event) => handleAnchorLayout('filter', event)}>
+              <CardContainer
+                style={[
+                  styles.moduleFilterCard,
+                  highlightedAnchorId === 'filter' ? styles.anchorTargetHighlighted : null,
+                ]}
+                padding={spacing.md}>
+                <View style={styles.moduleFilterHeaderRow}>
+                  <MaterialIcons name="filter-list" size={20} color="#334155" />
+                  <Text style={styles.moduleFilterTitle}>模块筛选</Text>
+                </View>
+                <View style={styles.moduleFilterOptions}>
+                  {inlineModuleFilterOptions.map((option) => {
+                    const selected = selectedModuleFilter === option.value;
+                    return (
+                      <Pressable
+                        key={option.key}
+                        accessibilityRole="button"
+                        accessibilityLabel={formatModuleFilterAccessibilityLabel(option)}
+                        onPress={() => handleSelectModuleFilter(option.value)}
+                        style={({ pressed }) => [
+                          styles.moduleFilterChip,
+                          selected ? styles.moduleFilterChipSelected : null,
+                          pressed ? styles.moduleFilterChipPressed : null,
+                        ]}>
+                        <Text
+                          numberOfLines={1}
+                          maxFontSizeMultiplier={1.1}
+                          style={[
+                            styles.moduleFilterChipText,
+                            selected ? styles.moduleFilterChipTextSelected : null,
+                          ]}>
+                          {formatModuleFilterOptionText(option)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                  {shouldShowModuleFilterMore ? (
                     <Pressable
-                      key={option.key}
                       accessibilityRole="button"
-                      accessibilityLabel={formatModuleFilterAccessibilityLabel(option)}
-                      onPress={() => handleSelectModuleFilter(option.value)}
+                      accessibilityLabel="查看更多模块"
+                      onPress={() => setModuleFilterSheetVisible(true)}
                       style={({ pressed }) => [
-                        styles.moduleFilterChip,
-                        selected ? styles.moduleFilterChipSelected : null,
+                        styles.moduleFilterMoreButton,
                         pressed ? styles.moduleFilterChipPressed : null,
                       ]}>
-                      <Text
-                        numberOfLines={1}
-                        maxFontSizeMultiplier={1.1}
-                        style={[
-                          styles.moduleFilterChipText,
-                          selected ? styles.moduleFilterChipTextSelected : null,
-                        ]}>
-                        {formatModuleFilterOptionText(option)}
-                      </Text>
+                      <MaterialIcons name="more-horiz" size={18} color="#334155" />
+                      <Text numberOfLines={1} style={styles.moduleFilterMoreText}>更多</Text>
                     </Pressable>
-                  );
-                })}
-                {shouldShowModuleFilterMore ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="查看更多模块"
-                    onPress={() => setModuleFilterSheetVisible(true)}
-                    style={({ pressed }) => [
-                      styles.moduleFilterMoreButton,
-                      pressed ? styles.moduleFilterChipPressed : null,
-                    ]}>
-                    <MaterialIcons name="more-horiz" size={18} color="#334155" />
-                    <Text numberOfLines={1} style={styles.moduleFilterMoreText}>更多</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-              <Text style={styles.moduleFilterHint}>{moduleFilterHintText}</Text>
-            </CardContainer>
+                  ) : null}
+                </View>
+                <Text style={styles.moduleFilterHint}>{moduleFilterHintText}</Text>
+              </CardContainer>
+            </View>
 
 
             {canShowCurrentReviewContent ? (
-            <CardContainer style={styles.progressCard} padding={spacing.lg}>
-              <View style={styles.progressMainRow}>
-                <View style={styles.progressNumberRow}>
-                  <Text style={styles.progressNumberCurrent}>{progressCurrent}</Text>
-                  <Text style={styles.progressNumberSlash}> / </Text>
-                  <Text style={styles.progressNumberTotal}>{progressTotal}</Text>
-                </View>
-                <View style={styles.progressActionRow}>
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="打开今日题单"
-                    onPress={() => setQuestionListVisible(true)}
-                    style={({ pressed }) => [
-                      styles.questionListEntryButton,
-                      pressed ? styles.questionListEntryButtonPressed : null,
-                    ]}>
-                    <MaterialIcons name="format-list-bulleted" size={16} color="#334155" />
-                    <Text style={styles.questionListEntryText}>题单</Text>
-                  </Pressable>
-                  <View style={styles.reviewPill}>
-                    <Text style={styles.reviewPillText}>{`第 ${reviewRound} 刷`}</Text>
+              <View onLayout={(event) => handleAnchorLayout('progress', event)}>
+                <CardContainer
+                  style={[
+                    styles.progressCard,
+                    highlightedAnchorId === 'progress' ? styles.anchorTargetHighlighted : null,
+                  ]}
+                  padding={spacing.lg}>
+                  <View style={styles.progressMainRow}>
+                    <View style={styles.progressNumberRow}>
+                      <Text style={styles.progressNumberCurrent}>{progressCurrent}</Text>
+                      <Text style={styles.progressNumberSlash}> / </Text>
+                      <Text style={styles.progressNumberTotal}>{progressTotal}</Text>
+                    </View>
+                    <View style={styles.progressActionRow}>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="打开今日题单"
+                        onPress={() => setQuestionListVisible(true)}
+                        style={({ pressed }) => [
+                          styles.questionListEntryButton,
+                          pressed ? styles.questionListEntryButtonPressed : null,
+                        ]}>
+                        <MaterialIcons name="format-list-bulleted" size={16} color="#334155" />
+                        <Text style={styles.questionListEntryText}>题单</Text>
+                      </Pressable>
+                      <View style={styles.reviewPill}>
+                        <Text style={styles.reviewPillText}>{`第 ${reviewRound} 刷`}</Text>
+                      </View>
+                    </View>
                   </View>
-                </View>
+                  <View style={styles.progressDivider} />
+                  <Text style={styles.progressTitle} numberOfLines={2}>
+                    {currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...'}
+                  </Text>
+                  <View style={styles.progressMetaRow}>
+                    <Text style={styles.progressModule} numberOfLines={1}>
+                      {currentMeta?.module ?? currentQueueItem?.module ?? ''}
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="进入当前错题详情页"
+                      onPress={handleOpenCurrentDetail}
+                      style={({ pressed }) => [
+                        styles.detailEntryButton,
+                        pressed ? styles.detailEntryButtonPressed : null,
+                      ]}>
+                      <Text style={styles.detailEntryText} numberOfLines={1}>进入详情页</Text>
+                      <MaterialIcons name="chevron-right" size={18} color="#64748B" />
+                    </Pressable>
+                  </View>
+                </CardContainer>
               </View>
-              <View style={styles.progressDivider} />
-              <Text style={styles.progressTitle} numberOfLines={2}>
-                {currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...'}
-              </Text>
-              <View style={styles.progressMetaRow}>
-                <Text style={styles.progressModule} numberOfLines={1}>
-                  {currentMeta?.module ?? currentQueueItem?.module ?? ''}
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="进入当前错题详情页"
-                  onPress={handleOpenCurrentDetail}
-                  style={({ pressed }) => [
-                    styles.detailEntryButton,
-                    pressed ? styles.detailEntryButtonPressed : null,
-                  ]}>
-                  <Text style={styles.detailEntryText} numberOfLines={1}>进入详情页</Text>
-                  <MaterialIcons name="chevron-right" size={18} color="#64748B" />
-                </Pressable>
-              </View>
-            </CardContainer>
             ) : null}
 
 
@@ -3310,29 +3482,43 @@ export default function ReviewSessionPage() {
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
-              <QuestionImageCard slot={currentQuestionSlot} onPreview={handleOpenQuestionPreview} />
+              <View
+                style={highlightedAnchorId === 'question' ? styles.anchorSectionHighlighted : null}
+                onLayout={(event) => handleAnchorLayout('question', event)}>
+                <QuestionImageCard slot={currentQuestionSlot} onPreview={handleOpenQuestionPreview} />
+              </View>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
-              <ReviewSolutionImageCard
-                image={reviewSolutionImage}
-                isBusy={isReviewSolutionImageBusy || isSubmitting || isVoiceRecording || isVoiceBusy}
-                onTakePhoto={() => {
-                  void saveReviewSolutionImage('camera');
-                }}
-                onPickImage={() => {
-                  void saveReviewSolutionImage('album');
-                }}
-                onEdit={handleEditReviewSolutionImage}
-                onDelete={() => {
-                  void deleteReviewSolutionImage();
-                }}
-                onPreview={handleOpenReviewSolutionPreview}
-              />
+              <View
+                style={highlightedAnchorId === 'solution' ? styles.anchorSectionHighlighted : null}
+                onLayout={(event) => handleAnchorLayout('solution', event)}>
+                <ReviewSolutionImageCard
+                  image={reviewSolutionImage}
+                  isBusy={isReviewSolutionImageBusy || isSubmitting || isVoiceRecording || isVoiceBusy}
+                  onTakePhoto={() => {
+                    void saveReviewSolutionImage('camera');
+                  }}
+                  onPickImage={() => {
+                    void saveReviewSolutionImage('album');
+                  }}
+                  onEdit={handleEditReviewSolutionImage}
+                  onDelete={() => {
+                    void deleteReviewSolutionImage();
+                  }}
+                  onPreview={handleOpenReviewSolutionPreview}
+                />
+              </View>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
-              <CardContainer style={styles.voiceCard} padding={spacing.lg}>
+              <View onLayout={(event) => handleAnchorLayout('voice', event)}>
+              <CardContainer
+                style={[
+                  styles.voiceCard,
+                  highlightedAnchorId === 'voice' ? styles.anchorTargetHighlighted : null,
+                ]}
+                padding={spacing.lg}>
                 <View style={styles.voiceHeaderRow}>
                   <View style={styles.voiceIconWrap}>
                     <MaterialIcons name={voiceIconName} size={19} color="#0F766E" />
@@ -3445,10 +3631,17 @@ export default function ReviewSessionPage() {
                   </>
                 ) : null}
               </CardContainer>
+              </View>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
-              <CardContainer style={styles.reviewTextCard} padding={spacing.lg}>
+              <View onLayout={(event) => handleAnchorLayout('text', event)}>
+              <CardContainer
+                style={[
+                  styles.reviewTextCard,
+                  highlightedAnchorId === 'text' ? styles.anchorTargetHighlighted : null,
+                ]}
+                padding={spacing.lg}>
                 <View style={styles.reviewTextHeaderRow}>
                   <View style={styles.reviewTextIconWrap}>
                     <MaterialIcons name="edit-note" size={21} color="#7C3AED" />
@@ -3473,6 +3666,7 @@ export default function ReviewSessionPage() {
                   textStyle={styles.reviewTextPreviewText}
                 />
               </CardContainer>
+              </View>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
@@ -3482,6 +3676,25 @@ export default function ReviewSessionPage() {
           </>
         ) : null}
       </ScreenContainer>
+
+      {shouldShowFloatingAnchorNav ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.floatingAnchorWrap,
+            { top: floatingAnchorTop },
+          ]}>
+          <QuickAnchorNav
+            items={SESSION_ANCHOR_ITEMS}
+            activeAnchorId={activeAnchorId}
+            collapsed={isAnchorNavCollapsed}
+            floating
+            horizontalCompact
+            onToggleCollapsed={handleToggleAnchorNavCollapsed}
+            onAnchorPress={handleAnchorPress}
+          />
+        </View>
+      ) : null}
 
       <TodayQuestionListSheet
         visible={questionListVisible}
@@ -3640,6 +3853,30 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     gap: spacing.md,
     backgroundColor: 'transparent',
+  },
+  floatingAnchorWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    zIndex: 30,
+    elevation: 30,
+  },
+  anchorTargetHighlighted: {
+    borderColor: colors.success,
+    shadowColor: colors.success,
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  anchorSectionHighlighted: {
+    marginHorizontal: -spacing.sm,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.success,
+    backgroundColor: '#FBFFFC',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
   },
   headerRow: {
     flexDirection: 'row',

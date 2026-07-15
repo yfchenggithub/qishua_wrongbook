@@ -1,6 +1,20 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Animated, Image, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  Alert,
+  Animated,
+  Image,
+  type LayoutChangeEvent,
+  Linking,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import {
   BrandHeader,
@@ -9,6 +23,8 @@ import {
   FloatingBottomCta,
   ImagePreviewModal,
   PrimaryButton,
+  QuickAnchorNav,
+  type QuickAnchorNavItem,
   ScreenContainer,
   SectionTitle,
   TagChip,
@@ -78,6 +94,29 @@ type SharedImageSearchParams = {
   sharedImageNonce?: string | string[];
   sharedImageError?: string | string[];
 };
+type AddAnchorId = 'question' | 'module' | 'mySolution' | 'answer' | 'errorReason' | 'supplement';
+
+const ADD_ANCHOR_ACTIVE_OFFSET = 104;
+const ADD_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const ADD_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
+const ADD_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
+const ADD_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
+const ADD_ANCHOR_LABELS: Record<AddAnchorId, string> = {
+  question: '题目照片',
+  module: '选择模块',
+  mySolution: '我的做法',
+  answer: '答案解析',
+  errorReason: '错因',
+  supplement: '补充信息',
+};
+const ADD_ANCHOR_ITEMS: readonly QuickAnchorNavItem<AddAnchorId>[] = [
+  { id: 'question', label: ADD_ANCHOR_LABELS.question, shortLabel: '题目', icon: 'image' },
+  { id: 'module', label: ADD_ANCHOR_LABELS.module, shortLabel: '模块', icon: 'category' },
+  { id: 'mySolution', label: ADD_ANCHOR_LABELS.mySolution, shortLabel: '做法', icon: 'edit-note' },
+  { id: 'answer', label: ADD_ANCHOR_LABELS.answer, shortLabel: '答案', icon: 'menu-book' },
+  { id: 'errorReason', label: ADD_ANCHOR_LABELS.errorReason, shortLabel: '错因', icon: 'error-outline' },
+  { id: 'supplement', label: ADD_ANCHOR_LABELS.supplement, shortLabel: '补充', icon: 'notes' },
+];
 
 const QUESTION_CAPTURE_ENTRY: CaptureEntryConfig = {
   key: 'questionImage',
@@ -561,9 +600,18 @@ export default function AddScreen() {
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
   const [saveBarHeight, setSaveBarHeight] = useState(0);
+  const [activeAnchorId, setActiveAnchorId] = useState<AddAnchorId>('question');
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<AddAnchorId | null>(null);
+  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
+  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const addScrollRef = useRef<ScrollView | null>(null);
+  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
+  const anchorLayoutsRef = useRef<Partial<Record<AddAnchorId, number>>>({});
+  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingAnchorPressRef = useRef<AddAnchorId | null>(null);
   const lastHandledSharedImageKeyRef = useRef<string | null>(null);
   const lastHandledSharedErrorKeyRef = useRef<string | null>(null);
   const showToastRef = useRef<
@@ -585,6 +633,8 @@ export default function AddScreen() {
   const effectiveSaveBarHeight = saveBarHeight > 0 ? saveBarHeight : fallbackSaveBarHeight;
   const contentBottomPadding = saveBarBottomOffset + effectiveSaveBarHeight + spacing.lg;
   const toastBottomOffset = saveBarBottomOffset + effectiveSaveBarHeight + spacing.sm;
+  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
+  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
   const moduleOptions = [
     ...MODULE_OPTIONS,
     ...customModules
@@ -851,8 +901,169 @@ export default function AddScreen() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+        anchorHighlightTimerRef.current = null;
+      }
     };
   }, []);
+
+  function isOptionalDetailAnchor(anchorId: AddAnchorId): boolean {
+    return (
+      anchorId === 'mySolution'
+      || anchorId === 'answer'
+      || anchorId === 'errorReason'
+      || anchorId === 'supplement'
+    );
+  }
+
+  function getLastMeasuredAnchorId(): AddAnchorId {
+    let lastAnchorId: AddAnchorId = 'question';
+    for (const item of ADD_ANCHOR_ITEMS) {
+      if (typeof anchorLayoutsRef.current[item.id] === 'number') {
+        lastAnchorId = item.id;
+      }
+    }
+    return lastAnchorId;
+  }
+
+  function handleAnchorLayout(anchorId: AddAnchorId, event: LayoutChangeEvent) {
+    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
+    if (anchorLayoutsRef.current[anchorId] !== nextY) {
+      anchorLayoutsRef.current = {
+        ...anchorLayoutsRef.current,
+        [anchorId]: nextY,
+      };
+    }
+
+    if (pendingAnchorPressRef.current === anchorId) {
+      pendingAnchorPressRef.current = null;
+      setTimeout(() => {
+        scrollToAnchor(anchorId);
+      }, 0);
+    }
+  }
+
+  function handleAnchorNavLayout(event: LayoutChangeEvent) {
+    const { y, height } = event.nativeEvent.layout;
+    anchorNavLayoutRef.current = {
+      y: Math.max(0, Math.round(y)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }
+
+  function resolveActiveAnchorId(scrollY: number, maxScrollY: number): AddAnchorId {
+    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
+      return getLastMeasuredAnchorId();
+    }
+
+    const thresholdY = scrollY + ADD_ANCHOR_ACTIVE_OFFSET;
+    let nextAnchorId: AddAnchorId = 'question';
+    for (const item of ADD_ANCHOR_ITEMS) {
+      const anchorY = anchorLayoutsRef.current[item.id];
+      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
+        nextAnchorId = item.id;
+      }
+    }
+
+    return nextAnchorId;
+  }
+
+  function scrollToAnchor(anchorId: AddAnchorId): boolean {
+    const targetY = anchorLayoutsRef.current[anchorId];
+    const label = ADD_ANCHOR_LABELS[anchorId];
+    if (typeof targetY !== 'number') {
+      return false;
+    }
+
+    const anchorNavLayout = anchorNavLayoutRef.current;
+    const floatingTriggerY = anchorNavLayout
+      ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
+      : Number.POSITIVE_INFINITY;
+    const willShowFloatingAnchor =
+      Math.max(0, targetY - ADD_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
+
+    let scrollOffset: number = ADD_ANCHOR_SCROLL_OFFSET;
+    if (isFloatingAnchorVisible || willShowFloatingAnchor) {
+      scrollOffset = isAnchorNavCollapsed
+        ? ADD_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
+        : ADD_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
+    }
+
+    addScrollRef.current?.scrollTo({
+      y: Math.max(0, targetY - scrollOffset),
+      animated: true,
+    });
+    setActiveAnchorId(anchorId);
+    setHighlightedAnchorId(anchorId);
+
+    if (anchorHighlightTimerRef.current) {
+      clearTimeout(anchorHighlightTimerRef.current);
+    }
+    anchorHighlightTimerRef.current = setTimeout(() => {
+      setHighlightedAnchorId(null);
+      anchorHighlightTimerRef.current = null;
+    }, ADD_ANCHOR_HIGHLIGHT_DURATION_MS);
+
+    showToast(`已跳转到 ${label}`, 'success');
+    return true;
+  }
+
+  function handleAddScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
+    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+    const y = contentOffset.y;
+    const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
+    const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
+    setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
+
+    const anchorNavLayout = anchorNavLayoutRef.current;
+    const nextFloatingAnchorVisible = anchorNavLayout
+      ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
+      : false;
+    setIsFloatingAnchorVisible((current) =>
+      current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
+    if (!nextFloatingAnchorVisible) {
+      setIsAnchorNavCollapsed((current) => (current ? current : true));
+    }
+  }
+
+  function handleAnchorPress(anchorId: AddAnchorId) {
+    if (isOptionalDetailAnchor(anchorId) && !showOptionalInfo) {
+      pendingAnchorPressRef.current = anchorId;
+      setShowOptionalInfo(true);
+      return;
+    }
+
+    if (!scrollToAnchor(anchorId)) {
+      if (isOptionalDetailAnchor(anchorId)) {
+        pendingAnchorPressRef.current = anchorId;
+        setShowOptionalInfo(true);
+        return;
+      }
+      showToast(`${ADD_ANCHOR_LABELS[anchorId]}位置准备中，请稍后再试`, 'info');
+    }
+  }
+
+  function handleToggleAnchorNavCollapsed() {
+    setIsAnchorNavCollapsed((current) => !current);
+  }
+
+  useEffect(() => {
+    if (showOptionalInfo) {
+      return;
+    }
+
+    pendingAnchorPressRef.current = null;
+    const nextAnchorLayouts = { ...anchorLayoutsRef.current };
+    delete nextAnchorLayouts.mySolution;
+    delete nextAnchorLayouts.answer;
+    delete nextAnchorLayouts.errorReason;
+    delete nextAnchorLayouts.supplement;
+    anchorLayoutsRef.current = nextAnchorLayouts;
+    if (isOptionalDetailAnchor(activeAnchorId)) {
+      setActiveAnchorId('module');
+    }
+  }, [activeAnchorId, showOptionalInfo]);
 
   useEffect(() => {
     let isMounted = true;
@@ -1515,11 +1726,27 @@ export default function AddScreen() {
     <View style={styles.pageRoot}>
       <ScreenContainer
         scroll
+        scrollRef={addScrollRef}
         safeAreaEdges={['top']}
-        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}>
+        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
+        onScroll={handleAddScroll}>
       <BrandHeader title="新增错题" subtitle="拍题目，选模块，保存到 7 刷计划" />
 
-      <View style={styles.sectionBlock}>
+      <View onLayout={handleAnchorNavLayout}>
+        <QuickAnchorNav
+          items={ADD_ANCHOR_ITEMS}
+          activeAnchorId={activeAnchorId}
+          horizontalCompact
+          onAnchorPress={handleAnchorPress}
+        />
+      </View>
+
+      <View
+        style={[
+          styles.sectionBlock,
+          highlightedAnchorId === 'question' ? styles.anchorSectionHighlighted : null,
+        ]}
+        onLayout={(event) => handleAnchorLayout('question', event)}>
         <SectionTitle title="题目照片" />
         <QuestionPhotoQueueCard
           config={QUESTION_CAPTURE_ENTRY}
@@ -1536,7 +1763,12 @@ export default function AddScreen() {
         />
       </View>
 
-      <View style={styles.sectionBlock}>
+      <View
+        style={[
+          styles.sectionBlock,
+          highlightedAnchorId === 'module' ? styles.anchorSectionHighlighted : null,
+        ]}
+        onLayout={(event) => handleAnchorLayout('module', event)}>
         <SectionTitle title="选择模块" />
         <View style={styles.tagsRow}>
           {moduleOptions.map((item) => (
@@ -1609,12 +1841,17 @@ export default function AddScreen() {
 
       {showOptionalInfo ? (
         <>
-          <View style={styles.sectionBlock}>
-            <SectionTitle title="可选照片" />
-            <View style={styles.captureListCompact}>
-              {OPTIONAL_CAPTURE_ENTRIES.map((config) => (
+          {OPTIONAL_CAPTURE_ENTRIES.map((config) => {
+            const anchorId: AddAnchorId = config.key === 'mySolutionImage' ? 'mySolution' : 'answer';
+            return (
+              <View
+                key={config.key}
+                style={[
+                  styles.sectionBlock,
+                  highlightedAnchorId === anchorId ? styles.anchorSectionHighlighted : null,
+                ]}
+                onLayout={(event) => handleAnchorLayout(anchorId, event)}>
                 <CaptureEntryCard
-                  key={config.key}
                   config={config}
                   image={getDraftImageByField(draft, config.key)}
                   busy={isBusy}
@@ -1627,11 +1864,16 @@ export default function AddScreen() {
                   }}
                   onDeleteImage={() => handleDeleteImage(config)}
                 />
-              ))}
-            </View>
-          </View>
+              </View>
+            );
+          })}
 
-          <View style={styles.sectionBlock}>
+          <View
+            style={[
+              styles.sectionBlock,
+              highlightedAnchorId === 'errorReason' ? styles.anchorSectionHighlighted : null,
+            ]}
+            onLayout={(event) => handleAnchorLayout('errorReason', event)}>
             <SectionTitle title="错因（可选）" />
             <View style={styles.tagsRow}>
               {ERROR_REASON_OPTIONS.map((item) => (
@@ -1667,7 +1909,12 @@ export default function AddScreen() {
             </View>
           </View>
 
-          <View style={styles.sectionBlock}>
+          <View
+            style={[
+              styles.sectionBlock,
+              highlightedAnchorId === 'supplement' ? styles.anchorSectionHighlighted : null,
+            ]}
+            onLayout={(event) => handleAnchorLayout('supplement', event)}>
             <SectionTitle title="补充信息（可选）" />
             <CardContainer padding={spacing.md} style={styles.inputCard}>
               <Text style={styles.inputLabel}>标题</Text>
@@ -1721,6 +1968,25 @@ export default function AddScreen() {
       />
       </ScreenContainer>
 
+      {shouldShowFloatingAnchorNav ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.floatingAnchorWrap,
+            { top: floatingAnchorTop },
+          ]}>
+          <QuickAnchorNav
+            items={ADD_ANCHOR_ITEMS}
+            activeAnchorId={activeAnchorId}
+            collapsed={isAnchorNavCollapsed}
+            floating
+            horizontalCompact
+            onToggleCollapsed={handleToggleAnchorNavCollapsed}
+            onAnchorPress={handleAnchorPress}
+          />
+        </View>
+      ) : null}
+
       <FloatingBottomCta
         bottom={saveBarBottomOffset}
         hintText={saveHintTextV2}
@@ -1766,6 +2032,22 @@ const styles = StyleSheet.create({
   screenContent: {
     paddingTop: spacing.lg,
     gap: spacing.md,
+  },
+  floatingAnchorWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    zIndex: 30,
+    elevation: 30,
+  },
+  anchorSectionHighlighted: {
+    marginHorizontal: -spacing.sm,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.success,
+    backgroundColor: '#FBFFFC',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
   },
   sectionBlock: {
     gap: spacing.sm,

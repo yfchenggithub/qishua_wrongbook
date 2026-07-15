@@ -7,8 +7,12 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  type LayoutChangeEvent,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Switch,
   Text,
@@ -16,7 +20,13 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { BrandHeader, CardContainer, ScreenContainer } from '@/src/components';
+import {
+  BrandHeader,
+  CardContainer,
+  QuickAnchorNav,
+  type QuickAnchorNavItem,
+  ScreenContainer,
+} from '@/src/components';
 import { APP_BUILD_DATE, APP_NAME, DATA_MODE_LABEL } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
@@ -59,6 +69,30 @@ const EMPTY_BACKUP_COUNTS: BackupManifest['counts'] = {
   reviewRecords: 0,
   imageFiles: 0,
 };
+
+type SettingsAnchorId = 'backup' | 'stats' | 'export' | 'reminder' | 'storage';
+
+const SETTINGS_ANCHOR_ACTIVE_OFFSET = 104;
+const SETTINGS_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const SETTINGS_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
+const SETTINGS_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
+const SETTINGS_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
+
+const SETTINGS_ANCHOR_LABELS: Record<SettingsAnchorId, string> = {
+  backup: '数据备份',
+  stats: '学习数据',
+  export: '打印导出',
+  reminder: '复做提醒',
+  storage: '本机存储',
+};
+
+const SETTINGS_ANCHOR_ITEMS: readonly QuickAnchorNavItem<SettingsAnchorId>[] = [
+  { id: 'backup', label: SETTINGS_ANCHOR_LABELS.backup, shortLabel: '备份', icon: 'security' },
+  { id: 'stats', label: SETTINGS_ANCHOR_LABELS.stats, shortLabel: '数据', icon: 'bar-chart' },
+  { id: 'export', label: SETTINGS_ANCHOR_LABELS.export, shortLabel: '导出', icon: 'print' },
+  { id: 'reminder', label: SETTINGS_ANCHOR_LABELS.reminder, shortLabel: '提醒', icon: 'notifications-active' },
+  { id: 'storage', label: SETTINGS_ANCHOR_LABELS.storage, shortLabel: '存储', icon: 'storage' },
+];
 
 type ToastType = 'success' | 'info' | 'warning' | 'error';
 
@@ -476,11 +510,19 @@ export default function SettingsScreen() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
+  const [activeAnchorId, setActiveAnchorId] = useState<SettingsAnchorId>('backup');
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<SettingsAnchorId | null>(null);
+  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
+  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
 
   const hasFocusedRef = useRef(false);
   const lastTapAtRef = useRef<number | null>(null);
   const tapCountRef = useRef(0);
   const skipNextVersionPressRef = useRef(false);
+  const settingsScrollRef = useRef<ScrollView | null>(null);
+  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
+  const anchorLayoutsRef = useRef<Partial<Record<SettingsAnchorId, number>>>({});
+  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -542,6 +584,111 @@ export default function SettingsScreen() {
     [hideToast, toastOpacity, toastTranslateY],
   );
 
+  const handleAnchorLayout = useCallback((anchorId: SettingsAnchorId, event: LayoutChangeEvent) => {
+    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
+    if (anchorLayoutsRef.current[anchorId] === nextY) {
+      return;
+    }
+
+    anchorLayoutsRef.current = {
+      ...anchorLayoutsRef.current,
+      [anchorId]: nextY,
+    };
+  }, []);
+
+  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    anchorNavLayoutRef.current = {
+      y: Math.max(0, Math.round(y)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }, []);
+
+  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): SettingsAnchorId => {
+    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
+      return 'storage';
+    }
+
+    const thresholdY = scrollY + SETTINGS_ANCHOR_ACTIVE_OFFSET;
+    let nextAnchorId: SettingsAnchorId = 'backup';
+    for (const item of SETTINGS_ANCHOR_ITEMS) {
+      const anchorY = anchorLayoutsRef.current[item.id];
+      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
+        nextAnchorId = item.id;
+      }
+    }
+
+    return nextAnchorId;
+  }, []);
+
+  const handleSettingsScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const y = contentOffset.y;
+      const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
+      const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
+      setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
+
+      const anchorNavLayout = anchorNavLayoutRef.current;
+      const nextFloatingAnchorVisible = anchorNavLayout
+        ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
+        : false;
+      setIsFloatingAnchorVisible((current) =>
+        current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
+      if (!nextFloatingAnchorVisible) {
+        setIsAnchorNavCollapsed((current) => (current ? current : true));
+      }
+    },
+    [resolveActiveAnchorId],
+  );
+
+  const handleAnchorPress = useCallback(
+    (anchorId: SettingsAnchorId) => {
+      const targetY = anchorLayoutsRef.current[anchorId];
+      const label = SETTINGS_ANCHOR_LABELS[anchorId];
+      if (typeof targetY !== 'number') {
+        showToast(`${label}位置准备中，请稍后再试。`, 'info');
+        return;
+      }
+
+      const anchorNavLayout = anchorNavLayoutRef.current;
+      const floatingTriggerY = anchorNavLayout
+        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
+        : Number.POSITIVE_INFINITY;
+      const willShowFloatingAnchor =
+        Math.max(0, targetY - SETTINGS_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
+
+      let scrollOffset: number = SETTINGS_ANCHOR_SCROLL_OFFSET;
+      if (isFloatingAnchorVisible || willShowFloatingAnchor) {
+        scrollOffset = isAnchorNavCollapsed
+          ? SETTINGS_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
+          : SETTINGS_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
+      }
+
+      settingsScrollRef.current?.scrollTo({
+        y: Math.max(0, targetY - scrollOffset),
+        animated: true,
+      });
+      setActiveAnchorId(anchorId);
+      setHighlightedAnchorId(anchorId);
+
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+      }
+      anchorHighlightTimerRef.current = setTimeout(() => {
+        setHighlightedAnchorId(null);
+        anchorHighlightTimerRef.current = null;
+      }, SETTINGS_ANCHOR_HIGHLIGHT_DURATION_MS);
+
+      showToast(`已跳转到 ${label}`, 'success');
+    },
+    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
+  );
+
+  const handleToggleAnchorNavCollapsed = useCallback(() => {
+    setIsAnchorNavCollapsed((current) => !current);
+  }, []);
+
   const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
   const {
     isExporting: isExportingWorksheet,
@@ -578,6 +725,10 @@ export default function SettingsScreen() {
       if (toastTimerRef.current) {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
+      }
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+        anchorHighlightTimerRef.current = null;
       }
     };
   }, []);
@@ -2097,17 +2248,40 @@ export default function SettingsScreen() {
       value: nextReminderText.slice(separatorIndex + 1).trimStart(),
     };
   }, [nextReminderText]);
+  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
+  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
+      <ScreenContainer
+        scroll
+        scrollRef={settingsScrollRef}
+        safeAreaEdges={['top']}
+        contentStyle={styles.screenContent}
+        onScroll={handleSettingsScroll}>
         <BrandHeader
           title="设置"
           subtitle="离线运行，所有数据仅保存在本机"
           offlineLabel="离线"
         />
 
-        <CardContainer style={[styles.card, styles.backupCard]} padding={spacing.md}>
+        <View onLayout={handleAnchorNavLayout}>
+          <QuickAnchorNav
+            items={SETTINGS_ANCHOR_ITEMS}
+            activeAnchorId={activeAnchorId}
+            horizontalCompact
+            onAnchorPress={handleAnchorPress}
+          />
+        </View>
+
+        <View onLayout={(event) => handleAnchorLayout('backup', event)}>
+          <CardContainer
+            style={[
+              styles.card,
+              styles.backupCard,
+              highlightedAnchorId === 'backup' ? styles.anchorTargetHighlighted : null,
+            ]}
+            padding={spacing.md}>
           <View style={styles.backupCardRow}>
             <View style={[styles.iconBadge, styles.iconGreen, styles.backupIconBadge]}>
               <MaterialIcons color="#2A9D50" name="security" size={38} />
@@ -2230,8 +2404,16 @@ export default function SettingsScreen() {
             </View>
           </View>
         </CardContainer>
+        </View>
 
-        <CardContainer style={[styles.card, styles.statsCard]} padding={spacing.md}>
+        <View onLayout={(event) => handleAnchorLayout('stats', event)}>
+        <CardContainer
+          style={[
+            styles.card,
+            styles.statsCard,
+            highlightedAnchorId === 'stats' ? styles.anchorTargetHighlighted : null,
+          ]}
+          padding={spacing.md}>
           <View style={styles.statsCardRow}>
             <View style={styles.statsHeaderIconWrap}>
               <MaterialIcons color="#2D74D6" name="bar-chart" size={24} />
@@ -2287,8 +2469,15 @@ export default function SettingsScreen() {
             </View>
           </View>
         </CardContainer>
+        </View>
 
-        <CardContainer style={styles.card} padding={spacing.md}>
+        <View onLayout={(event) => handleAnchorLayout('export', event)}>
+        <CardContainer
+          style={[
+            styles.card,
+            highlightedAnchorId === 'export' ? styles.anchorTargetHighlighted : null,
+          ]}
+          padding={spacing.md}>
           <View style={styles.cardRow}>
             <View style={[styles.iconBadge, styles.iconOrange]}>
               <MaterialIcons color="#ED8A09" name="print" size={30} />
@@ -2518,8 +2707,15 @@ export default function SettingsScreen() {
             </View>
           </View>
         </CardContainer>
+        </View>
 
-        <CardContainer style={styles.card} padding={spacing.md}>
+        <View onLayout={(event) => handleAnchorLayout('reminder', event)}>
+        <CardContainer
+          style={[
+            styles.card,
+            highlightedAnchorId === 'reminder' ? styles.anchorTargetHighlighted : null,
+          ]}
+          padding={spacing.md}>
           <View style={styles.cardRow}>
             <View style={[styles.iconBadge, styles.iconPurple]}>
               <MaterialIcons color="#7B53CC" name="notifications-active" size={30} />
@@ -2585,8 +2781,15 @@ export default function SettingsScreen() {
             </View>
           </View>
         </CardContainer>
+        </View>
 
-        <CardContainer style={styles.card} padding={spacing.md}>
+        <View onLayout={(event) => handleAnchorLayout('storage', event)}>
+        <CardContainer
+          style={[
+            styles.card,
+            highlightedAnchorId === 'storage' ? styles.anchorTargetHighlighted : null,
+          ]}
+          padding={spacing.md}>
           <View style={styles.cardRow}>
             <View style={[styles.iconBadge, styles.iconGreen]}>
               <MaterialIcons color="#2A9D50" name="storage" size={30} />
@@ -2640,6 +2843,7 @@ export default function SettingsScreen() {
             </View>
           </View>
         </CardContainer>
+        </View>
 
         <CardContainer style={styles.card} padding={spacing.md}>
           <View style={styles.cardRow}>
@@ -2735,6 +2939,25 @@ export default function SettingsScreen() {
         </View>
       </ScreenContainer>
 
+      {shouldShowFloatingAnchorNav ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.floatingAnchorWrap,
+            { top: floatingAnchorTop },
+          ]}>
+          <QuickAnchorNav
+            items={SETTINGS_ANCHOR_ITEMS}
+            activeAnchorId={activeAnchorId}
+            collapsed={isAnchorNavCollapsed}
+            floating
+            horizontalCompact
+            onToggleCollapsed={handleToggleAnchorNavCollapsed}
+            onAnchorPress={handleAnchorPress}
+          />
+        </View>
+      ) : null}
+
       {toastVisible ? (
         <Animated.View
           pointerEvents="none"
@@ -2765,6 +2988,21 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     paddingBottom: layout.bottomTabHeight + spacing.xl,
     gap: spacing.lg,
+  },
+  floatingAnchorWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    zIndex: 30,
+    elevation: 30,
+  },
+  anchorTargetHighlighted: {
+    borderColor: colors.success,
+    shadowColor: colors.success,
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
   },
   card: {
     borderRadius: radius.xl,

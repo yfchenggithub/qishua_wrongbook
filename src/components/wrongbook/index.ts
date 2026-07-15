@@ -6,6 +6,7 @@ export * from './MistakeImageBrowser';
 export * from './MistakeImageSection';
 export * from './OfflineBadge';
 export * from './ProgressDots';
+export * from './QuickAnchorNav';
 export * from './RelatedMistakeCard';
 export * from './SectionTitle';
 export * from './StatusPill';

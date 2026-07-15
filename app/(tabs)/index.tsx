@@ -1,13 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Animated, LayoutAnimation, Platform, Pressable, StyleSheet, Text, UIManager, View } from 'react-native';
+import {
+  Animated,
+  type LayoutChangeEvent,
+  LayoutAnimation,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  UIManager,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   BrandHeader,
   CardContainer,
   ProgressDots,
+  QuickAnchorNav,
+  type QuickAnchorNavItem,
   ScreenContainer,
   SectionTitle,
   StatusPill,
@@ -32,6 +47,7 @@ const TOAST_DURATION_LONG = 3200;
 const BACKUP_STALE_DAYS = 7;
 
 type ToastType = 'success' | 'info' | 'error';
+type TodayAnchorId = 'overview' | 'task' | 'queue' | 'upcoming';
 
 const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
   hasAnyMistake: false,
@@ -46,6 +62,24 @@ const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
   homeStatus: 'empty',
   upcomingPlan: [],
 };
+
+const TODAY_ANCHOR_ACTIVE_OFFSET = 104;
+const TODAY_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const TODAY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
+const TODAY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 142;
+const TODAY_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
+const TODAY_ANCHOR_LABELS: Record<TodayAnchorId, string> = {
+  overview: '概览',
+  task: '今日任务',
+  queue: '复做队列',
+  upcoming: '接下来',
+};
+const TODAY_ANCHOR_ITEMS: readonly QuickAnchorNavItem<TodayAnchorId>[] = [
+  { id: 'overview', label: TODAY_ANCHOR_LABELS.overview, shortLabel: '概览', icon: 'dashboard' },
+  { id: 'task', label: TODAY_ANCHOR_LABELS.task, shortLabel: '任务', icon: 'task-alt' },
+  { id: 'queue', label: TODAY_ANCHOR_LABELS.queue, shortLabel: '队列', icon: 'format-list-bulleted' },
+  { id: 'upcoming', label: TODAY_ANCHOR_LABELS.upcoming, shortLabel: '计划', icon: 'event-note' },
+];
 
 function normalizeMistakeId(id: string): string | null {
   const normalized = typeof id === 'string' ? id.trim() : '';
@@ -358,6 +392,10 @@ export default function TodayScreen() {
   const [toastMessage, setToastMessage] = useState('');
   const [toastType, setToastType] = useState<ToastType>('info');
   const [toastVisible, setToastVisible] = useState(false);
+  const [activeAnchorId, setActiveAnchorId] = useState<TodayAnchorId>('overview');
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<TodayAnchorId | null>(null);
+  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
+  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
 
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
@@ -365,6 +403,10 @@ export default function TodayScreen() {
   const toastOpacity = useRef(new Animated.Value(0)).current;
   const toastTranslateY = useRef(new Animated.Value(8)).current;
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const todayScrollRef = useRef<ScrollView | null>(null);
+  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
+  const anchorLayoutsRef = useRef<Partial<Record<TodayAnchorId, number>>>({});
+  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -509,9 +551,118 @@ export default function TodayScreen() {
         clearTimeout(toastTimerRef.current);
         toastTimerRef.current = null;
       }
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+        anchorHighlightTimerRef.current = null;
+      }
     },
     [],
   );
+
+  const handleAnchorLayout = useCallback((anchorId: TodayAnchorId, event: LayoutChangeEvent) => {
+    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
+    if (anchorLayoutsRef.current[anchorId] === nextY) {
+      return;
+    }
+
+    anchorLayoutsRef.current = {
+      ...anchorLayoutsRef.current,
+      [anchorId]: nextY,
+    };
+  }, []);
+
+  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    anchorNavLayoutRef.current = {
+      y: Math.max(0, Math.round(y)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }, []);
+
+  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): TodayAnchorId => {
+    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
+      return 'upcoming';
+    }
+
+    const thresholdY = scrollY + TODAY_ANCHOR_ACTIVE_OFFSET;
+    let nextAnchorId: TodayAnchorId = 'overview';
+    for (const item of TODAY_ANCHOR_ITEMS) {
+      const anchorY = anchorLayoutsRef.current[item.id];
+      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
+        nextAnchorId = item.id;
+      }
+    }
+
+    return nextAnchorId;
+  }, []);
+
+  const handleTodayScroll = useCallback(
+    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const y = contentOffset.y;
+      const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
+      const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
+      setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
+
+      const anchorNavLayout = anchorNavLayoutRef.current;
+      const nextFloatingAnchorVisible = anchorNavLayout
+        ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
+        : false;
+      setIsFloatingAnchorVisible((current) =>
+        current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
+      if (!nextFloatingAnchorVisible) {
+        setIsAnchorNavCollapsed((current) => (current ? current : true));
+      }
+    },
+    [resolveActiveAnchorId],
+  );
+
+  const handleAnchorPress = useCallback(
+    (anchorId: TodayAnchorId) => {
+      const targetY = anchorLayoutsRef.current[anchorId];
+      const label = TODAY_ANCHOR_LABELS[anchorId];
+      if (typeof targetY !== 'number') {
+        showToast(`${label}位置准备中，请稍后再试`, 'info');
+        return;
+      }
+
+      const anchorNavLayout = anchorNavLayoutRef.current;
+      const floatingTriggerY = anchorNavLayout
+        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
+        : Number.POSITIVE_INFINITY;
+      const willShowFloatingAnchor =
+        Math.max(0, targetY - TODAY_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
+
+      let scrollOffset: number = TODAY_ANCHOR_SCROLL_OFFSET;
+      if (isFloatingAnchorVisible || willShowFloatingAnchor) {
+        scrollOffset = isAnchorNavCollapsed
+          ? TODAY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
+          : TODAY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
+      }
+
+      todayScrollRef.current?.scrollTo({
+        y: Math.max(0, targetY - scrollOffset),
+        animated: true,
+      });
+      setActiveAnchorId(anchorId);
+      setHighlightedAnchorId(anchorId);
+
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+      }
+      anchorHighlightTimerRef.current = setTimeout(() => {
+        setHighlightedAnchorId(null);
+        anchorHighlightTimerRef.current = null;
+      }, TODAY_ANCHOR_HIGHLIGHT_DURATION_MS);
+
+      showToast(`已跳转到 ${label}`, 'success');
+    },
+    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
+  );
+
+  const handleToggleAnchorNavCollapsed = useCallback(() => {
+    setIsAnchorNavCollapsed((current) => !current);
+  }, []);
 
   const todayQueueList = useMemo(() => summary.todayQueue, [summary.todayQueue]);
 
@@ -784,10 +935,20 @@ export default function TodayScreen() {
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
   const homePrimaryMessage = useMemo(() => buildHomePrimaryMessage(summary), [summary]);
+  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
+  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer scroll safeAreaEdges={['top']} contentStyle={styles.screenContent}>
+      <ScreenContainer
+        scroll
+        scrollRef={todayScrollRef}
+        safeAreaEdges={['top']}
+        contentStyle={styles.screenContent}
+        onScroll={handleTodayScroll}>
+      <View
+        style={highlightedAnchorId === 'overview' ? styles.anchorSectionHighlighted : null}
+        onLayout={(event) => handleAnchorLayout('overview', event)}>
       <BrandHeader
         title={todayMock.brand.title}
         subtitle={todayMock.brand.subtitle}
@@ -807,6 +968,16 @@ export default function TodayScreen() {
           ) : null
         }
       />
+      </View>
+
+      <View onLayout={handleAnchorNavLayout}>
+        <QuickAnchorNav
+          items={TODAY_ANCHOR_ITEMS}
+          activeAnchorId={activeAnchorId}
+          horizontalCompact
+          onAnchorPress={handleAnchorPress}
+        />
+      </View>
 
       {shouldShowBackupSafetyCard ? (
         <CardContainer
@@ -891,7 +1062,13 @@ export default function TodayScreen() {
         </CardContainer>
       ) : null}
 
-      <CardContainer style={styles.taskSummaryCard} padding={spacing.lg}>
+      <View onLayout={(event) => handleAnchorLayout('task', event)}>
+      <CardContainer
+        style={[
+          styles.taskSummaryCard,
+          highlightedAnchorId === 'task' ? styles.anchorTargetHighlighted : null,
+        ]}
+        padding={spacing.lg}>
         <Text style={styles.taskCaption}>今日任务</Text>
         <View style={styles.taskDueRow}>
           <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskDueCount}>
@@ -919,6 +1096,7 @@ export default function TodayScreen() {
           {rightNowHint}
         </Text>
       </CardContainer>
+      </View>
 
       <View style={styles.sectionBlock}>
         <View style={styles.sectionContent}>
@@ -1015,7 +1193,12 @@ export default function TodayScreen() {
         </View>
       </View>
 
-      <View style={styles.sectionBlock}>
+      <View
+        style={[
+          styles.sectionBlock,
+          highlightedAnchorId === 'queue' ? styles.anchorSectionHighlighted : null,
+        ]}
+        onLayout={(event) => handleAnchorLayout('queue', event)}>
         <SectionTitle title="今日复做队列" />
         <View style={styles.queueList}>
           {summary.homeStatus === 'dueToday' && todayQueueList.length > 0 ? (
@@ -1028,7 +1211,12 @@ export default function TodayScreen() {
         </View>
       </View>
 
-      <View style={styles.sectionBlock}>
+      <View
+        style={[
+          styles.sectionBlock,
+          highlightedAnchorId === 'upcoming' ? styles.anchorSectionHighlighted : null,
+        ]}
+        onLayout={(event) => handleAnchorLayout('upcoming', event)}>
         <SectionTitle title="接下来" />
         <View style={styles.queueList}>
           {upcomingDays.length > 0 ? (
@@ -1043,6 +1231,25 @@ export default function TodayScreen() {
         </View>
       </View>
       </ScreenContainer>
+
+      {shouldShowFloatingAnchorNav ? (
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.floatingAnchorWrap,
+            { top: floatingAnchorTop },
+          ]}>
+          <QuickAnchorNav
+            items={TODAY_ANCHOR_ITEMS}
+            activeAnchorId={activeAnchorId}
+            collapsed={isAnchorNavCollapsed}
+            floating
+            horizontalCompact
+            onToggleCollapsed={handleToggleAnchorNavCollapsed}
+            onAnchorPress={handleAnchorPress}
+          />
+        </View>
+      ) : null}
 
       {toastVisible ? (
         <Animated.View
@@ -1074,6 +1281,30 @@ const styles = StyleSheet.create({
     paddingTop: spacing.lg,
     paddingBottom: layout.bottomTabHeight,
     gap: spacing.lg,
+  },
+  floatingAnchorWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    zIndex: 30,
+    elevation: 30,
+  },
+  anchorTargetHighlighted: {
+    borderColor: colors.success,
+    shadowColor: colors.success,
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 5,
+  },
+  anchorSectionHighlighted: {
+    marginHorizontal: -spacing.sm,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.success,
+    backgroundColor: '#FBFFFC',
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
   },
   headerScanButton: {
     width: 44,
