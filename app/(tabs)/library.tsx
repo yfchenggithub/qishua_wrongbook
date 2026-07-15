@@ -4,8 +4,12 @@ import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState 
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
+  type LayoutChangeEvent,
   Modal,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -16,11 +20,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   BrandHeader,
   CardContainer,
   ProgressDots,
+  QuickAnchorNav,
+  type QuickAnchorNavItem,
   ScreenContainer,
   SegmentControl,
 } from '@/src/components';
@@ -41,10 +48,26 @@ const INLINE_TAG_FILTER_OPTION_LIMIT = 6;
 const INITIAL_VISIBLE_MISTAKE_LIMIT = 60;
 const VISIBLE_MISTAKE_INCREMENT = 60;
 const PAGE_SCOPE = 'LibraryScreen';
+const TOAST_DURATION_DEFAULT = 1800;
+const LIBRARY_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
+const LIBRARY_ANCHOR_ACTIVE_OFFSET = 104;
+const LIBRARY_ANCHOR_SCROLL_OFFSET = spacing.sm;
+const LIBRARY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
+const LIBRARY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
+
+type LibraryAnchorId = 'search' | 'filters' | 'quickView' | 'list';
+type ToastType = 'success' | 'info' | 'warning' | 'error';
 
 type LibraryModuleFilterValue = string | null;
 type ListLoadMode = 'initial' | 'refresh' | 'filter';
-type LibraryQuickViewId = 'today' | 'overdue' | 'recent' | 'never' | 'nearlyDone' | 'pinned';
+type LibraryQuickViewId =
+  | 'today'
+  | 'overdue'
+  | 'recent'
+  | 'recentViewed'
+  | 'never'
+  | 'nearlyDone'
+  | 'pinned';
 type LibrarySortKey =
   | 'reviewTime'
   | 'overdueLongest'
@@ -53,9 +76,32 @@ type LibrarySortKey =
   | 'reviewCountAsc'
   | 'nearMastered'
   | 'title';
-type LibrarySectionId = 'overdue' | 'today' | 'future7' | 'later' | 'noPlan' | 'flat';
+type LibrarySectionId =
+  | 'overdue'
+  | 'today'
+  | 'future7'
+  | 'later'
+  | 'noPlan'
+  | 'recent'
+  | 'recentViewed'
+  | 'flat';
+
+const LIBRARY_ANCHOR_LABELS: Record<LibraryAnchorId, string> = {
+  search: '搜索',
+  filters: '筛选',
+  quickView: '快速查看',
+  list: '题目列表',
+};
+
+const LIBRARY_ANCHOR_ITEMS: readonly QuickAnchorNavItem<LibraryAnchorId>[] = [
+  { id: 'search', label: LIBRARY_ANCHOR_LABELS.search, shortLabel: '搜索', icon: 'search' },
+  { id: 'filters', label: LIBRARY_ANCHOR_LABELS.filters, shortLabel: '筛选', icon: 'filter-list' },
+  { id: 'quickView', label: LIBRARY_ANCHOR_LABELS.quickView, shortLabel: '快看', icon: 'bolt' },
+  { id: 'list', label: LIBRARY_ANCHOR_LABELS.list, shortLabel: '题目', icon: 'view-list' },
+];
 
 interface LibraryDateBounds {
+  startOfRecentWindow: Date;
   startOfToday: Date;
   startOfTomorrow: Date;
   startOfEightDaysLater: Date;
@@ -100,6 +146,7 @@ const QUICK_VIEW_OPTIONS: readonly LibraryQuickViewOption[] = [
   { id: 'today', label: '今日应做', icon: 'event-available', tone: 'success' },
   { id: 'overdue', label: '已逾期', icon: 'timer', tone: 'danger' },
   { id: 'recent', label: '最近添加', icon: 'schedule', tone: 'info' },
+  { id: 'recentViewed', label: '最近访问', icon: 'visibility', tone: 'info' },
   { id: 'never', label: '从未复做', icon: 'history', tone: 'neutral' },
   { id: 'nearlyDone', label: '接近完成', icon: 'filter-alt', tone: 'warning' },
   { id: 'pinned', label: '我的置顶', icon: 'star-outline', tone: 'pinned' },
@@ -144,6 +191,9 @@ function getSectionColor(sectionId: LibrarySectionId): string {
   if (sectionId === 'future7') {
     return '#2563EB';
   }
+  if (sectionId === 'recent' || sectionId === 'recentViewed') {
+    return '#2563EB';
+  }
   return colors.textSecondary;
 }
 
@@ -162,7 +212,26 @@ function getSectionIcon(
   if (sectionId === 'later') {
     return 'event-note';
   }
+  if (sectionId === 'recent') {
+    return 'schedule';
+  }
+  if (sectionId === 'recentViewed') {
+    return 'visibility';
+  }
   return 'pending-actions';
+}
+
+function getToastBackgroundColor(type: ToastType): string {
+  if (type === 'success') {
+    return 'rgba(24, 38, 30, 0.95)';
+  }
+  if (type === 'error') {
+    return 'rgba(88, 28, 28, 0.95)';
+  }
+  if (type === 'warning') {
+    return 'rgba(92, 62, 18, 0.95)';
+  }
+  return 'rgba(38, 44, 53, 0.95)';
 }
 
 function sanitizeNextReviewText(text: string): string {
@@ -297,7 +366,9 @@ function buildLibraryDateBounds(baseDate = new Date()): LibraryDateBounds {
   const startOfToday = startOfLocalDay(baseDate);
   const startOfTomorrow = addDays(startOfToday, 1);
   const startOfEightDaysLater = addDays(startOfToday, 8);
+  const startOfRecentWindow = addDays(startOfToday, -6);
   return {
+    startOfRecentWindow,
     startOfToday,
     startOfTomorrow,
     startOfEightDaysLater,
@@ -333,12 +404,38 @@ function isOverdueItem(item: MistakeListItem, bounds: LibraryDateBounds): boolea
   return nextReviewTime !== null && nextReviewTime < bounds.startOfToday.getTime();
 }
 
+function isRecentlyAddedItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
+  const createdTime = getTimeValue(item.createdAt);
+  return (
+    createdTime !== null
+    && createdTime >= bounds.startOfRecentWindow.getTime()
+  );
+}
+
+function isRecentlyViewedItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
+  const viewedTime = getTimeValue(item.lastViewedAt ?? null);
+  return (
+    viewedTime !== null
+    && viewedTime >= bounds.startOfRecentWindow.getTime()
+  );
+}
+
 function isNeverReviewedItem(item: MistakeListItem): boolean {
   return item.reviewCount === 0 && item.status !== 'archived';
 }
 
 function isNearlyDoneItem(item: MistakeListItem): boolean {
   return item.status === 'active' && (item.reviewCount === 5 || item.reviewCount === 6);
+}
+
+function isRecentQuickView(
+  quickViewId: LibraryQuickViewId | null,
+): quickViewId is 'recent' | 'recentViewed' {
+  return quickViewId === 'recent' || quickViewId === 'recentViewed';
+}
+
+function getDefaultSortKeyForRecentQuickView(quickViewId: 'recent' | 'recentViewed'): LibrarySortKey {
+  return quickViewId === 'recentViewed' ? 'recentViewed' : 'recentAdded';
 }
 
 function getQuickViewCounts(
@@ -348,7 +445,8 @@ function getQuickViewCounts(
   const counts: Record<LibraryQuickViewId, number> = {
     today: 0,
     overdue: 0,
-    recent: sourceItems.length,
+    recent: 0,
+    recentViewed: 0,
     never: 0,
     nearlyDone: 0,
     pinned: 0,
@@ -360,6 +458,12 @@ function getQuickViewCounts(
     }
     if (isOverdueItem(item, bounds)) {
       counts.overdue += 1;
+    }
+    if (isRecentlyAddedItem(item, bounds)) {
+      counts.recent += 1;
+    }
+    if (isRecentlyViewedItem(item, bounds)) {
+      counts.recentViewed += 1;
     }
     if (isNeverReviewedItem(item)) {
       counts.never += 1;
@@ -380,7 +484,7 @@ function filterMistakesByQuickView(
   quickViewId: LibraryQuickViewId | null,
   bounds: LibraryDateBounds,
 ): MistakeListItem[] {
-  if (!quickViewId || quickViewId === 'recent') {
+  if (!quickViewId) {
     return [...sourceItems];
   }
 
@@ -390,6 +494,12 @@ function filterMistakesByQuickView(
     }
     if (quickViewId === 'overdue') {
       return isOverdueItem(item, bounds);
+    }
+    if (quickViewId === 'recent') {
+      return isRecentlyAddedItem(item, bounds);
+    }
+    if (quickViewId === 'recentViewed') {
+      return isRecentlyViewedItem(item, bounds);
     }
     if (quickViewId === 'never') {
       return isNeverReviewedItem(item);
@@ -431,7 +541,7 @@ function sortMistakes(
   const itemsWithIndex = [...sourceItems];
 
   itemsWithIndex.sort((left, right) => {
-    if (activeQuickViewId !== 'pinned' && left.isPinned !== right.isPinned) {
+    if (!isRecentQuickView(activeQuickViewId) && activeQuickViewId !== 'pinned' && left.isPinned !== right.isPinned) {
       return left.isPinned ? -1 : 1;
     }
 
@@ -498,7 +608,18 @@ function groupMistakesByReviewDate(
   sourceItems: readonly MistakeListItem[],
   selectedFilter: LibraryFilterValue,
   bounds: LibraryDateBounds,
+  activeQuickViewId: LibraryQuickViewId | null,
 ): LibraryListSection[] {
+  if (activeQuickViewId === 'recent' || activeQuickViewId === 'recentViewed') {
+    const section = buildSection(
+      activeQuickViewId,
+      activeQuickViewId === 'recent' ? '最近添加' : '最近访问',
+      [...sourceItems],
+      false,
+    );
+    return section ? [section] : [];
+  }
+
   if (selectedFilter === 'mastered') {
     return [
       {
@@ -792,7 +913,7 @@ function QuickViewBar({
         {QUICK_VIEW_OPTIONS.map((option) => {
           const selected = activeQuickViewId === option.id;
           const count = counts[option.id] ?? 0;
-          const countText = option.id === 'recent' ? '' : ` ${count}`;
+          const countText = ` ${count}`;
           return (
             <Pressable
               key={option.id}
@@ -1100,6 +1221,7 @@ function LibraryTagFilterSheet({
 
 export default function LibraryScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [searchText, setSearchText] = useState('');
   const [debouncedKeyword, setDebouncedKeyword] = useState('');
   const [selectedFilter, setSelectedFilter] = useState<LibraryFilterValue>('all');
@@ -1110,6 +1232,13 @@ export default function LibraryScreen() {
   ]);
   const [tagFilterOptions, setTagFilterOptions] = useState<LibraryTagFilterOption[]>([]);
   const [activeQuickViewId, setActiveQuickViewId] = useState<LibraryQuickViewId | null>(null);
+  const [activeAnchorId, setActiveAnchorId] = useState<LibraryAnchorId>('search');
+  const [highlightedAnchorId, setHighlightedAnchorId] = useState<LibraryAnchorId | null>(null);
+  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
+  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
+  const [toastMessage, setToastMessage] = useState('');
+  const [toastType, setToastType] = useState<ToastType>('info');
+  const [toastVisible, setToastVisible] = useState(false);
   const [sortKey, setSortKey] = useState<LibrarySortKey>('reviewTime');
   const [sortSheetVisible, setSortSheetVisible] = useState(false);
   const [collapsedSectionIds, setCollapsedSectionIds] = useState<Partial<Record<LibrarySectionId, boolean>>>({});
@@ -1129,10 +1258,199 @@ export default function LibraryScreen() {
 
   const hasLoadedRef = useRef(false);
   const hasFocusedRef = useRef(false);
+  const libraryListRef = useRef<SectionList<MistakeListItem, LibraryListSection>>(null);
+  const anchorLayoutsRef = useRef<Partial<Record<LibraryAnchorId, number>>>({});
+  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
+  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+  const toastTranslateY = useRef(new Animated.Value(8)).current;
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestIdRef = useRef(0);
   const moduleFilterRequestIdRef = useRef(0);
   const tagFilterRequestIdRef = useRef(0);
   const sortBeforeRecentQuickViewRef = useRef<LibrarySortKey>('reviewTime');
+  const quickViewSortWasAppliedRef = useRef(false);
+
+  const hideToast = useCallback(() => {
+    Animated.parallel([
+      Animated.timing(toastOpacity, {
+        toValue: 0,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+      Animated.timing(toastTranslateY, {
+        toValue: 8,
+        duration: 160,
+        useNativeDriver: true,
+      }),
+    ]).start(() => {
+      setToastVisible(false);
+    });
+  }, [toastOpacity, toastTranslateY]);
+
+  const showToast = useCallback(
+    (message: string, type: ToastType = 'info', duration = TOAST_DURATION_DEFAULT) => {
+      const normalizedMessage = message.trim();
+      if (!normalizedMessage) {
+        return;
+      }
+
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+
+      setToastMessage(normalizedMessage);
+      setToastType(type);
+      setToastVisible(true);
+      toastOpacity.setValue(0);
+      toastTranslateY.setValue(8);
+
+      Animated.parallel([
+        Animated.timing(toastOpacity, {
+          toValue: 1,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+        Animated.timing(toastTranslateY, {
+          toValue: 0,
+          duration: 180,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      toastTimerRef.current = setTimeout(() => {
+        hideToast();
+        toastTimerRef.current = null;
+      }, duration);
+    },
+    [hideToast, toastOpacity, toastTranslateY],
+  );
+
+  useEffect(
+    () => () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+        toastTimerRef.current = null;
+      }
+      if (anchorHighlightTimerRef.current) {
+        clearTimeout(anchorHighlightTimerRef.current);
+        anchorHighlightTimerRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const scrollToLibraryOffset = useCallback((offset: number) => {
+    const targetOffset = Math.max(0, offset);
+    const listRef = libraryListRef.current as unknown as {
+      getScrollResponder?: () => {
+        scrollTo?: (params: { x?: number; y?: number; animated?: boolean }) => void;
+        scrollResponderScrollTo?: (params: { x?: number; y?: number; animated?: boolean }) => void;
+      } | null;
+    };
+    const scrollResponder = listRef?.getScrollResponder?.();
+    if (scrollResponder?.scrollTo) {
+      scrollResponder.scrollTo({
+        x: 0,
+        y: targetOffset,
+        animated: true,
+      });
+      return;
+    }
+    scrollResponder?.scrollResponderScrollTo?.({
+      x: 0,
+      y: targetOffset,
+      animated: true,
+    });
+  }, []);
+
+  const handleAnchorLayout = useCallback(
+    (anchorId: LibraryAnchorId, event: LayoutChangeEvent) => {
+      anchorLayoutsRef.current = {
+        ...anchorLayoutsRef.current,
+        [anchorId]: event.nativeEvent.layout.y,
+      };
+    },
+    [],
+  );
+
+  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
+    const { y, height } = event.nativeEvent.layout;
+    anchorNavLayoutRef.current = {
+      y: Math.max(0, Math.round(y)),
+      height: Math.max(0, Math.round(height)),
+    };
+  }, []);
+
+  const handleAnchorPress = useCallback(
+    (anchorId: LibraryAnchorId) => {
+      setActiveAnchorId(anchorId);
+      const anchorOffset = anchorLayoutsRef.current[anchorId];
+      const label = LIBRARY_ANCHOR_LABELS[anchorId];
+      if (typeof anchorOffset === 'number') {
+        const anchorNavLayout = anchorNavLayoutRef.current;
+        const floatingTriggerY = anchorNavLayout
+          ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
+          : Number.POSITIVE_INFINITY;
+        const willShowFloatingAnchor =
+          Math.max(0, anchorOffset - LIBRARY_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
+
+        let scrollOffset: number = LIBRARY_ANCHOR_SCROLL_OFFSET;
+        if (isFloatingAnchorVisible || willShowFloatingAnchor) {
+          scrollOffset = isAnchorNavCollapsed
+            ? LIBRARY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
+            : LIBRARY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
+        }
+
+        scrollToLibraryOffset(anchorOffset - scrollOffset);
+        setHighlightedAnchorId(anchorId);
+        if (anchorHighlightTimerRef.current) {
+          clearTimeout(anchorHighlightTimerRef.current);
+        }
+        anchorHighlightTimerRef.current = setTimeout(() => {
+          setHighlightedAnchorId(null);
+          anchorHighlightTimerRef.current = null;
+        }, LIBRARY_ANCHOR_HIGHLIGHT_DURATION_MS);
+        showToast(`已跳转到 ${label}`, 'success');
+        return;
+      }
+      showToast(`${label}位置准备中，请稍后再试`, 'info');
+    },
+    [isAnchorNavCollapsed, isFloatingAnchorVisible, scrollToLibraryOffset, showToast],
+  );
+
+  const handleLibraryScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const activeOffset = event.nativeEvent.contentOffset.y + LIBRARY_ANCHOR_ACTIVE_OFFSET;
+    let nextAnchorId: LibraryAnchorId = LIBRARY_ANCHOR_ITEMS[0].id;
+
+    for (const item of LIBRARY_ANCHOR_ITEMS) {
+      const anchorOffset = anchorLayoutsRef.current[item.id];
+      if (typeof anchorOffset === 'number' && anchorOffset <= activeOffset) {
+        nextAnchorId = item.id;
+      }
+    }
+
+    setActiveAnchorId((currentAnchorId) =>
+      currentAnchorId === nextAnchorId ? currentAnchorId : nextAnchorId,
+    );
+
+    const anchorNavLayout = anchorNavLayoutRef.current;
+    const y = event.nativeEvent.contentOffset.y;
+    const nextFloatingAnchorVisible = anchorNavLayout
+      ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
+      : false;
+    setIsFloatingAnchorVisible((current) =>
+      current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible,
+    );
+    if (!nextFloatingAnchorVisible) {
+      setIsAnchorNavCollapsed((current) => (current ? current : true));
+    }
+  }, []);
+
+  const handleToggleAnchorNavCollapsed = useCallback(() => {
+    setIsAnchorNavCollapsed((current) => !current);
+  }, []);
 
   const loadList = useCallback(
     async (filter: MistakeListFilter, mode: ListLoadMode) => {
@@ -1567,18 +1885,26 @@ export default function LibraryScreen() {
   const handleSelectQuickView = useCallback(
     (quickViewId: LibraryQuickViewId) => {
       setActiveQuickViewId((current) => {
+        const currentIsRecentQuickView = isRecentQuickView(current);
+        const nextIsRecentQuickView = isRecentQuickView(quickViewId);
+
         if (current === quickViewId) {
-          if (quickViewId === 'recent') {
+          if (currentIsRecentQuickView && quickViewSortWasAppliedRef.current) {
             setSortKey(sortBeforeRecentQuickViewRef.current);
           }
+          quickViewSortWasAppliedRef.current = false;
           return null;
         }
 
-        if (quickViewId === 'recent') {
-          sortBeforeRecentQuickViewRef.current = sortKey;
-          setSortKey('recentAdded');
-        } else if (current === 'recent') {
+        if (nextIsRecentQuickView) {
+          if (!currentIsRecentQuickView) {
+            sortBeforeRecentQuickViewRef.current = sortKey;
+          }
+          setSortKey(getDefaultSortKeyForRecentQuickView(quickViewId));
+          quickViewSortWasAppliedRef.current = true;
+        } else if (currentIsRecentQuickView && quickViewSortWasAppliedRef.current) {
           setSortKey(sortBeforeRecentQuickViewRef.current);
+          quickViewSortWasAppliedRef.current = false;
         }
 
         return quickViewId;
@@ -1590,7 +1916,7 @@ export default function LibraryScreen() {
   const handleSelectSort = useCallback((nextSortKey: LibrarySortKey) => {
     setSortKey(nextSortKey);
     setSortSheetVisible(false);
-    setActiveQuickViewId((current) => (current === 'recent' ? null : current));
+    quickViewSortWasAppliedRef.current = false;
   }, []);
 
   const handleToggleSection = useCallback((sectionId: LibrarySectionId) => {
@@ -1602,9 +1928,10 @@ export default function LibraryScreen() {
 
   const handleClearQuickView = useCallback(() => {
     setActiveQuickViewId((current) => {
-      if (current === 'recent') {
+      if (isRecentQuickView(current) && quickViewSortWasAppliedRef.current) {
         setSortKey(sortBeforeRecentQuickViewRef.current);
       }
+      quickViewSortWasAppliedRef.current = false;
       return null;
     });
   }, []);
@@ -1702,8 +2029,8 @@ export default function LibraryScreen() {
     [activeQuickViewId, dateBounds, quickFilteredItems, selectedFilter, sortKey],
   );
   const groupedSections = useMemo(
-    () => groupMistakesByReviewDate(sortedItems, selectedFilter, dateBounds),
-    [dateBounds, selectedFilter, sortedItems],
+    () => groupMistakesByReviewDate(sortedItems, selectedFilter, dateBounds, activeQuickViewId),
+    [activeQuickViewId, dateBounds, selectedFilter, sortedItems],
   );
   const collapsedAwareSections = useMemo(
     () =>
@@ -1740,6 +2067,14 @@ export default function LibraryScreen() {
       if (activeQuickViewId === 'pinned') {
         return {
           message: '还没有置顶题目\n可以在题目右上角菜单中选择“置顶”',
+          showAddButton: false,
+          showClearQuickViewButton: true,
+        };
+      }
+
+      if (activeQuickViewId === 'recentViewed') {
+        return {
+          message: '暂无最近访问题目\n打开题目详情后会记录最近访问',
           showAddButton: false,
           showClearQuickViewButton: true,
         };
@@ -1865,9 +2200,15 @@ export default function LibraryScreen() {
     visibleCardCount,
   ]);
 
+  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
+  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
+  const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
+
   return (
+    <View style={styles.pageRoot}>
     <ScreenContainer withPadding={false} safeAreaEdges={['top']}>
       <SectionList<MistakeListItem, LibraryListSection>
+        ref={libraryListRef}
         sections={currentResultCount <= 0 ? [] : visibleSections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
@@ -1889,6 +2230,8 @@ export default function LibraryScreen() {
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
         stickySectionHeadersEnabled={selectedFilter !== 'mastered'}
         showsVerticalScrollIndicator={false}
+        onScroll={handleLibraryScroll}
+        scrollEventThrottle={16}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl
@@ -1902,7 +2245,21 @@ export default function LibraryScreen() {
           <View style={styles.screenContent}>
             <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
 
-            <View style={styles.searchPanel}>
+            <View onLayout={handleAnchorNavLayout}>
+              <QuickAnchorNav
+                items={LIBRARY_ANCHOR_ITEMS}
+                activeAnchorId={activeAnchorId}
+                horizontalCompact
+                onAnchorPress={handleAnchorPress}
+              />
+            </View>
+
+            <View
+              style={[
+                styles.searchPanel,
+                highlightedAnchorId === 'search' ? styles.anchorSectionHighlighted : null,
+              ]}
+              onLayout={(event) => handleAnchorLayout('search', event)}>
               <View style={styles.searchWrap}>
               <MaterialIcons size={24} name="search" color={colors.textMuted} />
               <TextInput
@@ -1958,6 +2315,9 @@ export default function LibraryScreen() {
               ) : null}
             </View>
 
+            <View
+              style={highlightedAnchorId === 'filters' ? styles.anchorSectionHighlighted : null}
+              onLayout={(event) => handleAnchorLayout('filters', event)}>
             <CardContainer style={styles.moduleFilterCard} padding={spacing.md}>
               <View style={styles.moduleFilterHeaderRow}>
                 <View style={styles.moduleFilterTitleWrap}>
@@ -2082,6 +2442,7 @@ export default function LibraryScreen() {
                 </Text>
               )}
             </CardContainer>
+            </View>
 
             <SegmentControl
               options={libraryMock.filters}
@@ -2089,13 +2450,22 @@ export default function LibraryScreen() {
               onChange={(next) => setSelectedFilter(next as LibraryFilterValue)}
             />
 
-            <QuickViewBar
-              activeQuickViewId={activeQuickViewId}
-              counts={quickViewCounts}
-              onSelect={handleSelectQuickView}
-            />
+            <View
+              style={highlightedAnchorId === 'quickView' ? styles.anchorSectionHighlighted : null}
+              onLayout={(event) => handleAnchorLayout('quickView', event)}>
+              <QuickViewBar
+                activeQuickViewId={activeQuickViewId}
+                counts={quickViewCounts}
+                onSelect={handleSelectQuickView}
+              />
+            </View>
 
-            <View style={styles.metaRow}>
+            <View
+              style={[
+                styles.metaRow,
+                highlightedAnchorId === 'list' ? styles.anchorSectionHighlighted : null,
+              ]}
+              onLayout={(event) => handleAnchorLayout('list', event)}>
               <Text style={styles.countText}>{resultCountText}</Text>
               <Pressable
                 accessibilityRole="button"
@@ -2141,10 +2511,69 @@ export default function LibraryScreen() {
         onSelect={handleSelectSort}
       />
     </ScreenContainer>
+    {shouldShowFloatingAnchorNav ? (
+      <View
+        pointerEvents="box-none"
+        style={[
+          styles.floatingAnchorWrap,
+          { top: floatingAnchorTop },
+        ]}>
+        <QuickAnchorNav
+          items={LIBRARY_ANCHOR_ITEMS}
+          activeAnchorId={activeAnchorId}
+          collapsed={isAnchorNavCollapsed}
+          floating
+          horizontalCompact
+          onToggleCollapsed={handleToggleAnchorNavCollapsed}
+          onAnchorPress={handleAnchorPress}
+        />
+      </View>
+    ) : null}
+    {toastVisible ? (
+      <Animated.View
+        pointerEvents="none"
+        style={[
+          styles.toastContainer,
+          {
+            bottom: toastBottomOffset,
+            opacity: toastOpacity,
+            transform: [{ translateY: toastTranslateY }],
+          },
+        ]}>
+        <View style={[styles.toastBubble, { backgroundColor: getToastBackgroundColor(toastType) }]}>
+          <Text maxFontSizeMultiplier={1.1} style={styles.toastText}>
+            {toastMessage}
+          </Text>
+        </View>
+      </Animated.View>
+    ) : null}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  pageRoot: {
+    flex: 1,
+  },
+  floatingAnchorWrap: {
+    position: 'absolute',
+    left: spacing.screenPadding,
+    right: spacing.screenPadding,
+    zIndex: 30,
+    elevation: 30,
+  },
+  anchorSectionHighlighted: {
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.success,
+    backgroundColor: '#FBFFFC',
+    padding: spacing.xs,
+    shadowColor: colors.success,
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 4,
+  },
   screenContent: {
     paddingHorizontal: spacing.screenPadding,
     paddingTop: spacing.lg,
@@ -2722,6 +3151,29 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.success,
     fontWeight: '700',
+  },
+  toastContainer: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    alignItems: 'center',
+  },
+  toastBubble: {
+    maxWidth: '86%',
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    shadowColor: colors.black,
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  toastText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '600',
+    textAlign: 'center',
   },
   cardPressable: {
     marginHorizontal: 14,
