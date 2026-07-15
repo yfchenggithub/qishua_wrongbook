@@ -102,9 +102,29 @@ async function ensureTextHighlightColumns(db: SQLite.SQLiteDatabase): Promise<vo
   );
 }
 
+async function ensureLibraryColumns(db: SQLite.SQLiteDatabase): Promise<void> {
+  await ensureColumn(
+    db,
+    'mistakes',
+    'is_pinned',
+    'ALTER TABLE mistakes ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0 CHECK (is_pinned IN (0, 1));',
+  );
+  await ensureColumn(
+    db,
+    'mistakes',
+    'last_viewed_at',
+    'ALTER TABLE mistakes ADD COLUMN last_viewed_at TEXT;',
+  );
+  await db.execAsync(`
+CREATE INDEX IF NOT EXISTS idx_mistakes_is_pinned ON mistakes(is_pinned);
+CREATE INDEX IF NOT EXISTS idx_mistakes_last_viewed_at ON mistakes(last_viewed_at);
+`);
+}
+
 async function ensureBackwardCompatibleColumns(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureReviewRecordsVoiceNoteColumn(db);
   await ensureTextHighlightColumns(db);
+  await ensureLibraryColumns(db);
 }
 
 async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {
@@ -149,9 +169,10 @@ async function runMigrationToCurrentVersion(
 
   if (currentVersion <= 0) {
     await rebuildDomainSchema(db);
-  } else {
-    await applyBaseSchema(db);
     await ensureBackwardCompatibleColumns(db);
+  } else {
+    await ensureBackwardCompatibleColumns(db);
+    await applyBaseSchema(db);
   }
   await setUserVersion(db, DATABASE_VERSION);
 }

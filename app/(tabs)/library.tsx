@@ -1,15 +1,16 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   Image,
   Modal,
   Pressable,
   RefreshControl,
   ScrollView,
+  SectionList,
+  type SectionListData,
   StyleSheet,
   Text,
   TextInput,
@@ -31,15 +32,55 @@ import * as MistakeListService from '@/src/services/MistakeListService';
 import type { MistakeModuleCount, MistakeTagFilterCount } from '@/src/services/MistakeListService';
 import { normalizeMistakeTagKey } from '@/src/services/MistakeTagService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
+import { addDays, parseLocalDateTime, startOfLocalDay } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const SEARCH_DEBOUNCE_MS = 350;
 const INLINE_MODULE_FILTER_OPTION_LIMIT = 3;
 const INLINE_TAG_FILTER_OPTION_LIMIT = 6;
+const INITIAL_VISIBLE_MISTAKE_LIMIT = 60;
+const VISIBLE_MISTAKE_INCREMENT = 60;
 const PAGE_SCOPE = 'LibraryScreen';
 
 type LibraryModuleFilterValue = string | null;
 type ListLoadMode = 'initial' | 'refresh' | 'filter';
+type LibraryQuickViewId = 'today' | 'overdue' | 'recent' | 'never' | 'nearlyDone' | 'pinned';
+type LibrarySortKey =
+  | 'reviewTime'
+  | 'overdueLongest'
+  | 'recentAdded'
+  | 'recentViewed'
+  | 'reviewCountAsc'
+  | 'nearMastered'
+  | 'title';
+type LibrarySectionId = 'overdue' | 'today' | 'future7' | 'later' | 'noPlan' | 'flat';
+
+interface LibraryDateBounds {
+  startOfToday: Date;
+  startOfTomorrow: Date;
+  startOfEightDaysLater: Date;
+}
+
+interface LibraryQuickViewOption {
+  id: LibraryQuickViewId;
+  label: string;
+  icon: ComponentProps<typeof MaterialIcons>['name'];
+  tone: 'success' | 'danger' | 'info' | 'neutral' | 'warning' | 'pinned';
+}
+
+interface LibrarySortOption {
+  key: LibrarySortKey;
+  label: string;
+  description: string;
+}
+
+interface LibraryListSection {
+  id: LibrarySectionId;
+  title: string;
+  count: number;
+  defaultCollapsed: boolean;
+  data: MistakeListItem[];
+}
 
 interface LibraryModuleFilterOption {
   key: string;
@@ -53,6 +94,75 @@ interface LibraryTagFilterOption {
   value: string;
   label: string;
   count: number;
+}
+
+const QUICK_VIEW_OPTIONS: readonly LibraryQuickViewOption[] = [
+  { id: 'today', label: '今日应做', icon: 'event-available', tone: 'success' },
+  { id: 'overdue', label: '已逾期', icon: 'timer', tone: 'danger' },
+  { id: 'recent', label: '最近添加', icon: 'schedule', tone: 'info' },
+  { id: 'never', label: '从未复做', icon: 'history', tone: 'neutral' },
+  { id: 'nearlyDone', label: '接近完成', icon: 'filter-alt', tone: 'warning' },
+  { id: 'pinned', label: '我的置顶', icon: 'star-outline', tone: 'pinned' },
+] as const;
+
+const SORT_OPTIONS: readonly LibrarySortOption[] = [
+  { key: 'reviewTime', label: '复做时间最近', description: '逾期和今日题优先' },
+  { key: 'overdueLongest', label: '逾期最久', description: '逾期天数从大到小' },
+  { key: 'recentAdded', label: '最近添加', description: '按录入时间倒序' },
+  { key: 'recentViewed', label: '最近查看', description: '未查看的排在最后' },
+  { key: 'reviewCountAsc', label: '复做次数少', description: '优先处理刷数更少的题' },
+  { key: 'nearMastered', label: '接近七刷', description: '刷数高的排在前面' },
+  { key: 'title', label: '标题名称', description: '按标题稳定排序' },
+] as const;
+
+function getQuickViewToneColor(tone: LibraryQuickViewOption['tone']): string {
+  if (tone === 'danger') {
+    return colors.danger;
+  }
+  if (tone === 'info') {
+    return '#2563EB';
+  }
+  if (tone === 'warning') {
+    return '#D97706';
+  }
+  if (tone === 'pinned') {
+    return '#D97706';
+  }
+  if (tone === 'neutral') {
+    return colors.textSecondary;
+  }
+  return colors.success;
+}
+
+function getSectionColor(sectionId: LibrarySectionId): string {
+  if (sectionId === 'overdue') {
+    return colors.danger;
+  }
+  if (sectionId === 'today') {
+    return '#F97316';
+  }
+  if (sectionId === 'future7') {
+    return '#2563EB';
+  }
+  return colors.textSecondary;
+}
+
+function getSectionIcon(
+  sectionId: LibrarySectionId,
+): ComponentProps<typeof MaterialIcons>['name'] {
+  if (sectionId === 'overdue') {
+    return 'error-outline';
+  }
+  if (sectionId === 'today') {
+    return 'event-available';
+  }
+  if (sectionId === 'future7') {
+    return 'date-range';
+  }
+  if (sectionId === 'later') {
+    return 'event-note';
+  }
+  return 'pending-actions';
 }
 
 function sanitizeNextReviewText(text: string): string {
@@ -84,6 +194,7 @@ function buildLibraryListFilter(
     keyword,
     module,
     tagKeys,
+    limit: null,
   };
 }
 
@@ -182,6 +293,292 @@ function normalizeMistakeId(id: string): string | null {
   return normalized.length > 0 ? normalized : null;
 }
 
+function buildLibraryDateBounds(baseDate = new Date()): LibraryDateBounds {
+  const startOfToday = startOfLocalDay(baseDate);
+  const startOfTomorrow = addDays(startOfToday, 1);
+  const startOfEightDaysLater = addDays(startOfToday, 8);
+  return {
+    startOfToday,
+    startOfTomorrow,
+    startOfEightDaysLater,
+  };
+}
+
+function getTimeValue(value: string | null | undefined): number | null {
+  const parsed = parseLocalDateTime(value ?? null);
+  if (!parsed) {
+    return null;
+  }
+  const time = parsed.getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
+function isTodayDueItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
+  if (item.status !== 'active') {
+    return false;
+  }
+  const nextReviewTime = getTimeValue(item.nextReviewAt);
+  return (
+    nextReviewTime !== null
+    && nextReviewTime >= bounds.startOfToday.getTime()
+    && nextReviewTime < bounds.startOfTomorrow.getTime()
+  );
+}
+
+function isOverdueItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
+  if (item.status !== 'active') {
+    return false;
+  }
+  const nextReviewTime = getTimeValue(item.nextReviewAt);
+  return nextReviewTime !== null && nextReviewTime < bounds.startOfToday.getTime();
+}
+
+function isNeverReviewedItem(item: MistakeListItem): boolean {
+  return item.reviewCount === 0 && item.status !== 'archived';
+}
+
+function isNearlyDoneItem(item: MistakeListItem): boolean {
+  return item.status === 'active' && (item.reviewCount === 5 || item.reviewCount === 6);
+}
+
+function getQuickViewCounts(
+  sourceItems: readonly MistakeListItem[],
+  bounds: LibraryDateBounds,
+): Record<LibraryQuickViewId, number> {
+  const counts: Record<LibraryQuickViewId, number> = {
+    today: 0,
+    overdue: 0,
+    recent: sourceItems.length,
+    never: 0,
+    nearlyDone: 0,
+    pinned: 0,
+  };
+
+  for (const item of sourceItems) {
+    if (isTodayDueItem(item, bounds)) {
+      counts.today += 1;
+    }
+    if (isOverdueItem(item, bounds)) {
+      counts.overdue += 1;
+    }
+    if (isNeverReviewedItem(item)) {
+      counts.never += 1;
+    }
+    if (isNearlyDoneItem(item)) {
+      counts.nearlyDone += 1;
+    }
+    if (item.isPinned) {
+      counts.pinned += 1;
+    }
+  }
+
+  return counts;
+}
+
+function filterMistakesByQuickView(
+  sourceItems: readonly MistakeListItem[],
+  quickViewId: LibraryQuickViewId | null,
+  bounds: LibraryDateBounds,
+): MistakeListItem[] {
+  if (!quickViewId || quickViewId === 'recent') {
+    return [...sourceItems];
+  }
+
+  return sourceItems.filter((item) => {
+    if (quickViewId === 'today') {
+      return isTodayDueItem(item, bounds);
+    }
+    if (quickViewId === 'overdue') {
+      return isOverdueItem(item, bounds);
+    }
+    if (quickViewId === 'never') {
+      return isNeverReviewedItem(item);
+    }
+    if (quickViewId === 'nearlyDone') {
+      return isNearlyDoneItem(item);
+    }
+    return item.isPinned;
+  });
+}
+
+function compareNullableTime(
+  leftValue: string | null | undefined,
+  rightValue: string | null | undefined,
+  direction: 'asc' | 'desc',
+): number {
+  const leftTime = getTimeValue(leftValue);
+  const rightTime = getTimeValue(rightValue);
+  if (leftTime === null && rightTime === null) {
+    return 0;
+  }
+  if (leftTime === null) {
+    return 1;
+  }
+  if (rightTime === null) {
+    return -1;
+  }
+  return direction === 'asc' ? leftTime - rightTime : rightTime - leftTime;
+}
+
+function sortMistakes(
+  sourceItems: readonly MistakeListItem[],
+  sortKey: LibrarySortKey,
+  bounds: LibraryDateBounds,
+  selectedFilter: LibraryFilterValue,
+  activeQuickViewId: LibraryQuickViewId | null,
+): MistakeListItem[] {
+  const indexById = new Map(sourceItems.map((item, index) => [item.id, index]));
+  const itemsWithIndex = [...sourceItems];
+
+  itemsWithIndex.sort((left, right) => {
+    if (activeQuickViewId !== 'pinned' && left.isPinned !== right.isPinned) {
+      return left.isPinned ? -1 : 1;
+    }
+
+    let result = 0;
+    if (sortKey === 'reviewTime') {
+      result = selectedFilter === 'mastered'
+        ? compareNullableTime(left.updatedAt, right.updatedAt, 'desc')
+        : compareNullableTime(left.nextReviewAt, right.nextReviewAt, 'asc');
+    } else if (sortKey === 'overdueLongest') {
+      const leftOverdueTime = isOverdueItem(left, bounds) ? getTimeValue(left.nextReviewAt) : null;
+      const rightOverdueTime = isOverdueItem(right, bounds) ? getTimeValue(right.nextReviewAt) : null;
+      result = compareNullableTime(leftOverdueTime === null ? null : new Date(leftOverdueTime).toISOString(), rightOverdueTime === null ? null : new Date(rightOverdueTime).toISOString(), 'asc');
+      if (leftOverdueTime === null && rightOverdueTime !== null) {
+        result = 1;
+      } else if (leftOverdueTime !== null && rightOverdueTime === null) {
+        result = -1;
+      }
+    } else if (sortKey === 'recentAdded') {
+      result = compareNullableTime(left.createdAt, right.createdAt, 'desc');
+    } else if (sortKey === 'recentViewed') {
+      result = compareNullableTime(left.lastViewedAt ?? null, right.lastViewedAt ?? null, 'desc');
+    } else if (sortKey === 'reviewCountAsc') {
+      result = left.reviewCount - right.reviewCount;
+    } else if (sortKey === 'nearMastered') {
+      result = right.reviewCount - left.reviewCount;
+    } else {
+      result = left.title.localeCompare(right.title, 'zh-Hans-CN');
+    }
+
+    if (result !== 0) {
+      return result;
+    }
+
+    const createdTieBreak = compareNullableTime(left.createdAt, right.createdAt, 'desc');
+    if (createdTieBreak !== 0) {
+      return createdTieBreak;
+    }
+
+    return (indexById.get(left.id) ?? 0) - (indexById.get(right.id) ?? 0);
+  });
+
+  return itemsWithIndex;
+}
+
+function buildSection(
+  id: LibrarySectionId,
+  title: string,
+  items: MistakeListItem[],
+  defaultCollapsed: boolean,
+): LibraryListSection | null {
+  if (items.length <= 0) {
+    return null;
+  }
+  return {
+    id,
+    title,
+    count: items.length,
+    defaultCollapsed,
+    data: items,
+  };
+}
+
+function groupMistakesByReviewDate(
+  sourceItems: readonly MistakeListItem[],
+  selectedFilter: LibraryFilterValue,
+  bounds: LibraryDateBounds,
+): LibraryListSection[] {
+  if (selectedFilter === 'mastered') {
+    return [
+      {
+        id: 'flat',
+        title: '',
+        count: sourceItems.length,
+        defaultCollapsed: false,
+        data: [...sourceItems],
+      },
+    ];
+  }
+
+  const overdue: MistakeListItem[] = [];
+  const today: MistakeListItem[] = [];
+  const future7: MistakeListItem[] = [];
+  const later: MistakeListItem[] = [];
+  const noPlan: MistakeListItem[] = [];
+
+  const todayStart = bounds.startOfToday.getTime();
+  const tomorrowStart = bounds.startOfTomorrow.getTime();
+  const eightDaysLaterStart = bounds.startOfEightDaysLater.getTime();
+
+  for (const item of sourceItems) {
+    const nextReviewTime = getTimeValue(item.nextReviewAt);
+    if (nextReviewTime === null) {
+      if (item.status !== 'archived') {
+        noPlan.push(item);
+      }
+      continue;
+    }
+    if (nextReviewTime < todayStart) {
+      overdue.push(item);
+    } else if (nextReviewTime >= todayStart && nextReviewTime < tomorrowStart) {
+      today.push(item);
+    } else if (nextReviewTime >= tomorrowStart && nextReviewTime < eightDaysLaterStart) {
+      future7.push(item);
+    } else {
+      later.push(item);
+    }
+  }
+
+  return [
+    buildSection('overdue', '已逾期', overdue, false),
+    buildSection('today', '今天应复做', today, false),
+    buildSection('future7', '未来 7 天', future7, true),
+    buildSection('later', '更晚复做', later, true),
+    buildSection('noPlan', '暂无复做计划', noPlan, true),
+  ].filter((section): section is LibraryListSection => section !== null);
+}
+
+function limitLibrarySectionData(
+  sections: readonly LibraryListSection[],
+  limit: number,
+): LibraryListSection[] {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  let remaining = normalizedLimit;
+
+  return sections.reduce<LibraryListSection[]>((visibleSections, section) => {
+    const isCollapsedHeader = section.count > 0 && section.data.length <= 0;
+    if (isCollapsedHeader) {
+      visibleSections.push(section);
+      return visibleSections;
+    }
+
+    if (remaining <= 0) {
+      return visibleSections;
+    }
+
+    const visibleData = section.data.slice(0, remaining);
+    remaining -= visibleData.length;
+    if (visibleData.length > 0) {
+      visibleSections.push({
+        ...section,
+        data: visibleData,
+      });
+    }
+    return visibleSections;
+  }, []);
+}
+
 function ThumbnailPlaceholder() {
   return (
     <View style={styles.thumb}>
@@ -197,11 +594,13 @@ function MistakeLibraryCard({
   isDeleting = false,
   onPress,
   onLongPress,
+  onMorePress,
 }: {
   item: MistakeListItem;
   isDeleting?: boolean;
   onPress: () => void;
   onLongPress: () => void;
+  onMorePress: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const didLongPressRef = useRef(false);
@@ -276,6 +675,11 @@ function MistakeLibraryCard({
                 </Text>
               </View>
               <View style={styles.cardTopLineEnd}>
+                {item.isPinned ? (
+                  <View style={styles.pinnedMark}>
+                    <MaterialIcons name="star" size={13} color="#D97706" />
+                  </View>
+                ) : null}
                 <View style={styles.difficultyPill}>
                   <Text
                     numberOfLines={1}
@@ -285,7 +689,17 @@ function MistakeLibraryCard({
                     难度 {item.difficulty}
                   </Text>
                 </View>
-                <MaterialIcons name="chevron-right" size={18} style={styles.arrow} />
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={item.isPinned ? '打开题目菜单，当前已置顶' : '打开题目菜单'}
+                  hitSlop={8}
+                  onPress={onMorePress}
+                  style={({ pressed }) => [
+                    styles.cardMoreButton,
+                    pressed ? styles.cardMoreButtonPressed : null,
+                  ]}>
+                  <MaterialIcons name="more-vert" size={18} color={colors.textMuted} />
+                </Pressable>
               </View>
             </View>
 
@@ -356,6 +770,186 @@ function MistakeLibraryCard({
         ) : null}
       </CardContainer>
     </Pressable>
+  );
+}
+
+function QuickViewBar({
+  activeQuickViewId,
+  counts,
+  onSelect,
+}: {
+  activeQuickViewId: LibraryQuickViewId | null;
+  counts: Record<LibraryQuickViewId, number>;
+  onSelect: (quickViewId: LibraryQuickViewId) => void;
+}) {
+  return (
+    <View style={styles.quickViewBlock}>
+      <Text style={styles.quickViewTitle}>快速查看</Text>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.quickViewContent}>
+        {QUICK_VIEW_OPTIONS.map((option) => {
+          const selected = activeQuickViewId === option.id;
+          const count = counts[option.id] ?? 0;
+          const countText = option.id === 'recent' ? '' : ` ${count}`;
+          return (
+            <Pressable
+              key={option.id}
+              accessibilityRole="button"
+              accessibilityLabel={`${selected ? '取消' : '启用'}快速查看：${option.label}`}
+              onPress={() => onSelect(option.id)}
+              style={({ pressed }) => [
+                styles.quickViewChip,
+                selected ? styles.quickViewChipSelected : null,
+                selected && option.tone === 'danger' ? styles.quickViewChipDangerSelected : null,
+                selected && option.tone === 'info' ? styles.quickViewChipInfoSelected : null,
+                selected && option.tone === 'warning' ? styles.quickViewChipWarningSelected : null,
+                selected && option.tone === 'pinned' ? styles.quickViewChipPinnedSelected : null,
+                pressed ? styles.moduleFilterChipPressed : null,
+              ]}>
+              <MaterialIcons
+                name={option.icon}
+                size={16}
+                color={selected ? getQuickViewToneColor(option.tone) : colors.textSecondary}
+              />
+              <Text
+                numberOfLines={1}
+                style={[
+                  styles.quickViewChipText,
+                  selected ? { color: getQuickViewToneColor(option.tone) } : null,
+                ]}>
+                {option.label}
+                {countText}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
+function SortSelectorSheet({
+  visible,
+  selectedSortKey,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  selectedSortKey: LibrarySortKey;
+  onClose: () => void;
+  onSelect: (sortKey: LibrarySortKey) => void;
+}) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.moduleSheetOverlay}>
+        <Pressable style={styles.moduleSheetBackdrop} onPress={onClose} />
+        <View style={styles.moduleSheet}>
+          <View style={styles.moduleSheetHandle} />
+          <View style={styles.moduleSheetHeader}>
+            <View style={styles.moduleSheetHeaderTextWrap}>
+              <Text style={styles.moduleSheetTitle}>排序方式</Text>
+              <Text style={styles.moduleSheetSubtitle}>切换后立即应用到当前结果</Text>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="关闭排序选择"
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.moduleSheetCloseButton,
+                pressed ? styles.moduleSheetCloseButtonPressed : null,
+              ]}>
+              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+            </Pressable>
+          </View>
+
+          <View style={styles.sortSheetList}>
+            {SORT_OPTIONS.map((option) => {
+              const selected = selectedSortKey === option.key;
+              return (
+                <Pressable
+                  key={option.key}
+                  accessibilityRole="button"
+                  accessibilityLabel={`排序：${option.label}`}
+                  onPress={() => onSelect(option.key)}
+                  style={({ pressed }) => [
+                    styles.sortSheetOption,
+                    selected ? styles.sortSheetOptionSelected : null,
+                    pressed ? styles.moduleFilterChipPressed : null,
+                  ]}>
+                  <View style={styles.sortSheetOptionTextWrap}>
+                    <Text
+                      numberOfLines={1}
+                      style={[
+                        styles.sortSheetOptionTitle,
+                        selected ? styles.sortSheetOptionTitleSelected : null,
+                      ]}>
+                      {option.label}
+                    </Text>
+                    <Text numberOfLines={1} style={styles.sortSheetOptionDescription}>
+                      {option.description}
+                    </Text>
+                  </View>
+                  {selected ? <MaterialIcons name="check" size={20} color={colors.success} /> : null}
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function ReviewSectionHeader({
+  section,
+  collapsed,
+  onToggle,
+}: {
+  section: SectionListData<MistakeListItem, LibraryListSection>;
+  collapsed: boolean;
+  onToggle: (sectionId: LibrarySectionId) => void;
+}) {
+  if (section.id === 'flat') {
+    return null;
+  }
+
+  return (
+    <View style={styles.sectionHeaderOuter}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${collapsed ? '展开' : '收起'}${section.title}`}
+        onPress={() => onToggle(section.id)}
+        style={({ pressed }) => [
+          styles.reviewSectionHeader,
+          pressed ? styles.moduleFilterChipPressed : null,
+        ]}>
+        <View style={styles.reviewSectionTitleWrap}>
+          <MaterialIcons
+            name={getSectionIcon(section.id)}
+            size={18}
+            color={getSectionColor(section.id)}
+          />
+          <Text
+            numberOfLines={1}
+            style={[
+              styles.reviewSectionTitle,
+              { color: getSectionColor(section.id) },
+            ]}>
+            {section.title} · {section.count}题
+          </Text>
+        </View>
+        <View style={styles.reviewSectionToggle}>
+          <Text style={styles.reviewSectionToggleText}>{collapsed ? '展开' : '收起'}</Text>
+          <MaterialIcons
+            name={collapsed ? 'keyboard-arrow-down' : 'keyboard-arrow-up'}
+            size={20}
+            color={colors.textSecondary}
+          />
+        </View>
+      </Pressable>
+    </View>
   );
 }
 
@@ -515,6 +1109,10 @@ export default function LibraryScreen() {
     { key: 'all', value: null, label: '全部', count: 0 },
   ]);
   const [tagFilterOptions, setTagFilterOptions] = useState<LibraryTagFilterOption[]>([]);
+  const [activeQuickViewId, setActiveQuickViewId] = useState<LibraryQuickViewId | null>(null);
+  const [sortKey, setSortKey] = useState<LibrarySortKey>('reviewTime');
+  const [sortSheetVisible, setSortSheetVisible] = useState(false);
+  const [collapsedSectionIds, setCollapsedSectionIds] = useState<Partial<Record<LibrarySectionId, boolean>>>({});
   const [isModuleFilterLoading, setIsModuleFilterLoading] = useState(false);
   const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
   const [moduleFilterErrorMessage, setModuleFilterErrorMessage] = useState<string | null>(null);
@@ -522,9 +1120,11 @@ export default function LibraryScreen() {
   const [moduleFilterSheetVisible, setModuleFilterSheetVisible] = useState(false);
   const [tagFilterSheetVisible, setTagFilterSheetVisible] = useState(false);
   const [items, setItems] = useState<MistakeListItem[]>([]);
+  const [visibleItemLimit, setVisibleItemLimit] = useState(INITIAL_VISIBLE_MISTAKE_LIMIT);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [deletingMistakeId, setDeletingMistakeId] = useState<string | null>(null);
+  const [pinningMistakeId, setPinningMistakeId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const hasLoadedRef = useRef(false);
@@ -532,6 +1132,7 @@ export default function LibraryScreen() {
   const requestIdRef = useRef(0);
   const moduleFilterRequestIdRef = useRef(0);
   const tagFilterRequestIdRef = useRef(0);
+  const sortBeforeRecentQuickViewRef = useRef<LibrarySortKey>('reviewTime');
 
   const loadList = useCallback(
     async (filter: MistakeListFilter, mode: ListLoadMode) => {
@@ -658,6 +1259,17 @@ export default function LibraryScreen() {
 
     return () => clearTimeout(timer);
   }, [searchText]);
+
+  useEffect(() => {
+    setVisibleItemLimit(INITIAL_VISIBLE_MISTAKE_LIMIT);
+  }, [
+    activeQuickViewId,
+    debouncedKeyword,
+    selectedFilter,
+    selectedModuleFilter,
+    selectedTagFilters,
+    sortKey,
+  ]);
 
   useEffect(() => {
     const filter = buildLibraryListFilter(
@@ -803,9 +1415,55 @@ export default function LibraryScreen() {
         Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
         return;
       }
+      const viewedAt = new Date().toISOString();
+      setItems((currentItems) =>
+        currentItems.map((currentItem) =>
+          currentItem.id === routeId ? { ...currentItem, lastViewedAt: viewedAt } : currentItem,
+        ),
+      );
+      void MistakeListService.markMistakeViewed(routeId);
       router.push(`/mistake/${routeId}` as never);
     },
     [deletingMistakeId, router]
+  );
+
+  const handleTogglePinned = useCallback(
+    async (item: MistakeListItem) => {
+      if (deletingMistakeId !== null || pinningMistakeId !== null || isLoading || isRefreshing) {
+        return;
+      }
+
+      const mistakeId = normalizeMistakeId(item.id);
+      if (!mistakeId) {
+        Logger.warn(PAGE_SCOPE, 'Skip pinning because mistake id is empty.', { id: item.id });
+        return;
+      }
+
+      const nextPinned = !item.isPinned;
+      setPinningMistakeId(mistakeId);
+      try {
+        const updated = await MistakeListService.setMistakePinned(mistakeId, nextPinned);
+        if (!updated) {
+          Alert.alert('操作失败', '没有找到这道错题，请刷新后重试。');
+          return;
+        }
+        setItems((currentItems) =>
+          currentItems.map((currentItem) =>
+            currentItem.id === mistakeId ? { ...currentItem, ...updated } : currentItem,
+          ),
+        );
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to toggle pinned state from library.', {
+          mistakeId,
+          nextPinned,
+          error,
+        });
+        Alert.alert('操作失败', error instanceof Error ? error.message : '置顶状态保存失败，请稍后重试。');
+      } finally {
+        setPinningMistakeId(null);
+      }
+    },
+    [deletingMistakeId, isLoading, isRefreshing, pinningMistakeId],
   );
 
   const handleLongPressDelete = useCallback(
@@ -867,6 +1525,93 @@ export default function LibraryScreen() {
     },
     [deletingMistakeId, isLoading, isRefreshing],
   );
+
+  const handleOpenMistakeMenu = useCallback(
+    (item: MistakeListItem) => {
+      if (deletingMistakeId !== null || pinningMistakeId !== null || isLoading || isRefreshing) {
+        return;
+      }
+
+      Alert.alert(
+        '题目操作',
+        item.title,
+        [
+          {
+            text: item.isPinned ? '取消置顶' : '置顶题目',
+            onPress: () => {
+              void handleTogglePinned(item);
+            },
+          },
+          {
+            text: '删除题目',
+            style: 'destructive',
+            onPress: () => handleLongPressDelete(item),
+          },
+          {
+            text: '取消',
+            style: 'cancel',
+          },
+        ],
+      );
+    },
+    [
+      deletingMistakeId,
+      handleLongPressDelete,
+      handleTogglePinned,
+      isLoading,
+      isRefreshing,
+      pinningMistakeId,
+    ],
+  );
+
+  const handleSelectQuickView = useCallback(
+    (quickViewId: LibraryQuickViewId) => {
+      setActiveQuickViewId((current) => {
+        if (current === quickViewId) {
+          if (quickViewId === 'recent') {
+            setSortKey(sortBeforeRecentQuickViewRef.current);
+          }
+          return null;
+        }
+
+        if (quickViewId === 'recent') {
+          sortBeforeRecentQuickViewRef.current = sortKey;
+          setSortKey('recentAdded');
+        } else if (current === 'recent') {
+          setSortKey(sortBeforeRecentQuickViewRef.current);
+        }
+
+        return quickViewId;
+      });
+    },
+    [sortKey],
+  );
+
+  const handleSelectSort = useCallback((nextSortKey: LibrarySortKey) => {
+    setSortKey(nextSortKey);
+    setSortSheetVisible(false);
+    setActiveQuickViewId((current) => (current === 'recent' ? null : current));
+  }, []);
+
+  const handleToggleSection = useCallback((sectionId: LibrarySectionId) => {
+    setCollapsedSectionIds((current) => ({
+      ...current,
+      [sectionId]: !(current[sectionId] ?? (sectionId === 'future7' || sectionId === 'later' || sectionId === 'noPlan')),
+    }));
+  }, []);
+
+  const handleClearQuickView = useCallback(() => {
+    setActiveQuickViewId((current) => {
+      if (current === 'recent') {
+        setSortKey(sortBeforeRecentQuickViewRef.current);
+      }
+      return null;
+    });
+  }, []);
+
+  const handleShowMoreResults = useCallback(() => {
+    setVisibleItemLimit((currentLimit) => currentLimit + VISIBLE_MISTAKE_INCREMENT);
+  }, []);
 
   const inlineModuleFilterOptions = useMemo<LibraryModuleFilterOption[]>(() => {
     if (moduleFilterOptions.length <= INLINE_MODULE_FILTER_OPTION_LIMIT) {
@@ -943,11 +1688,71 @@ export default function LibraryScreen() {
   const moduleFilterHintText = moduleFilterErrorMessage
     ? `模块统计失败：${moduleFilterErrorMessage}`
     : formatLibraryModuleFilterHint(selectedModuleFilterOption, selectedModuleFilter);
-  const currentResultCount = moduleFilterErrorMessage
-    ? items.length
-    : (selectedModuleFilterOption?.count ?? items.length);
+  const dateBounds = useMemo(() => buildLibraryDateBounds(), []);
+  const quickViewCounts = useMemo(
+    () => getQuickViewCounts(items, dateBounds),
+    [dateBounds, items],
+  );
+  const quickFilteredItems = useMemo(
+    () => filterMistakesByQuickView(items, activeQuickViewId, dateBounds),
+    [activeQuickViewId, dateBounds, items],
+  );
+  const sortedItems = useMemo(
+    () => sortMistakes(quickFilteredItems, sortKey, dateBounds, selectedFilter, activeQuickViewId),
+    [activeQuickViewId, dateBounds, quickFilteredItems, selectedFilter, sortKey],
+  );
+  const groupedSections = useMemo(
+    () => groupMistakesByReviewDate(sortedItems, selectedFilter, dateBounds),
+    [dateBounds, selectedFilter, sortedItems],
+  );
+  const collapsedAwareSections = useMemo(
+    () =>
+      groupedSections.map((section) => {
+        const collapsed = collapsedSectionIds[section.id] ?? section.defaultCollapsed;
+        return collapsed ? { ...section, data: [] } : section;
+      }),
+    [collapsedSectionIds, groupedSections],
+  );
+  const visibleSections = useMemo(
+    () => limitLibrarySectionData(collapsedAwareSections, visibleItemLimit),
+    [collapsedAwareSections, visibleItemLimit],
+  );
+  const currentResultCount = sortedItems.length;
+  const visibleCardCount = visibleSections.reduce((sum, section) => sum + section.data.length, 0);
+  const expandedResultLimit = Math.min(currentResultCount, visibleItemLimit);
+  const hasMoreVisibleResults = currentResultCount > visibleItemLimit;
+  const resultCountText =
+    currentResultCount > expandedResultLimit
+      ? `当前匹配 ${currentResultCount} 题 · 已展开 ${expandedResultLimit}`
+      : `当前匹配 ${currentResultCount} 题`;
+  const selectedSortOption = SORT_OPTIONS.find((option) => option.key === sortKey) ?? SORT_OPTIONS[0];
 
   const emptyConfig = useMemo(() => {
+    if (activeQuickViewId) {
+      if (activeQuickViewId === 'overdue') {
+        return {
+          message: '暂无已逾期题目\n你已经按计划完成了所有复做',
+          showAddButton: false,
+          showClearQuickViewButton: true,
+        };
+      }
+
+      if (activeQuickViewId === 'pinned') {
+        return {
+          message: '还没有置顶题目\n可以在题目右上角菜单中选择“置顶”',
+          showAddButton: false,
+          showClearQuickViewButton: true,
+        };
+      }
+
+      const activeOption = QUICK_VIEW_OPTIONS.find((option) => option.id === activeQuickViewId);
+      return {
+        message: `暂无${activeOption?.label ?? '相关'}题目`,
+        showAddButton: false,
+        showClearQuickViewButton: true,
+      };
+    }
+
     if (debouncedKeyword.length > 0) {
       return {
         message: '没有找到相关错题',
@@ -987,7 +1792,7 @@ export default function LibraryScreen() {
       message: '暂无错题，去新增页录入第一题',
       showAddButton: true,
     };
-  }, [debouncedKeyword.length, selectedFilter, selectedModuleFilter, selectedTagFilterCount]);
+  }, [activeQuickViewId, debouncedKeyword.length, selectedFilter, selectedModuleFilter, selectedTagFilterCount]);
 
   const listEmpty = useMemo(() => {
     if (isLoading) {
@@ -1018,24 +1823,71 @@ export default function LibraryScreen() {
             <Text style={styles.goAddButtonText}>去新增错题</Text>
           </Pressable>
         ) : null}
+        {emptyConfig.showClearQuickViewButton ? (
+          <Pressable onPress={handleClearQuickView} style={styles.goAddButton}>
+            <Text style={styles.goAddButtonText}>查看全部题目</Text>
+          </Pressable>
+        ) : null}
       </View>
     );
-  }, [emptyConfig, errorMessage, handleGoAddMistake, handleRetry, isLoading]);
+  }, [emptyConfig, errorMessage, handleClearQuickView, handleGoAddMistake, handleRetry, isLoading]);
+
+  const listFooter = useMemo(() => {
+    if (isLoading || currentResultCount <= 0 || !hasMoreVisibleResults) {
+      return null;
+    }
+
+    return (
+      <View style={styles.listFooter}>
+        <Text style={styles.listFooterHint}>
+          已显示 {visibleCardCount} 题，优先用上方搜索和筛选缩小范围
+        </Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="继续显示更多错题"
+          onPress={handleShowMoreResults}
+          style={({ pressed }) => [
+            styles.showMoreButton,
+            pressed ? styles.moduleFilterChipPressed : null,
+          ]}>
+          <Text style={styles.showMoreButtonText}>
+            继续显示更多
+          </Text>
+          <MaterialIcons name="expand-more" size={20} color={colors.success} />
+        </Pressable>
+      </View>
+    );
+  }, [
+    currentResultCount,
+    handleShowMoreResults,
+    hasMoreVisibleResults,
+    isLoading,
+    visibleCardCount,
+  ]);
 
   return (
     <ScreenContainer withPadding={false} safeAreaEdges={['top']}>
-      <FlatList<MistakeListItem>
-        data={items}
+      <SectionList<MistakeListItem, LibraryListSection>
+        sections={currentResultCount <= 0 ? [] : visibleSections}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
           <MistakeLibraryCard
             item={item}
             isDeleting={deletingMistakeId === item.id}
             onPress={() => handleOpenDetail(item.id)}
-            onLongPress={() => handleLongPressDelete(item)}
+            onLongPress={() => handleOpenMistakeMenu(item)}
+            onMorePress={() => handleOpenMistakeMenu(item)}
+          />
+        )}
+        renderSectionHeader={({ section }) => (
+          <ReviewSectionHeader
+            section={section}
+            collapsed={collapsedSectionIds[section.id] ?? section.defaultCollapsed}
+            onToggle={handleToggleSection}
           />
         )}
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
+        stickySectionHeadersEnabled={selectedFilter !== 'mastered'}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         refreshControl={
@@ -1237,13 +2089,33 @@ export default function LibraryScreen() {
               onChange={(next) => setSelectedFilter(next as LibraryFilterValue)}
             />
 
+            <QuickViewBar
+              activeQuickViewId={activeQuickViewId}
+              counts={quickViewCounts}
+              onSelect={handleSelectQuickView}
+            />
+
             <View style={styles.metaRow}>
-              <Text style={styles.countText}>当前共 {currentResultCount} 题</Text>
-              {isRefreshing ? <Text style={styles.refreshText}>刷新中...</Text> : null}
+              <Text style={styles.countText}>{resultCountText}</Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`当前排序：${selectedSortOption.label}`}
+                onPress={() => setSortSheetVisible(true)}
+                style={({ pressed }) => [
+                  styles.sortButton,
+                  pressed ? styles.moduleFilterChipPressed : null,
+                ]}>
+                <Text numberOfLines={1} style={styles.sortButtonText}>
+                  排序：{selectedSortOption.label}
+                </Text>
+                <MaterialIcons name="arrow-drop-down" size={20} color={colors.textPrimary} />
+              </Pressable>
             </View>
+            {isRefreshing ? <Text style={styles.refreshText}>刷新中...</Text> : null}
           </View>
         }
         ListEmptyComponent={listEmpty}
+        ListFooterComponent={listFooter}
       />
       <LibraryModuleFilterSheet
         visible={moduleFilterSheetVisible}
@@ -1262,6 +2134,12 @@ export default function LibraryScreen() {
         onClose={() => setTagFilterSheetVisible(false)}
         onToggleOption={handleToggleTagFilter}
       />
+      <SortSelectorSheet
+        visible={sortSheetVisible}
+        selectedSortKey={sortKey}
+        onClose={() => setSortSheetVisible(false)}
+        onSelect={handleSelectSort}
+      />
     </ScreenContainer>
   );
 }
@@ -1274,6 +2152,149 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingBottom: layout.bottomTabHeight,
+  },
+  quickViewBlock: {
+    gap: spacing.xs,
+  },
+  quickViewTitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '800',
+  },
+  quickViewContent: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingRight: spacing.xl,
+  },
+  quickViewChip: {
+    minHeight: 34,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  quickViewChipSelected: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  quickViewChipDangerSelected: {
+    borderColor: '#FECACA',
+    backgroundColor: '#FEF2F2',
+  },
+  quickViewChipInfoSelected: {
+    borderColor: '#BFDBFE',
+    backgroundColor: '#EFF6FF',
+  },
+  quickViewChipWarningSelected: {
+    borderColor: '#FED7AA',
+    backgroundColor: '#FFF7ED',
+  },
+  quickViewChipPinnedSelected: {
+    borderColor: '#FDE68A',
+    backgroundColor: '#FFFBEB',
+  },
+  quickViewChipText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  sortButton: {
+    minHeight: 32,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingLeft: spacing.md,
+    paddingRight: spacing.xs,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    maxWidth: '64%',
+  },
+  sortButtonText: {
+    ...typography.caption,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  sortSheetList: {
+    gap: spacing.sm,
+  },
+  sortSheetOption: {
+    minHeight: 54,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  sortSheetOptionSelected: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  sortSheetOptionTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  sortSheetOptionTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '900',
+  },
+  sortSheetOptionTitleSelected: {
+    color: colors.success,
+  },
+  sortSheetOptionDescription: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  sectionHeaderOuter: {
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.screenPadding,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  reviewSectionHeader: {
+    minHeight: 36,
+    borderRadius: radius.lg,
+    backgroundColor: colors.background,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  reviewSectionTitleWrap: {
+    minWidth: 0,
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  reviewSectionTitle: {
+    ...typography.bodySmall,
+    fontWeight: '900',
+    flexShrink: 1,
+  },
+  reviewSectionToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 1,
+  },
+  reviewSectionToggleText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '800',
   },
   searchPanel: {
     borderWidth: 1,
@@ -1622,6 +2643,35 @@ const styles = StyleSheet.create({
   listItemSeparator: {
     height: spacing.md,
   },
+  listFooter: {
+    marginHorizontal: spacing.screenPadding,
+    marginTop: spacing.md,
+    gap: spacing.sm,
+    alignItems: 'center',
+  },
+  listFooterHint: {
+    ...typography.caption,
+    color: colors.textMuted,
+    textAlign: 'center',
+  },
+  showMoreButton: {
+    minHeight: 40,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.xs,
+  },
+  showMoreButtonText: {
+    ...typography.caption,
+    color: colors.success,
+    fontWeight: '800',
+  },
   stateWrap: {
     marginTop: spacing.md,
     marginHorizontal: spacing.screenPadding,
@@ -1742,6 +2792,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     flexShrink: 0,
+  },
+  pinnedMark: {
+    width: 20,
+    height: 20,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+    backgroundColor: '#FFFBEB',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMoreButton: {
+    width: 24,
+    height: 24,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMoreButtonPressed: {
+    backgroundColor: colors.surfaceMuted,
   },
   arrow: {
     color: colors.textMuted,

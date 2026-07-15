@@ -20,6 +20,8 @@ export interface MistakeListItem {
   nextReviewAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  isPinned: boolean;
+  lastViewedAt?: string | null;
 }
 
 export interface MistakeListFilter {
@@ -27,4 +29,5 @@ export interface MistakeListFilter {
   keyword: string;
   module?: string | null;
   tagKeys?: string[];
+  limit?: number | null;
 }

@@ -129,6 +129,7 @@ function buildListQueryOptions(filter: MistakeListFilter): ListMistakesOptions {
     keyword,
     module,
     tagKeys,
+    limit: filter.limit,
   };
 
   if (filter.segment === 'due') {
@@ -289,6 +290,8 @@ async function mapMistakeWithCoverToListItem(mistake: Mistake): Promise<MistakeL
     nextReviewAt: mistake.next_review_at ?? null,
     createdAt: mistake.created_at,
     updatedAt: mistake.updated_at,
+    isPinned: mistake.is_pinned,
+    lastViewedAt: mistake.last_viewed_at ?? null,
   };
 }
 
@@ -314,6 +317,8 @@ export function mapMistakeToListItem(
     nextReviewAt: mistake.next_review_at ?? null,
     createdAt: mistake.created_at,
     updatedAt: mistake.updated_at,
+    isPinned: mistake.is_pinned,
+    lastViewedAt: mistake.last_viewed_at ?? null,
   };
 }
 
@@ -370,6 +375,30 @@ export async function getMistakeListStats(): Promise<{
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'getMistakeListStats failed.', error);
     throw error;
+  }
+}
+
+export async function setMistakePinned(
+  mistakeId: string,
+  isPinned: boolean,
+): Promise<MistakeListItem | null> {
+  try {
+    const updated = await MistakeRepository.setMistakePinned(mistakeId, isPinned);
+    if (!updated) {
+      return null;
+    }
+    return mapMistakeWithCoverToListItem(updated);
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'setMistakePinned failed.', { mistakeId, isPinned, error });
+    throw error;
+  }
+}
+
+export async function markMistakeViewed(mistakeId: string): Promise<void> {
+  try {
+    await MistakeRepository.updateLastViewedAt(mistakeId);
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'markMistakeViewed failed.', { mistakeId, error });
   }
 }
 

@@ -21,6 +21,8 @@ export interface Mistake {
   next_review_at?: string | null;
   last_review_at?: string | null;
   last_review_result?: ReviewResult | null;
+  is_pinned: boolean;
+  last_viewed_at?: string | null;
 }
 
 export interface CreateMistakeInput {
@@ -35,6 +37,8 @@ export interface CreateMistakeInput {
   next_review_at?: string | null;
   last_review_at?: string | null;
   last_review_result?: ReviewResult | null;
+  is_pinned?: boolean;
+  last_viewed_at?: string | null;
 }
 
 export interface UpdateMistakeInput {
@@ -50,5 +54,7 @@ export interface UpdateMistakeInput {
   next_review_at?: string | null;
   last_review_at?: string | null;
   last_review_result?: ReviewResult | null;
+  is_pinned?: boolean;
+  last_viewed_at?: string | null;
   updated_at?: string;
 }

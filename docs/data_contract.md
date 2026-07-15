@@ -22,6 +22,8 @@
 | next_review_at | string | 可空 | 下次复习时间（ISO 8601 字符串） |
 | last_review_at | string | 可空 | 最近复习时间（ISO 8601 字符串） |
 | last_review_result | string | 可空，枚举：`mastered/unsure/wrong` | 最近一次复做结果 |
+| is_pinned | boolean | 默认 `false` | 是否在题库中置顶显示 |
+| last_viewed_at | string | 可空 | 最近进入详情页查看时间（ISO 8601 字符串） |
 
 ## 二、mistake_images 表
 

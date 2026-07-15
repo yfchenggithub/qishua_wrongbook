@@ -90,7 +90,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [3, 4, DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -112,8 +112,10 @@ INSERT INTO mistakes (
   updated_at,
   next_review_at,
   last_review_at,
-  last_review_result
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  last_review_result,
+  is_pinned,
+  last_viewed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const INSERT_REVIEW_RECORD_SQL = `
@@ -1846,6 +1848,8 @@ async function runRestoreDatabaseTransaction(options: {
             mistake.next_review_at ?? null,
             mistake.last_review_at ?? null,
             mistake.last_review_result ?? null,
+            mistake.is_pinned ? 1 : 0,
+            mistake.last_viewed_at ?? null,
           );
 
           if ((index + 1) % DB_IMPORT_PROGRESS_INTERVAL === 0 || index === data.mistakes.length - 1) {

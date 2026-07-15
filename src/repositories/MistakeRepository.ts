@@ -31,8 +31,10 @@ INSERT INTO mistakes (
   updated_at,
   next_review_at,
   last_review_at,
-  last_review_result
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  last_review_result,
+  is_pinned,
+  last_viewed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const SELECT_MISTAKE_FIELDS_SQL = `
@@ -51,7 +53,9 @@ SELECT
   updated_at,
   next_review_at,
   last_review_at,
-  last_review_result
+  last_review_result,
+  is_pinned,
+  last_viewed_at
 FROM mistakes
 `;
 
@@ -61,9 +65,9 @@ export interface ListMistakesOptions {
   keyword?: string | null;
   tagKeys?: string[];
   dueOnly?: boolean;
-  limit?: number;
+  limit?: number | null;
   offset?: number;
-  sortBy?: 'created_at' | 'updated_at' | 'next_review_at' | 'review_count';
+  sortBy?: 'created_at' | 'updated_at' | 'next_review_at' | 'review_count' | 'last_viewed_at';
   sortOrder?: 'asc' | 'desc';
 }
 
@@ -241,6 +245,13 @@ function normalizeLimit(value?: number): number | undefined {
   return normalized;
 }
 
+function normalizeListLimit(value?: number | null): number | null | undefined {
+  if (value === null) {
+    return null;
+  }
+  return normalizeLimit(value);
+}
+
 function normalizeOffset(value?: number): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -254,11 +265,6 @@ function normalizeOffset(value?: number): number | undefined {
 
 function normalizeLimitOrDefault(value: number | undefined, defaultValue: number): number {
   const normalized = normalizeLimit(value);
-  return normalized ?? defaultValue;
-}
-
-function normalizeOffsetOrDefault(value: number | undefined, defaultValue: number): number {
-  const normalized = normalizeOffset(value);
   return normalized ?? defaultValue;
 }
 
@@ -286,6 +292,14 @@ function normalizeReviewResultOrNull(value: ReviewResult | null): ReviewResult |
     return value;
   }
   throw new Error('lastReviewResult must be mastered / unsure / wrong / null.');
+}
+
+function normalizePinnedFlag(value: boolean | number | null | undefined): boolean {
+  return value === true || value === 1;
+}
+
+function toPinnedInteger(value: boolean | number | null | undefined): number {
+  return normalizePinnedFlag(value) ? 1 : 0;
 }
 
 function parseQuestionNoFromTitle(title: string | null | undefined): number | null {
@@ -411,6 +425,8 @@ function mapMistakeRow(row: Mistake): Mistake {
     difficulty: Number(row.difficulty),
     review_count: Number(row.review_count),
     status: row.status as MistakeStatus,
+    is_pinned: normalizePinnedFlag(row.is_pinned as unknown as boolean | number | null | undefined),
+    last_viewed_at: row.last_viewed_at ?? null,
   };
 }
 
@@ -485,7 +501,8 @@ function normalizeSortBy(
     value === 'created_at' ||
     value === 'updated_at' ||
     value === 'next_review_at' ||
-    value === 'review_count'
+    value === 'review_count' ||
+    value === 'last_viewed_at'
   ) {
     return value;
   }
@@ -546,6 +563,12 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
   OR note LIKE ?
   OR EXISTS (
     SELECT 1
+    FROM review_records review_note_search
+    WHERE review_note_search.mistake_id = mistakes.id
+      AND review_note_search.note LIKE ?
+  )
+  OR EXISTS (
+    SELECT 1
     FROM mistake_tags tag_search
     WHERE tag_search.mistake_id = mistakes.id
       AND (
@@ -554,7 +577,15 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
       )
   )
 )`);
-    bindParams.push(likeKeyword, likeKeyword, likeKeyword, likeKeyword, likeKeyword, likeTagKeyword);
+    bindParams.push(
+      likeKeyword,
+      likeKeyword,
+      likeKeyword,
+      likeKeyword,
+      likeKeyword,
+      likeKeyword,
+      likeTagKeyword,
+    );
   }
 
   const tagKeys = normalizeTagKeys(options?.tagKeys);
@@ -650,6 +681,8 @@ export const MistakeRepository = {
         next_review_at: input.next_review_at === undefined ? createdAt : input.next_review_at,
         last_review_at: input.last_review_at ?? null,
         last_review_result: input.last_review_result ?? null,
+        is_pinned: input.is_pinned ?? false,
+        last_viewed_at: input.last_viewed_at ?? null,
       };
 
       await db.runAsync(
@@ -669,6 +702,8 @@ export const MistakeRepository = {
         record.next_review_at ?? null,
         record.last_review_at ?? null,
         record.last_review_result ?? null,
+        toPinnedInteger(record.is_pinned),
+        record.last_viewed_at ?? null,
       );
 
       const created = await getByIdInternal(record.id);
@@ -700,17 +735,29 @@ export const MistakeRepository = {
 
       const conditions = buildListConditions(options);
       const orderByClause = buildOrderByClause(options);
-      const limit = normalizeLimitOrDefault(options?.limit, DEFAULT_LIST_LIMIT);
-      const offset = normalizeOffsetOrDefault(options?.offset, DEFAULT_LIST_OFFSET);
+      const normalizedLimit = normalizeListLimit(options?.limit);
+      const normalizedOffset = normalizeOffset(options?.offset);
+      const paginationParams: number[] = [];
+      let paginationSql = '';
+      if (normalizedLimit === null) {
+        if (normalizedOffset !== undefined) {
+          paginationSql = '\nLIMIT -1\nOFFSET ?';
+          paginationParams.push(normalizedOffset);
+        }
+      } else {
+        paginationSql = '\nLIMIT ?\nOFFSET ?';
+        paginationParams.push(
+          normalizedLimit ?? DEFAULT_LIST_LIMIT,
+          normalizedOffset ?? DEFAULT_LIST_OFFSET,
+        );
+      }
 
       const rows = await db.getAllAsync<Mistake>(
         `${SELECT_MISTAKE_FIELDS_SQL}${conditions.whereSql}
 ${orderByClause}
-LIMIT ?
-OFFSET ?;`,
+${paginationSql};`,
         ...conditions.bindParams,
-        limit,
-        offset,
+        ...paginationParams,
       );
 
       return rows.map(mapMistakeRow);
@@ -1057,6 +1104,8 @@ FROM mistakes;`,
         'next_review_at',
         'last_review_at',
         'last_review_result',
+        'is_pinned',
+        'last_viewed_at',
       ];
 
       for (const field of updatableFields) {
@@ -1081,8 +1130,14 @@ FROM mistakes;`,
           continue;
         }
 
+        if (field === 'is_pinned') {
+          setClauses.push(`${field} = ?`);
+          bindParams.push(toPinnedInteger(fieldValue as boolean));
+          continue;
+        }
+
         setClauses.push(`${field} = ?`);
-        bindParams.push(fieldValue);
+        bindParams.push(fieldValue as string | number | null);
       }
 
       if (setClauses.length === 0) {
@@ -1107,6 +1162,48 @@ WHERE id = ?;`,
       return await getByIdInternal(id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'updateMistake failed.', { id, input, error });
+      throw error;
+    }
+  },
+
+  async setMistakePinned(id: string, isPinned: boolean): Promise<Mistake | null> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const result = await db.runAsync(
+        `UPDATE mistakes
+SET is_pinned = ?, updated_at = ?
+WHERE id = ?;`,
+        toPinnedInteger(isPinned),
+        nowIso(),
+        id,
+      );
+
+      if (result.changes <= 0) {
+        return null;
+      }
+
+      return await getByIdInternal(id);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'setMistakePinned failed.', { id, isPinned, error });
+      throw error;
+    }
+  },
+
+  async updateLastViewedAt(id: string, viewedAt = nowIso()): Promise<boolean> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const result = await db.runAsync(
+        `UPDATE mistakes
+SET last_viewed_at = ?
+WHERE id = ?;`,
+        normalizeIsoDateTime(viewedAt, 'viewedAt'),
+        id,
+      );
+      return result.changes > 0;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'updateLastViewedAt failed.', { id, viewedAt, error });
       throw error;
     }
   },

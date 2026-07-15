@@ -19,7 +19,9 @@ CREATE TABLE IF NOT EXISTS mistakes (
   last_review_result TEXT CHECK (
     last_review_result IS NULL
     OR last_review_result IN ('mastered', 'unsure', 'wrong')
-  )
+  ),
+  is_pinned INTEGER NOT NULL DEFAULT 0 CHECK (is_pinned IN (0, 1)),
+  last_viewed_at TEXT
 );
 `;
 
