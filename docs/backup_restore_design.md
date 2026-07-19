@@ -34,7 +34,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "appName": "七刷错题本",
   "appVersion": "0.1.0",
   "createdAt": "2026-05-17T21:30:45.123+08:00",
-  "schemaVersion": 2,
+  "schemaVersion": 7,
   "devicePlatform": "android",
   "counts": {
     "mistakes": 128,
@@ -67,6 +67,8 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "reviewRecords": [],
   "mistakeRelations": [],
   "mistakeTags": [],
+  "customModules": [],
+  "customErrorReasons": [],
   "extra": {}
 }
 ```
@@ -130,7 +132,32 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `created_at`
 - `updated_at`
 
-### 5.7 extra
+### 5.7 customModules（按当前 schema 字段）
+每条记录字段：
+- `id`
+- `name`
+- `icon`
+- `color`
+- `sort_order`
+- `created_at`
+- `updated_at`
+
+### 5.8 customErrorReasons（按当前 schema 字段）
+每条记录字段：
+- `id`
+- `name`
+- `icon`
+- `color`
+- `sort_order`
+- `created_at`
+- `updated_at`
+
+说明：
+- schemaVersion 7 起，备份包会包含自定义模块和自定义错因。
+- 恢复 schemaVersion 7 及以上备份时，自定义配置随备份全量覆盖。
+- 恢复 schemaVersion 6 及更早备份时，因为旧包没有自定义配置，本机已有自定义模块和自定义错因会保留。
+
+### 5.9 extra
 - 预留扩展字段，当前可为空对象 `{}`。
 
 ## 6. 图片处理规则
@@ -200,6 +227,28 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 | `mistake_relations.target_mistake_id` | `mistakeRelations[].target_mistake_id` | 直接映射 |
 | `mistake_relations.source` | `mistakeRelations[].source` | 直接映射 |
 | `mistake_relations.created_at` | `mistakeRelations[].created_at` | 直接映射 |
+
+### 8.5 custom_modules
+| 数据库表字段 | data.json 字段 | 说明 |
+| --- | --- | --- |
+| `custom_modules.id` | `customModules[].id` | 直接映射 |
+| `custom_modules.name` | `customModules[].name` | 直接映射 |
+| `custom_modules.icon` | `customModules[].icon` | 直接映射 |
+| `custom_modules.color` | `customModules[].color` | 直接映射 |
+| `custom_modules.sort_order` | `customModules[].sort_order` | 直接映射 |
+| `custom_modules.created_at` | `customModules[].created_at` | 直接映射 |
+| `custom_modules.updated_at` | `customModules[].updated_at` | 直接映射 |
+
+### 8.6 custom_error_reasons
+| 数据库表字段 | data.json 字段 | 说明 |
+| --- | --- | --- |
+| `custom_error_reasons.id` | `customErrorReasons[].id` | 直接映射 |
+| `custom_error_reasons.name` | `customErrorReasons[].name` | 直接映射 |
+| `custom_error_reasons.icon` | `customErrorReasons[].icon` | 直接映射 |
+| `custom_error_reasons.color` | `customErrorReasons[].color` | 直接映射 |
+| `custom_error_reasons.sort_order` | `customErrorReasons[].sort_order` | 直接映射 |
+| `custom_error_reasons.created_at` | `customErrorReasons[].created_at` | 直接映射 |
+| `custom_error_reasons.updated_at` | `customErrorReasons[].updated_at` | 直接映射 |
 
 ## 9. 分阶段落地建议
 - 阶段一（本次）：文档 + 类型 + 骨架 + 依赖检查。

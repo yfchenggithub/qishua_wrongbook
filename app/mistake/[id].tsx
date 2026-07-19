@@ -1,4 +1,4 @@
-﻿import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -64,11 +64,13 @@ import type {
   DetailReviewRecordItem,
   MistakeDetailViewModel,
 } from '@/src/models/MistakeDetailViewModel';
+import type { CustomErrorReason } from '@/src/models/CustomErrorReason';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { useMusicInterruption } from '@/src/music';
+import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
@@ -131,6 +133,10 @@ type ReviewImageSource = 'camera' | 'album';
 type DetailAnchorId = 'overview' | 'related' | 'images' | 'reviews';
 type DetailModulePickerOption = {
   value: string;
+  label: string;
+};
+type DetailErrorReasonOption = {
+  value: string | null;
   label: string;
 };
 type DetailMetadataDraft = {
@@ -577,6 +583,54 @@ function normalizeMetadataErrorReason(value: string | null | undefined): string 
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function appendErrorReasonOption(
+  options: DetailErrorReasonOption[],
+  seenKeys: Set<string>,
+  value: string | null | undefined,
+  label?: string,
+) {
+  const normalizedValue = normalizeMetadataErrorReason(value);
+  if (!normalizedValue) {
+    return;
+  }
+
+  const key = toModulePickerKey(normalizedValue);
+  if (seenKeys.has(key)) {
+    return;
+  }
+
+  seenKeys.add(key);
+  options.push({
+    value: normalizedValue,
+    label: label ?? normalizedValue,
+  });
+}
+
+function buildDetailErrorReasonOptions(
+  customErrorReasons: CustomErrorReason[],
+  currentErrorReason: string | null,
+): DetailErrorReasonOption[] {
+  const options: DetailErrorReasonOption[] = [{ value: null, label: '未填写' }];
+  const seenKeys = new Set<string>();
+
+  for (const option of ERROR_REASON_OPTIONS) {
+    appendErrorReasonOption(options, seenKeys, option.value, option.label);
+  }
+  for (const reasonItem of customErrorReasons) {
+    appendErrorReasonOption(options, seenKeys, reasonItem.name);
+  }
+
+  const normalizedCurrentReason = normalizeMetadataErrorReason(currentErrorReason);
+  if (normalizedCurrentReason && !seenKeys.has(toModulePickerKey(normalizedCurrentReason))) {
+    options.splice(1, 0, {
+      value: normalizedCurrentReason,
+      label: normalizedCurrentReason,
+    });
+  }
+
+  return options;
+}
+
 function normalizeMetadataDifficulty(value: number): number {
   const normalized = Math.floor(value);
   if (!Number.isFinite(normalized) || normalized < 1 || normalized > 5) {
@@ -1004,6 +1058,7 @@ function DetailModulePickerModal({
 function DetailMetadataEditorModal({
   visible,
   draft,
+  customErrorReasons,
   busy,
   message,
   onClose,
@@ -1012,6 +1067,7 @@ function DetailMetadataEditorModal({
 }: {
   visible: boolean;
   draft: DetailMetadataDraft | null;
+  customErrorReasons: CustomErrorReason[];
   busy: boolean;
   message?: string | null;
   onClose: () => void;
@@ -1022,13 +1078,7 @@ function DetailMetadataEditorModal({
     return null;
   }
 
-  const errorReasonOptions = [
-    { value: null, label: '未填写' },
-    ...ERROR_REASON_OPTIONS.map((option) => ({
-      value: option.value,
-      label: option.label,
-    })),
-  ];
+  const errorReasonOptions = buildDetailErrorReasonOptions(customErrorReasons, draft.errorReason);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -1210,6 +1260,7 @@ export default function MistakeDetailScreen() {
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isDeletingMistake, setIsDeletingMistake] = useState(false);
   const [customModules, setCustomModules] = useState<CustomModule[]>([]);
+  const [customErrorReasons, setCustomErrorReasons] = useState<CustomErrorReason[]>([]);
   const [existingMistakeModules, setExistingMistakeModules] = useState<string[]>([]);
   const [isModulePickerVisible, setIsModulePickerVisible] = useState(false);
   const [isModuleOptionsLoading, setIsModuleOptionsLoading] = useState(false);
@@ -1443,6 +1494,19 @@ export default function MistakeDetailScreen() {
         setModulePickerMessage(`${loadErrors.join('、')}加载失败，已显示可用模块。`);
       }
       setIsModuleOptionsLoading(false);
+    }
+  }, [routeId]);
+
+  const loadCustomErrorReasonsForMetadataEditor = useCallback(async () => {
+    try {
+      const reasons = await CustomErrorReasonService.listCustomErrorReasons();
+      setCustomErrorReasons(reasons);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to load custom error reasons for metadata editor.', {
+        routeId,
+        error,
+      });
+      setMetadataEditorMessage('自定义错因加载失败，已显示默认错因。');
     }
   }, [routeId]);
 
@@ -3014,9 +3078,11 @@ export default function MistakeDetailScreen() {
     setMetadataDraft(buildMetadataDraft(state.detail));
     setMetadataEditorMessage(null);
     setIsMetadataEditorVisible(true);
+    void loadCustomErrorReasonsForMetadataEditor();
   }, [
     activeVoiceRecordingRecordId,
     isMetadataChangeDisabled,
+    loadCustomErrorReasonsForMetadataEditor,
     showToast,
     state,
   ]);
@@ -4679,6 +4745,7 @@ export default function MistakeDetailScreen() {
       <DetailMetadataEditorModal
         visible={isMetadataEditorVisible}
         draft={metadataDraft}
+        customErrorReasons={customErrorReasons}
         busy={isSavingMetadata}
         message={metadataEditorMessage}
         onClose={handleCloseMetadataEditor}

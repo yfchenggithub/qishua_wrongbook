@@ -11,6 +11,8 @@ import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ReviewRecord, ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import {
+  CustomErrorReasonRepository,
+  CustomModuleRepository,
   MistakeImageRepository,
   MistakeRelationRepository,
   MistakeRepository,
@@ -49,6 +51,8 @@ import {
   type BackupCounts,
   type BackupDataPayload,
   type BackupDevicePlatform,
+  type BackupCustomErrorReasonRecord,
+  type BackupCustomModuleRecord,
   type BackupImageArchiveFile,
   type BackupManifest,
   type BackupMistakeImageRecord,
@@ -90,7 +94,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -159,6 +163,30 @@ INSERT INTO mistake_tags (
   mistake_id,
   name,
   normalized_name,
+  sort_order,
+  created_at,
+  updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_CUSTOM_MODULE_SQL = `
+INSERT INTO custom_modules (
+  id,
+  name,
+  icon,
+  color,
+  sort_order,
+  created_at,
+  updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_CUSTOM_ERROR_REASON_SQL = `
+INSERT INTO custom_error_reasons (
+  id,
+  name,
+  icon,
+  color,
   sort_order,
   created_at,
   updated_at
@@ -523,6 +551,12 @@ export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
     mistakeTags: Array.isArray(input.mistakeTags)
       ? input.mistakeTags as BackupDataPayload['mistakeTags']
       : [],
+    customModules: Array.isArray(input.customModules)
+      ? input.customModules as BackupDataPayload['customModules']
+      : [],
+    customErrorReasons: Array.isArray(input.customErrorReasons)
+      ? input.customErrorReasons as BackupDataPayload['customErrorReasons']
+      : [],
     extra: input.extra && typeof input.extra === 'object' ? input.extra : {},
   };
 }
@@ -621,6 +655,32 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
       (tag as Partial<BackupMistakeTagRecord>).normalized_name,
     );
     if (!tagId || !mistakeIds.has(mistakeId) || !tagName || !normalizedTagName) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+  }
+
+  for (const customModule of data.customModules) {
+    const customModuleId = ensureRecordId((customModule as Partial<BackupCustomModuleRecord>).id);
+    const customModuleName = normalizeRequiredText((customModule as Partial<BackupCustomModuleRecord>).name);
+    if (!customModuleId || !customModuleName) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+  }
+
+  for (const customErrorReason of data.customErrorReasons) {
+    const customErrorReasonId = ensureRecordId(
+      (customErrorReason as Partial<BackupCustomErrorReasonRecord>).id,
+    );
+    const customErrorReasonName = normalizeRequiredText(
+      (customErrorReason as Partial<BackupCustomErrorReasonRecord>).name,
+    );
+    if (!customErrorReasonId || !customErrorReasonName) {
       throw new BackupRestoreError(
         'CORRUPTED_BACKUP_FILE',
         getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
@@ -807,6 +867,14 @@ async function listAllMistakeTags(): Promise<MistakeTag[]> {
   }
 
   return collected;
+}
+
+async function listAllCustomModules(): Promise<BackupCustomModuleRecord[]> {
+  return CustomModuleRepository.listCustomModules();
+}
+
+async function listAllCustomErrorReasons(): Promise<BackupCustomErrorReasonRecord[]> {
+  return CustomErrorReasonRepository.listCustomErrorReasons();
 }
 
 type CollectImageArtifactsResult = {
@@ -1530,6 +1598,32 @@ function validateRestorePackage(options: {
     }
   }
 
+  for (const customModule of data.customModules) {
+    if (
+      !normalizeOptionalText(customModule.id)
+      || !normalizeOptionalText(customModule.name)
+      || !normalizeOptionalText(customModule.icon)
+      || !normalizeOptionalText(customModule.color)
+      || !normalizeOptionalText(customModule.created_at)
+      || !normalizeOptionalText(customModule.updated_at)
+    ) {
+      missingRequiredFieldsCount += 1;
+    }
+  }
+
+  for (const customErrorReason of data.customErrorReasons) {
+    if (
+      !normalizeOptionalText(customErrorReason.id)
+      || !normalizeOptionalText(customErrorReason.name)
+      || !normalizeOptionalText(customErrorReason.icon)
+      || !normalizeOptionalText(customErrorReason.color)
+      || !normalizeOptionalText(customErrorReason.created_at)
+      || !normalizeOptionalText(customErrorReason.updated_at)
+    ) {
+      missingRequiredFieldsCount += 1;
+    }
+  }
+
   let imageTotalBytes = 0;
   for (const image of data.mistakeImages) {
     const archivePath = normalizeArchiveEntryPath(ensureBackupImageRelativePath(ensureRecordId(image.backupRelativePath)));
@@ -1784,9 +1878,17 @@ async function runRestoreDatabaseTransaction(options: {
   data: BackupDataPayload;
   restoredImages: RestoredMistakeImageInsert[];
   resolvedVoiceNotesByReviewRecordId: Map<string, ReviewRecordVoiceNote>;
+  shouldRestoreCustomConfiguration: boolean;
   errors: RestoreErrorItem[];
 }): Promise<{ counts: BackupCounts; dbClearDurationMs: number }> {
-  const { restoreSessionId, data, restoredImages, resolvedVoiceNotesByReviewRecordId, errors } = options;
+  const {
+    restoreSessionId,
+    data,
+    restoredImages,
+    resolvedVoiceNotesByReviewRecordId,
+    shouldRestoreCustomConfiguration,
+    errors,
+  } = options;
   const importStartedAt = nowMs();
   let dbClearDurationMs = 0;
   try {
@@ -1798,6 +1900,10 @@ async function runRestoreDatabaseTransaction(options: {
         await db.runAsync('DELETE FROM review_records;');
         await db.runAsync('DELETE FROM mistake_images;');
         await db.runAsync('DELETE FROM mistakes;');
+        if (shouldRestoreCustomConfiguration) {
+          await db.runAsync('DELETE FROM custom_modules;');
+          await db.runAsync('DELETE FROM custom_error_reasons;');
+        }
       } catch (error) {
         appendError(errors, {
           code: 'RESTORE_DB_CLEAR_FAILED',
@@ -1829,6 +1935,56 @@ async function runRestoreDatabaseTransaction(options: {
       dbClearDurationMs = nowMs() - dbClearStartedAt;
 
       try {
+        if (shouldRestoreCustomConfiguration) {
+          for (let index = 0; index < data.customModules.length; index += 1) {
+            const customModule = data.customModules[index];
+            await db.runAsync(
+              INSERT_CUSTOM_MODULE_SQL,
+              customModule.id,
+              customModule.name,
+              customModule.icon,
+              customModule.color,
+              customModule.sort_order,
+              customModule.created_at,
+              customModule.updated_at,
+            );
+
+            if ((index + 1) % DB_IMPORT_PROGRESS_INTERVAL === 0 || index === data.customModules.length - 1) {
+              logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_progress', {
+                restoreSessionId,
+                tableName: 'custom_modules',
+                importedCount: index + 1,
+                totalCount: data.customModules.length,
+                durationMs: nowMs() - importStartedAt,
+              });
+            }
+          }
+
+          for (let index = 0; index < data.customErrorReasons.length; index += 1) {
+            const customErrorReason = data.customErrorReasons[index];
+            await db.runAsync(
+              INSERT_CUSTOM_ERROR_REASON_SQL,
+              customErrorReason.id,
+              customErrorReason.name,
+              customErrorReason.icon,
+              customErrorReason.color,
+              customErrorReason.sort_order,
+              customErrorReason.created_at,
+              customErrorReason.updated_at,
+            );
+
+            if ((index + 1) % DB_IMPORT_PROGRESS_INTERVAL === 0 || index === data.customErrorReasons.length - 1) {
+              logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_progress', {
+                restoreSessionId,
+                tableName: 'custom_error_reasons',
+                importedCount: index + 1,
+                totalCount: data.customErrorReasons.length,
+                durationMs: nowMs() - importStartedAt,
+              });
+            }
+          }
+        }
+
         for (let index = 0; index < data.mistakes.length; index += 1) {
           const mistake = data.mistakes[index];
           await db.runAsync(
@@ -2088,13 +2244,23 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
   });
 
   try {
-    emitProgress('collect_db', '正在读取错题、图片和复做记录...', 0, 0);
-    const [mistakes, mistakeImages, reviewRecords, mistakeRelations, mistakeTags] = await Promise.all([
+    emitProgress('collect_db', '正在读取错题、图片、复做记录和自定义配置...', 0, 0);
+    const [
+      mistakes,
+      mistakeImages,
+      reviewRecords,
+      mistakeRelations,
+      mistakeTags,
+      customModules,
+      customErrorReasons,
+    ] = await Promise.all([
       listAllMistakes(),
       listAllMistakeImages(),
       listAllReviewRecords(),
       listAllMistakeRelations(),
       listAllMistakeTags(),
+      listAllCustomModules(),
+      listAllCustomErrorReasons(),
     ]);
 
     context.counts = {
@@ -2145,10 +2311,14 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       reviewRecords,
       mistakeRelations,
       mistakeTags,
+      customModules,
+      customErrorReasons,
       extra: {
         reason,
         mistakeRelationCount: mistakeRelations.length,
         mistakeTagCount: mistakeTags.length,
+        customModuleCount: customModules.length,
+        customErrorReasonCount: customErrorReasons.length,
         voiceNoteCount: voiceArtifacts.backupVoiceNotes.length,
         voiceFileCount: voiceArtifacts.copiedVoiceFileCount,
       },
@@ -2610,6 +2780,7 @@ export async function restoreFromBackup(
       data: extracted.data,
       restoredImages: imageResult.restoredImages,
       resolvedVoiceNotesByReviewRecordId: voiceResult.resolvedVoiceNotesByReviewRecordId,
+      shouldRestoreCustomConfiguration: extracted.manifest.schemaVersion >= 7,
       errors,
     });
     const importedCounts = dbTransactionResult.counts;
@@ -2624,6 +2795,8 @@ export async function restoreFromBackup(
         mistakes: importedCounts.mistakes,
         mistakeImages: importedCounts.mistakeImages,
         reviewRecords: importedCounts.reviewRecords,
+        customModules: extracted.manifest.schemaVersion >= 7 ? extracted.data.customModules.length : 'preserved',
+        customErrorReasons: extracted.manifest.schemaVersion >= 7 ? extracted.data.customErrorReasons.length : 'preserved',
       },
       durationMs: durations.dbImportDurationMs,
     });

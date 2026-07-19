@@ -38,6 +38,7 @@ import {
   MODULE_OPTIONS,
 } from '@/src/constants/mistakeOptions';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
+import type { CustomErrorReason } from '@/src/models/CustomErrorReason';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import {
@@ -45,6 +46,11 @@ import {
   validateAddMistakeDraft,
 } from '@/src/services/AddMistakeValidationService';
 import { createMistakeFromDraft } from '@/src/services/CreateMistakeService';
+import {
+  CUSTOM_ERROR_REASON_TEMPLATES,
+  CustomErrorReasonService,
+  MAX_CUSTOM_ERROR_REASON_COUNT,
+} from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
 import {
   deleteLocalImage,
@@ -584,6 +590,10 @@ export default function AddScreen() {
   const [customModuleModalVisible, setCustomModuleModalVisible] = useState(false);
   const [customModuleBusy, setCustomModuleBusy] = useState(false);
   const [customModuleMessage, setCustomModuleMessage] = useState<string | null>(null);
+  const [customErrorReasons, setCustomErrorReasons] = useState<CustomErrorReason[]>([]);
+  const [customErrorReasonModalVisible, setCustomErrorReasonModalVisible] = useState(false);
+  const [customErrorReasonBusy, setCustomErrorReasonBusy] = useState(false);
+  const [customErrorReasonMessage, setCustomErrorReasonMessage] = useState<string | null>(null);
   const [saveBarHeight, setSaveBarHeight] = useState(0);
   const [activeAnchorId, setActiveAnchorId] = useState<AddAnchorId>('question');
   const [highlightedAnchorId, setHighlightedAnchorId] = useState<AddAnchorId | null>(null);
@@ -625,6 +635,15 @@ export default function AddScreen() {
       .map((moduleItem) => ({
         value: moduleItem.name,
         label: moduleItem.name,
+      })),
+  ];
+  const errorReasonOptions = [
+    ...ERROR_REASON_OPTIONS,
+    ...customErrorReasons
+      .filter((reasonItem) => !ERROR_REASON_OPTIONS.some((item) => item.value === reasonItem.name))
+      .map((reasonItem) => ({
+        value: reasonItem.name,
+        label: reasonItem.name,
       })),
   ];
   const sharedImageUri = getFirstSearchParam(searchParams.sharedImageUri);
@@ -825,6 +844,133 @@ export default function AddScreen() {
     return handleCreateCustomModule(moduleName);
   }
 
+  async function handleCreateCustomErrorReason(reasonName: string): Promise<boolean> {
+    if (customErrorReasonBusy) {
+      return false;
+    }
+
+    setCustomErrorReasonBusy(true);
+    setCustomErrorReasonMessage(null);
+    try {
+      const result = await CustomErrorReasonService.createCustomErrorReason(reasonName);
+      if (!result.ok) {
+        const message = result.errorMessage ?? '创建自定义错因失败';
+        setCustomErrorReasonMessage(message);
+        showToast(message, 'warning', TOAST_DURATION_LONG);
+        return false;
+      }
+
+      if (result.reasons) {
+        setCustomErrorReasons(result.reasons);
+      }
+      if (result.reason) {
+        updateDraft('errorReason', result.reason.name);
+      }
+      showToast('已添加自定义错因', 'success');
+      return true;
+    } finally {
+      setCustomErrorReasonBusy(false);
+    }
+  }
+
+  async function handleUpdateCustomErrorReason(reasonId: string, reasonName: string): Promise<boolean> {
+    if (customErrorReasonBusy) {
+      return false;
+    }
+
+    const previousReason = customErrorReasons.find((item) => item.id === reasonId);
+    setCustomErrorReasonBusy(true);
+    setCustomErrorReasonMessage(null);
+    try {
+      const result = await CustomErrorReasonService.updateCustomErrorReasonName(reasonId, reasonName);
+      if (!result.ok) {
+        const message = result.errorMessage ?? '编辑自定义错因失败';
+        setCustomErrorReasonMessage(message);
+        showToast(message, 'warning', TOAST_DURATION_LONG);
+        return false;
+      }
+
+      if (result.reasons) {
+        setCustomErrorReasons(result.reasons);
+      }
+      if (previousReason && draft.errorReason === previousReason.name && result.reason) {
+        updateDraft('errorReason', result.reason.name);
+      }
+      showToast('自定义错因已更新', 'success');
+      return true;
+    } finally {
+      setCustomErrorReasonBusy(false);
+    }
+  }
+
+  function handleDeleteCustomErrorReason(reasonItem: CustomErrorReason) {
+    if (customErrorReasonBusy) {
+      return;
+    }
+
+    Alert.alert('删除错因', `确认删除“${reasonItem.name}”？已保存错题不会被删除。`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setCustomErrorReasonBusy(true);
+            setCustomErrorReasonMessage(null);
+            try {
+              const result = await CustomErrorReasonService.deleteCustomErrorReason(reasonItem.id);
+              if (!result.ok) {
+                const message = result.errorMessage ?? '删除自定义错因失败';
+                setCustomErrorReasonMessage(message);
+                showToast(message, 'error', TOAST_DURATION_LONG);
+                return;
+              }
+
+              if (result.reasons) {
+                setCustomErrorReasons(result.reasons);
+              }
+              if (draft.errorReason === reasonItem.name) {
+                updateDraft('errorReason', null);
+              }
+              showToast('自定义错因已删除', 'info');
+            } finally {
+              setCustomErrorReasonBusy(false);
+            }
+          })();
+        },
+      },
+    ]);
+  }
+
+  function handleMoveCustomErrorReason(reasonId: string, direction: 'up' | 'down') {
+    if (customErrorReasonBusy) {
+      return;
+    }
+
+    void (async () => {
+      setCustomErrorReasonBusy(true);
+      setCustomErrorReasonMessage(null);
+      try {
+        const result = await CustomErrorReasonService.moveCustomErrorReason(reasonId, direction);
+        if (!result.ok) {
+          const message = result.errorMessage ?? '调整错因排序失败';
+          setCustomErrorReasonMessage(message);
+          showToast(message, 'warning', TOAST_DURATION_LONG);
+          return;
+        }
+        if (result.reasons) {
+          setCustomErrorReasons(result.reasons);
+        }
+      } finally {
+        setCustomErrorReasonBusy(false);
+      }
+    })();
+  }
+
+  async function handleUseCustomErrorReasonTemplate(reasonName: string): Promise<boolean> {
+    return handleCreateCustomErrorReason(reasonName);
+  }
+
   useEffect(() => {
     return () => {
       if (anchorHighlightTimerRef.current) {
@@ -1004,6 +1150,19 @@ export default function AddScreen() {
         Logger.error(PAGE_SCOPE, 'Failed to load custom modules.', { error });
         if (isMounted) {
           setCustomModuleMessage('自定义模块加载失败');
+        }
+      });
+
+    CustomErrorReasonService.listCustomErrorReasons()
+      .then((reasons) => {
+        if (isMounted) {
+          setCustomErrorReasons(reasons);
+        }
+      })
+      .catch((error) => {
+        Logger.error(PAGE_SCOPE, 'Failed to load custom error reasons.', { error });
+        if (isMounted) {
+          setCustomErrorReasonMessage('自定义错因加载失败');
         }
       });
 
@@ -1802,7 +1961,7 @@ export default function AddScreen() {
             onLayout={(event) => handleAnchorLayout('errorReason', event)}>
             <SectionTitle title="错因（可选）" />
             <View style={styles.tagsRow}>
-              {ERROR_REASON_OPTIONS.map((item) => (
+              {errorReasonOptions.map((item) => (
                 <TagChip
                   key={item.value}
                   label={item.label}
@@ -1816,6 +1975,26 @@ export default function AddScreen() {
                 />
               ))}
             </View>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => {
+                setCustomErrorReasonMessage(null);
+                setCustomErrorReasonModalVisible(true);
+              }}
+              style={({ pressed }) => [
+                styles.customModuleEntry,
+                pressed ? styles.customModuleEntryPressed : null,
+              ]}>
+              <MaterialIcons name="add" size={19} color={colors.textSecondary} />
+              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.customModuleEntryText}>
+                自定义错因
+              </Text>
+              <View style={styles.customModuleNewBadge}>
+                <Text maxFontSizeMultiplier={1.1} style={styles.customModuleNewBadgeText}>
+                  New
+                </Text>
+              </View>
+            </Pressable>
           </View>
 
           <View style={styles.sectionBlock}>
@@ -1891,6 +2070,36 @@ export default function AddScreen() {
         onDeleteModule={handleDeleteCustomModule}
         onMoveModule={handleMoveCustomModule}
         onUseTemplate={handleUseCustomModuleTemplate}
+      />
+      <CustomModuleManagerModal
+        visible={customErrorReasonModalVisible}
+        customModules={customErrorReasons}
+        selectedModule={draft.errorReason}
+        busy={customErrorReasonBusy}
+        message={customErrorReasonMessage}
+        labels={{
+          title: '自定义错因',
+          closeAccessibilityLabel: '关闭自定义错因',
+          saveAccessibilityLabel: '保存错因',
+          mineTabLabel: '我的错因',
+          addPlaceholder: '添加新错因',
+          editPlaceholder: '编辑错因名称',
+          emptyText: '还没有自定义错因',
+          selectAccessibilityLabel: (name) => `选择错因${name}`,
+          moveUpAccessibilityLabel: '上移错因',
+          moveDownAccessibilityLabel: '下移错因',
+          editAccessibilityLabel: '编辑错因',
+          deleteAccessibilityLabel: '删除错因',
+        }}
+        templates={CUSTOM_ERROR_REASON_TEMPLATES}
+        maxItemCount={MAX_CUSTOM_ERROR_REASON_COUNT}
+        onClose={() => setCustomErrorReasonModalVisible(false)}
+        onSelectModule={(reasonName) => updateDraft('errorReason', reasonName)}
+        onCreateModule={handleCreateCustomErrorReason}
+        onUpdateModule={handleUpdateCustomErrorReason}
+        onDeleteModule={handleDeleteCustomErrorReason}
+        onMoveModule={handleMoveCustomErrorReason}
+        onUseTemplate={handleUseCustomErrorReasonTemplate}
       />
       </ScreenContainer>
 

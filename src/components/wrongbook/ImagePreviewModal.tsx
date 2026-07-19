@@ -183,8 +183,8 @@ export function ImagePreviewModal({
     [containerSizeState, intrinsicSize],
   );
 
-  function buildLogMetadata(extra?: Record<string, unknown>) {
-    return {
+  const buildLogMetadata = useCallback(
+    (extra?: Record<string, unknown>) => ({
       visible,
       title: headerTitle,
       interactionMode,
@@ -197,8 +197,21 @@ export function ImagePreviewModal({
       contentWidth: containedSize.width,
       contentHeight: containedSize.height,
       ...extra,
-    };
-  }
+    }),
+    [
+      containedSize.height,
+      containedSize.width,
+      containerSizeState.height,
+      containerSizeState.width,
+      headerTitle,
+      imageFailed,
+      interactionMode,
+      intrinsicSize?.height,
+      intrinsicSize?.width,
+      normalizedUri,
+      visible,
+    ],
+  );
 
   function logInfo(eventName: string, extra?: Record<string, unknown>) {
     Logger.info(previewLogScope, eventName, buildLogMetadata(extra));
@@ -271,6 +284,7 @@ export function ImagePreviewModal({
       }),
     );
   }, [
+    buildLogMetadata,
     containedSize.height,
     containedSize.width,
     containerSizeState.height,
@@ -314,7 +328,7 @@ export function ImagePreviewModal({
     return () => {
       cancelled = true;
     };
-  }, [normalizedUri, previewLogScope]);
+  }, [buildLogMetadata, normalizedUri, previewLogScope]);
 
   useEffect(() => {
     contentWidth.value = containedSize.width;
@@ -331,6 +345,7 @@ export function ImagePreviewModal({
       );
     }
   }, [
+    buildLogMetadata,
     containedSize.height,
     containedSize.width,
     contentHeight,

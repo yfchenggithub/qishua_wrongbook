@@ -1,4 +1,4 @@
-﻿import * as Clipboard from 'expo-clipboard';
+import * as Clipboard from 'expo-clipboard';
 import { Stack, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {

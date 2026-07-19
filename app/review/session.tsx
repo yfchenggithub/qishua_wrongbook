@@ -1210,6 +1210,8 @@ export default function ReviewSessionPage() {
   const currentSubmittedReviewEntry = currentQueueItem
     ? submittedReviewEntries[currentQueueItem.id] ?? null
     : null;
+  const currentDisplayTitle =
+    currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...';
   const hasUnsubmittedReviewDraft =
     !currentSubmittedReviewEntry
     && (
@@ -2684,6 +2686,233 @@ export default function ReviewSessionPage() {
     void loadQueue();
   }, [loadQueue]);
 
+  const refreshQueueDisplayFromStorage = useCallback(async () => {
+    if (sessionState !== 'ready' || queue.length <= 0) {
+      return;
+    }
+
+    try {
+      const latestQueue = await ReviewSessionService.getTodayReviewSessionQueue();
+      const latestById = new Map(latestQueue.map((item) => [item.id, item]));
+      const submittedMissingItems = queue.filter(
+        (item) => submittedMistakeIds.has(item.id) && !latestById.has(item.id),
+      );
+      const submittedFallbackById = new Map<string, ReviewSessionQueueItem>();
+
+      await Promise.all(
+        submittedMissingItems.map(async (item) => {
+          const result = await ReviewSessionService.loadTodayReviewItem(item.id, {
+            allowSubmitted: true,
+          });
+          if (!result.ok) {
+            if (!result.canSkip) {
+              submittedFallbackById.set(item.id, item);
+            }
+            return;
+          }
+
+          if (result.data.detail.status === 'archived') {
+            return;
+          }
+
+          submittedFallbackById.set(item.id, {
+            ...item,
+            title: result.data.detail.title,
+            module: result.data.detail.module,
+          });
+        }),
+      );
+
+      const removedIds = new Set<string>();
+      const nextQueue = queue.reduce<ReviewSessionQueueItem[]>((items, item) => {
+        const latestItem = latestById.get(item.id);
+        if (latestItem) {
+          const isSubmitted = submittedMistakeIds.has(item.id);
+          items.push({
+            ...item,
+            title: latestItem.title,
+            module: latestItem.module,
+            reviewCount: latestItem.reviewCount,
+            maxReviewCount: latestItem.maxReviewCount,
+            nextReviewIndex: isSubmitted ? item.nextReviewIndex : latestItem.nextReviewIndex,
+          });
+          return items;
+        }
+
+        const submittedFallback = submittedFallbackById.get(item.id);
+        if (submittedFallback) {
+          items.push(submittedFallback);
+          return items;
+        }
+
+        removedIds.add(item.id);
+        return items;
+      }, []);
+
+      const queueChanged =
+        nextQueue.length !== queue.length
+        || nextQueue.some((item, index) => {
+          const previousItem = queue[index];
+          return (
+            !previousItem
+            || previousItem.id !== item.id
+            || previousItem.title !== item.title
+            || previousItem.module !== item.module
+            || previousItem.reviewCount !== item.reviewCount
+            || previousItem.maxReviewCount !== item.maxReviewCount
+            || previousItem.nextReviewIndex !== item.nextReviewIndex
+          );
+        });
+
+      if (queueChanged) {
+        setQueue(nextQueue);
+      }
+
+      if (removedIds.size > 0) {
+        setSubmittedMistakeIds((previousIds) => {
+          let changed = false;
+          const nextIds = new Set(previousIds);
+          for (const removedId of removedIds) {
+            if (nextIds.delete(removedId)) {
+              changed = true;
+            }
+          }
+          return changed ? nextIds : previousIds;
+        });
+        setSubmittedReviewEntries((previousEntries) => {
+          let changed = false;
+          const nextEntries = { ...previousEntries };
+          for (const removedId of removedIds) {
+            if (Object.prototype.hasOwnProperty.call(nextEntries, removedId)) {
+              delete nextEntries[removedId];
+              changed = true;
+            }
+          }
+          return changed ? nextEntries : previousEntries;
+        });
+        setResultStats((previousStats) => {
+          const nextStats = { ...previousStats };
+          let changed = false;
+          for (const removedId of removedIds) {
+            const result = submittedReviewEntries[removedId]?.result;
+            if (!result) {
+              continue;
+            }
+            const statsKey = getStatsKeyForReviewResult(result);
+            nextStats[statsKey] = Math.max(0, nextStats[statsKey] - 1);
+            changed = true;
+          }
+          return changed ? nextStats : previousStats;
+        });
+        setQuestionListVisible(false);
+      }
+
+      const currentItemWasRemoved = currentQueueItemId ? removedIds.has(currentQueueItemId) : false;
+      if (currentItemWasRemoved) {
+        setCurrentMeta(null);
+        setCurrentQuestionSlot(undefined);
+        setCurrentErrorMessage(null);
+        setPreviewImage(null);
+        setIsLoadingCurrent(false);
+        if (!currentSubmittedReviewEntry) {
+          void discardUnsubmittedReviewDraft();
+        }
+      } else {
+        setCurrentMeta((previousMeta) => {
+          if (!previousMeta) {
+            return previousMeta;
+          }
+
+          const nextItem = nextQueue.find((item) => item.id === previousMeta.mistakeId);
+          if (!nextItem) {
+            return previousMeta;
+          }
+
+          const nextReviewIndex = submittedMistakeIds.has(previousMeta.mistakeId)
+            ? previousMeta.nextReviewIndex
+            : nextItem.nextReviewIndex;
+          const unchanged =
+            previousMeta.title === nextItem.title
+            && previousMeta.module === nextItem.module
+            && previousMeta.nextReviewIndex === nextReviewIndex;
+          if (unchanged) {
+            return previousMeta;
+          }
+
+          return {
+            ...previousMeta,
+            title: nextItem.title,
+            module: nextItem.module,
+            nextReviewIndex,
+          };
+        });
+      }
+
+      if (nextQueue.length <= 0) {
+        setCurrentIndex(0);
+        setSessionState('empty');
+        return;
+      }
+
+      const nextSubmittedIds = new Set(
+        Array.from(submittedMistakeIds).filter((id) => !removedIds.has(id)),
+      );
+      const shouldResetModuleFilter =
+        selectedModuleFilter !== null
+        && !nextQueue.some((item) => isQueueItemInModuleFilter(item, selectedModuleFilter));
+      const effectiveModuleFilter = shouldResetModuleFilter ? null : selectedModuleFilter;
+      if (shouldResetModuleFilter) {
+        setSelectedModuleFilter(null);
+      }
+
+      const currentIndexAfterRefresh =
+        currentQueueItemId && !currentItemWasRemoved
+          ? nextQueue.findIndex((item) => item.id === currentQueueItemId)
+          : -1;
+      if (currentIndexAfterRefresh >= 0) {
+        setCurrentIndex(currentIndexAfterRefresh);
+      } else {
+        const nextPendingIndex = findPendingReviewIndex(
+          nextQueue,
+          nextSubmittedIds,
+          0,
+          'next',
+          effectiveModuleFilter,
+        );
+        const fallbackIndex = nextQueue.findIndex((item) =>
+          isQueueItemInModuleFilter(item, effectiveModuleFilter),
+        );
+        setCurrentIndex(nextPendingIndex ?? (fallbackIndex >= 0 ? fallbackIndex : nextQueue.length));
+      }
+
+      if (removedIds.size > 0) {
+        showToast(`已移除 ${removedIds.size} 道不再需要复做的题目`, 'info', TOAST_DURATION_SHORT);
+      }
+
+      if (currentQueueItemId && !currentItemWasRemoved) {
+        setCurrentReloadNonce((previousNonce) => previousNonce + 1);
+      }
+    } catch (error) {
+      Logger.warn(PAGE_SCOPE, 'Failed to refresh today review queue display data.', { error });
+    }
+  }, [
+    currentQueueItemId,
+    currentSubmittedReviewEntry,
+    discardUnsubmittedReviewDraft,
+    queue,
+    selectedModuleFilter,
+    sessionState,
+    showToast,
+    submittedMistakeIds,
+    submittedReviewEntries,
+  ]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void refreshQueueDisplayFromStorage();
+    }, [refreshQueueDisplayFromStorage]),
+  );
+
   useEffect(
     () => () => {
       if (anchorHighlightTimerRef.current) {
@@ -3356,7 +3585,7 @@ export default function ReviewSessionPage() {
                   </View>
                   <View style={styles.progressDivider} />
                   <Text style={styles.progressTitle} numberOfLines={2}>
-                    {currentMeta?.title ?? currentQueueItem?.title ?? '正在准备题目...'}
+                    {currentDisplayTitle}
                   </Text>
                   <View style={styles.progressMetaRow}>
                     <Text style={styles.progressModule} numberOfLines={1}>

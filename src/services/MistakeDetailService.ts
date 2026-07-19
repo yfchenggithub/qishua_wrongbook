@@ -1,4 +1,4 @@
-﻿import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
+import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import { MISTAKE_NOTE_MAX_LENGTH } from '@/src/constants/mistakeOptions';
 import type {
   DetailImageSlot,

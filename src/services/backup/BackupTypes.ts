@@ -1,4 +1,6 @@
 import type { Mistake, MistakeImageType } from '@/src/models/Mistake';
+import type { CustomErrorReason } from '@/src/models/CustomErrorReason';
+import type { CustomModule } from '@/src/models/CustomModule';
 import type { MistakeRelation } from '@/src/models/MistakeRelation';
 import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ReviewRecord } from '@/src/models/ReviewRecord';
@@ -47,6 +49,8 @@ export interface BackupMistakeImageRecord {
 export type BackupReviewRecord = ReviewRecord;
 export type BackupMistakeRelationRecord = MistakeRelation;
 export type BackupMistakeTagRecord = MistakeTag;
+export type BackupCustomModuleRecord = CustomModule;
+export type BackupCustomErrorReasonRecord = CustomErrorReason;
 
 export interface BackupVoiceNoteRecord {
   id: string;
@@ -65,6 +69,8 @@ export interface BackupDataPayload {
   reviewRecords: BackupReviewRecord[];
   mistakeRelations: BackupMistakeRelationRecord[];
   mistakeTags: BackupMistakeTagRecord[];
+  customModules: BackupCustomModuleRecord[];
+  customErrorReasons: BackupCustomErrorReasonRecord[];
   extra: Record<string, unknown>;
 }
 

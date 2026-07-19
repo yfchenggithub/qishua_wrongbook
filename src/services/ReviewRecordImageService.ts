@@ -1,4 +1,4 @@
-﻿import { MistakeImageRepository, ReviewRecordRepository } from '@/src/repositories';
+import { MistakeImageRepository, ReviewRecordRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 
 const SERVICE_SCOPE = 'ReviewRecordImageService';

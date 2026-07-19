@@ -22,12 +22,34 @@ import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 type ModuleManagerTab = 'mine' | 'templates';
 
+export interface CustomModuleManagerModalLabels {
+  title: string;
+  closeAccessibilityLabel: string;
+  saveAccessibilityLabel: string;
+  mineTabLabel: string;
+  templatesTabLabel: string;
+  addPlaceholder: string;
+  editPlaceholder: string;
+  emptyText: string;
+  itemCountUnit: string;
+  addedText: string;
+  addText: string;
+  selectAccessibilityLabel: (name: string) => string;
+  moveUpAccessibilityLabel: string;
+  moveDownAccessibilityLabel: string;
+  editAccessibilityLabel: string;
+  deleteAccessibilityLabel: string;
+}
+
 export interface CustomModuleManagerModalProps {
   visible: boolean;
   customModules: CustomModule[];
   selectedModule: string | null;
   busy?: boolean;
   message?: string | null;
+  labels?: Partial<CustomModuleManagerModalLabels>;
+  templates?: readonly string[];
+  maxItemCount?: number;
   onClose: () => void;
   onSelectModule: (moduleName: string) => void;
   onCreateModule: (moduleName: string) => Promise<boolean>;
@@ -41,12 +63,34 @@ function normalizeModuleName(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
+const DEFAULT_LABELS: CustomModuleManagerModalLabels = {
+  title: '自定义模块',
+  closeAccessibilityLabel: '关闭自定义模块',
+  saveAccessibilityLabel: '保存模块',
+  mineTabLabel: '我的模块',
+  templatesTabLabel: '推荐模板',
+  addPlaceholder: '添加新模块',
+  editPlaceholder: '编辑模块名称',
+  emptyText: '还没有自定义模块',
+  itemCountUnit: '个',
+  addedText: '已添加',
+  addText: '添加',
+  selectAccessibilityLabel: (name) => `选择${name}`,
+  moveUpAccessibilityLabel: '上移模块',
+  moveDownAccessibilityLabel: '下移模块',
+  editAccessibilityLabel: '编辑模块',
+  deleteAccessibilityLabel: '删除模块',
+};
+
 export function CustomModuleManagerModal({
   visible,
   customModules,
   selectedModule,
   busy = false,
   message,
+  labels,
+  templates = CUSTOM_MODULE_TEMPLATES,
+  maxItemCount = MAX_CUSTOM_MODULE_COUNT,
   onClose,
   onSelectModule,
   onCreateModule,
@@ -64,6 +108,10 @@ export function CustomModuleManagerModal({
   );
   const isEditing = editingModule !== null;
   const normalizedDraftName = normalizeModuleName(draftName);
+  const displayLabels = {
+    ...DEFAULT_LABELS,
+    ...labels,
+  };
 
   useEffect(() => {
     if (!visible) {
@@ -109,7 +157,7 @@ export function CustomModuleManagerModal({
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.layer}>
         <Pressable
-          accessibilityLabel="关闭自定义模块"
+          accessibilityLabel={displayLabels.closeAccessibilityLabel}
           accessibilityRole="button"
           onPress={onClose}
           style={styles.backdrop}
@@ -125,10 +173,10 @@ export function CustomModuleManagerModal({
               <MaterialIcons name="close" size={24} color={colors.textPrimary} />
             </Pressable>
             <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.title}>
-              自定义模块
+              {displayLabels.title}
             </Text>
             <Pressable
-              accessibilityLabel="保存模块"
+              accessibilityLabel={displayLabels.saveAccessibilityLabel}
               accessibilityRole="button"
               disabled={busy || normalizedDraftName.length === 0}
               onPress={() => {
@@ -151,7 +199,7 @@ export function CustomModuleManagerModal({
               onPress={() => setActiveTab('mine')}
               style={[styles.tabButton, activeTab === 'mine' ? styles.tabButtonActive : null]}>
               <Text style={[styles.tabText, activeTab === 'mine' ? styles.tabTextActive : null]}>
-                我的模块
+                {displayLabels.mineTabLabel}
               </Text>
             </Pressable>
             <Pressable
@@ -159,7 +207,7 @@ export function CustomModuleManagerModal({
               onPress={() => setActiveTab('templates')}
               style={[styles.tabButton, activeTab === 'templates' ? styles.tabButtonActive : null]}>
               <Text style={[styles.tabText, activeTab === 'templates' ? styles.tabTextActive : null]}>
-                推荐模板
+                {displayLabels.templatesTabLabel}
               </Text>
             </Pressable>
           </View>
@@ -172,7 +220,7 @@ export function CustomModuleManagerModal({
                   value={draftName}
                   editable={!busy}
                   onChangeText={setDraftName}
-                  placeholder={isEditing ? '编辑模块名称' : '添加新模块'}
+                  placeholder={isEditing ? displayLabels.editPlaceholder : displayLabels.addPlaceholder}
                   placeholderTextColor={colors.textMuted}
                   returnKeyType="done"
                   onSubmitEditing={() => {
@@ -206,7 +254,7 @@ export function CustomModuleManagerModal({
                   <View style={styles.emptyPanel}>
                     <MaterialIcons name="category" size={28} color={colors.textMuted} />
                     <Text maxFontSizeMultiplier={1.1} style={styles.emptyText}>
-                      还没有自定义模块
+                      {displayLabels.emptyText}
                     </Text>
                   </View>
                 ) : (
@@ -215,6 +263,7 @@ export function CustomModuleManagerModal({
                     return (
                       <Pressable
                         key={moduleItem.id}
+                        accessibilityLabel={displayLabels.selectAccessibilityLabel(moduleItem.name)}
                         accessibilityRole="button"
                         onPress={() => handleSelectModule(moduleItem.name)}
                         style={({ pressed }) => [
@@ -233,7 +282,7 @@ export function CustomModuleManagerModal({
                         </Text>
                         <View style={styles.rowActions}>
                           <Pressable
-                            accessibilityLabel="上移模块"
+                            accessibilityLabel={displayLabels.moveUpAccessibilityLabel}
                             accessibilityRole="button"
                             disabled={busy || index === 0}
                             onPress={() => onMoveModule(moduleItem.id, 'up')}
@@ -245,7 +294,7 @@ export function CustomModuleManagerModal({
                             <MaterialIcons name="keyboard-arrow-up" size={20} color={colors.textSecondary} />
                           </Pressable>
                           <Pressable
-                            accessibilityLabel="下移模块"
+                            accessibilityLabel={displayLabels.moveDownAccessibilityLabel}
                             accessibilityRole="button"
                             disabled={busy || index === customModules.length - 1}
                             onPress={() => onMoveModule(moduleItem.id, 'down')}
@@ -257,7 +306,7 @@ export function CustomModuleManagerModal({
                             <MaterialIcons name="keyboard-arrow-down" size={20} color={colors.textSecondary} />
                           </Pressable>
                           <Pressable
-                            accessibilityLabel="编辑模块"
+                            accessibilityLabel={displayLabels.editAccessibilityLabel}
                             accessibilityRole="button"
                             disabled={busy}
                             onPress={() => startEditing(moduleItem)}
@@ -269,7 +318,7 @@ export function CustomModuleManagerModal({
                             <MaterialIcons name="edit" size={19} color={colors.textSecondary} />
                           </Pressable>
                           <Pressable
-                            accessibilityLabel="删除模块"
+                            accessibilityLabel={displayLabels.deleteAccessibilityLabel}
                             accessibilityRole="button"
                             disabled={busy}
                             onPress={() => onDeleteModule(moduleItem)}
@@ -288,14 +337,14 @@ export function CustomModuleManagerModal({
               </ScrollView>
 
               <Text maxFontSizeMultiplier={1.1} style={styles.limitText}>
-                已创建 {customModules.length} / {MAX_CUSTOM_MODULE_COUNT} 个
+                已创建 {customModules.length} / {maxItemCount} {displayLabels.itemCountUnit}
               </Text>
             </>
           ) : (
             <ScrollView
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.templateListContent}>
-              {CUSTOM_MODULE_TEMPLATES.map((templateName) => {
+              {templates.map((templateName) => {
                 const exists = normalizedCustomModuleNames.includes(normalizeModuleName(templateName));
                 return (
                   <Pressable
@@ -317,7 +366,7 @@ export function CustomModuleManagerModal({
                       {templateName}
                     </Text>
                     <Text maxFontSizeMultiplier={1.1} style={styles.templateActionText}>
-                      {exists ? '已添加' : '添加'}
+                      {exists ? displayLabels.addedText : displayLabels.addText}
                     </Text>
                   </Pressable>
                 );

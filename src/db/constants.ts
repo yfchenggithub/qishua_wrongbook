@@ -1,2 +1,2 @@
 export const DATABASE_NAME = 'qishua_wrongbook.db';
-export const DATABASE_VERSION = 6;
+export const DATABASE_VERSION = 7;

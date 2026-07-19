@@ -13,6 +13,7 @@ const REQUIRED_TABLES = [
   'review_sheet_items',
   'module_question_counters',
   'custom_modules',
+  'custom_error_reasons',
   'mistake_relations',
   'mistake_tags',
 ] as const;
@@ -139,6 +140,7 @@ DROP TABLE IF EXISTS mistake_tags;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
 DROP TABLE IF EXISTS custom_modules;
+DROP TABLE IF EXISTS custom_error_reasons;
 PRAGMA foreign_keys = ON;
 `);
   await applyBaseSchema(db);
@@ -303,6 +305,7 @@ DROP TABLE IF EXISTS mistake_tags;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
 DROP TABLE IF EXISTS custom_modules;
+DROP TABLE IF EXISTS custom_error_reasons;
 PRAGMA user_version = 0;
 PRAGMA foreign_keys = ON;
 `);
@@ -321,7 +324,7 @@ export async function checkDatabaseHealth(): Promise<DatabaseHealthReport> {
     const version = await readUserVersion(db);
 
     const tableRows = await db.getAllAsync<TableRow>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'module_question_counters', 'custom_modules', 'mistake_relations', 'mistake_tags')`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'module_question_counters', 'custom_modules', 'custom_error_reasons', 'mistake_relations', 'mistake_tags')`,
     );
     const tables = tableRows.map((row) => row.name);
 

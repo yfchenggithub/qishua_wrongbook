@@ -89,7 +89,19 @@
 | created_at | string | 必填 | 创建时间（ISO 8601 字符串） |
 | updated_at | string | 必填 | 更新时间（ISO 8601 字符串） |
 
-## 八、mistake_relations 表
+## 八、custom_error_reasons 表
+
+| 字段名 | 类型 | 约束/默认值 | 说明 |
+| --- | --- | --- | --- |
+| id | string | 主键，必填 | 自定义错因 ID |
+| name | string | 必填，唯一 | 自定义错因名称 |
+| icon | string | 默认 `error-outline` | 错因图标名 |
+| color | string | 默认 `#F59E0B` | 错因颜色 |
+| sort_order | number | 默认 `0` | 排序值 |
+| created_at | string | 必填 | 创建时间（ISO 8601 字符串） |
+| updated_at | string | 必填 | 更新时间（ISO 8601 字符串） |
+
+## 九、mistake_relations 表
 
 | 字段名 | 类型 | 约束/默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -104,7 +116,7 @@
 - 详情页按双向关系展示：只要当前错题出现在 `source_mistake_id` 或 `target_mistake_id`，另一端即为相关错题。
 - 删除任一错题时，必须同步删除对应关系。
 
-## 九、mistake_tags 表
+## 十、mistake_tags 表
 
 | 字段名 | 类型 | 约束/默认值 | 说明 |
 | --- | --- | --- | --- |
@@ -121,14 +133,14 @@
 - 删除错题时，必须同步删除对应标签。
 - 标签由用户手工维护，业务层应限制空标签、过长标签和同题重复标签。
 
-## 十、图片存储原则
+## 十一、图片存储原则
 
 - SQLite 只保存图片 `uri`，不保存图片二进制。
 - 图片文件由 `ImageService` 编排并持久化到 App 本地目录。
 - 建议目录：`qishua_wrongbook/mistakes/{mistakeId}/`。
 - 删除错题时应同步清理对应本地图片目录。
 
-## 十一、文本高亮原则
+## 十二、文本高亮原则
 
 - `note_highlights` 只保存选中文本的区间和颜色，不修改 `note` 原文。
 - 区间采用前闭后开：`start` 包含，`end` 不包含，基于当前 `note` 字符串索引。
@@ -136,7 +148,7 @@
 - 当用户对重叠区间重新标色时，新颜色覆盖旧颜色。
 - 当 `note` 为空时，对应 `note_highlights` 必须为空。
 
-## 十二、7 次复习规则
+## 十三、7 次复习规则
 
 - `MAX_REVIEW_COUNT = 7`。
 - `REVIEW_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60]`。
@@ -144,14 +156,14 @@
 - 当 `status = mastered` 时，`next_review_at = null`。
 - 当 `status = mastered` 或 `status = archived` 时，业务层必须拒绝继续复做。
 
-## 十三、数据兼容原则
+## 十四、数据兼容原则
 
 - 第一版字段不要频繁改名。
 - 修改数据库字段前先更新 `docs/data_contract.md`。
 - 页面层不要绕过 Repository 直接访问数据库。
 - 展示层模型如 `MistakeListItem`、`MistakeDetailViewModel` 不等同于数据库表。
 
-## 十四、新增页批量拍照规则
+## 十五、新增页批量拍照规则
 
 - 题目图片允许在新增页进入队列模式，`photoQueue` 仅存在于页面运行时状态，不落库。
 - 队列上限为 `20` 张；超限时必须阻止继续添加并提示用户先保存当前队列。

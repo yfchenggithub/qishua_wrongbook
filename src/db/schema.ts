@@ -94,6 +94,18 @@ CREATE TABLE IF NOT EXISTS custom_modules (
 );
 `;
 
+export const CREATE_CUSTOM_ERROR_REASONS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS custom_error_reasons (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL UNIQUE,
+  icon TEXT NOT NULL DEFAULT 'error-outline',
+  color TEXT NOT NULL DEFAULT '#F59E0B',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const CREATE_MISTAKE_RELATIONS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS mistake_relations (
   id TEXT PRIMARY KEY,
@@ -139,6 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_review_sheets_is_submitted ON review_sheets(is_su
 CREATE INDEX IF NOT EXISTS idx_review_sheet_items_sheet_order ON review_sheet_items(sheet_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_review_sheet_items_mistake_id ON review_sheet_items(mistake_id);
 CREATE INDEX IF NOT EXISTS idx_custom_modules_sort_order ON custom_modules(sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_custom_error_reasons_sort_order ON custom_error_reasons(sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_source_mistake ON mistake_relations(source_mistake_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_target_mistake ON mistake_relations(target_mistake_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_source ON mistake_relations(source);
@@ -155,6 +168,7 @@ ${CREATE_REVIEW_SHEETS_TABLE_SQL}
 ${CREATE_REVIEW_SHEET_ITEMS_TABLE_SQL}
 ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
 ${CREATE_CUSTOM_MODULES_TABLE_SQL}
+${CREATE_CUSTOM_ERROR_REASONS_TABLE_SQL}
 ${CREATE_MISTAKE_RELATIONS_TABLE_SQL}
 ${CREATE_MISTAKE_TAGS_TABLE_SQL}
 ${CREATE_INDEXES_SQL}

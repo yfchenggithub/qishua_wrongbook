@@ -20,16 +20,14 @@ import {
   AppToast,
   BrandHeader,
   CardContainer,
-  ProgressDots,
   QuickAnchorNav,
   type QuickAnchorNavItem,
   ScreenContainer,
   SectionTitle,
-  StatusPill,
 } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
-import type { MistakeListItem, MistakeListStatus } from '@/src/models/MistakeListItem';
+import type { MistakeListItem } from '@/src/models/MistakeListItem';
 import { todayMock } from '@/src/mocks/today';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
@@ -84,16 +82,6 @@ const TODAY_ANCHOR_ITEMS: readonly QuickAnchorNavItem<TodayAnchorId>[] = [
 function normalizeMistakeId(id: string): string | null {
   const normalized = typeof id === 'string' ? id.trim() : '';
   return normalized.length > 0 ? normalized : null;
-}
-
-function mapStatusToTone(status: MistakeListStatus): 'dark' | 'light' | 'success' {
-  if (status === 'mastered') {
-    return 'success';
-  }
-  if (status === 'due_today') {
-    return 'dark';
-  }
-  return 'light';
 }
 
 function buildExportModeHintText(mode: PrintEnhanceMode | null): string {
@@ -193,71 +181,8 @@ function buildBackupSafetyCopy(lastBackupAt: string | null): {
   };
 }
 
-function ThumbnailPlaceholder() {
-  return (
-    <View style={styles.thumb}>
-      <View style={styles.thumbAxisX} />
-      <View style={styles.thumbAxisY} />
-      <View style={styles.thumbCurve} />
-    </View>
-  );
-}
-
 function getNextReviewIndex(reviewCount: number, maxReviewCount: number): number {
   return Math.max(1, Math.min(maxReviewCount, reviewCount + 1));
-}
-
-function MistakeCard({
-  item,
-  pressable,
-}: {
-  item: MistakeListItem;
-  pressable?: () => void;
-}) {
-  const content = (
-    <CardContainer padding={spacing.md} style={styles.mistakeCard}>
-      <View style={styles.mistakeRow}>
-        <ThumbnailPlaceholder />
-
-        <View style={styles.mistakeMain}>
-          <View style={styles.mistakeTopLine}>
-            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.mistakeMeta}>
-              {item.module}
-            </Text>
-            <Text maxFontSizeMultiplier={1.1} style={styles.arrow}>
-              {'>'}
-            </Text>
-          </View>
-
-          <Text numberOfLines={2} maxFontSizeMultiplier={1.2} style={styles.mistakeTitle}>
-            {item.title}
-          </Text>
-          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.mistakeSource}>
-            {item.subtitle}
-          </Text>
-
-          <View style={styles.progressRow}>
-            <ProgressDots
-              total={item.maxReviewCount}
-              current={item.reviewCount}
-              completed={item.reviewCount}
-            />
-          </View>
-          <StatusPill
-            label={item.statusLabel}
-            tone={mapStatusToTone(item.displayStatus)}
-            style={styles.statusPill}
-          />
-        </View>
-      </View>
-    </CardContainer>
-  );
-
-  if (!pressable) {
-    return content;
-  }
-
-  return <Pressable onPress={pressable}>{content}</Pressable>;
 }
 
 function SectionStateCard({
@@ -1512,87 +1437,6 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: radius.pill,
     backgroundColor: colors.success,
-  },
-  mistakeCard: {
-    borderRadius: radius.xl,
-  },
-  mistakeRow: {
-    flexDirection: 'row',
-    gap: spacing.md,
-  },
-  mistakeMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: spacing.sm,
-  },
-  mistakeTopLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  mistakeMeta: {
-    ...typography.body,
-    color: colors.textSecondary,
-    fontWeight: '600',
-    flex: 1,
-    minWidth: 0,
-  },
-  arrow: {
-    ...typography.body,
-    color: colors.textMuted,
-    fontSize: 24,
-    lineHeight: 24,
-  },
-  mistakeTitle: {
-    ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
-  },
-  mistakeSource: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  progressRow: {
-    marginTop: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: spacing.sm,
-  },
-  statusPill: {
-    marginTop: spacing.xs,
-    alignSelf: 'flex-start',
-  },
-  thumb: {
-    width: 96,
-    height: 96,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    overflow: 'hidden',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  thumbAxisX: {
-    position: 'absolute',
-    width: 64,
-    height: 1.5,
-    backgroundColor: '#8E949D',
-  },
-  thumbAxisY: {
-    position: 'absolute',
-    width: 1.5,
-    height: 64,
-    backgroundColor: '#8E949D',
-  },
-  thumbCurve: {
-    width: 54,
-    height: 40,
-    borderWidth: 1.5,
-    borderColor: '#8E949D',
-    borderRadius: radius.pill,
-    transform: [{ rotate: '-18deg' }],
   },
   upcomingCard: {
     borderRadius: radius.xl,
