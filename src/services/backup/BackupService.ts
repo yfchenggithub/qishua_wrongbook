@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
-import { Directory, File, Paths } from 'expo-file-system';
-import { strFromU8, unzipSync } from 'fflate';
+import { Directory, File, Paths, type FileHandle } from 'expo-file-system';
+import { strFromU8, Unzip, UnzipInflate } from 'fflate';
 import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 
@@ -99,6 +99,8 @@ const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
 const BACKUP_PROGRESS_RENDER_DELAY_MS = 0;
+const RESTORE_ARCHIVE_STREAM_CHUNK_BYTES = 512 * 1024;
+const RESTORE_MANIFEST_MAX_BYTES = 1024 * 1024;
 
 const INSERT_MISTAKE_SQL = `
 INSERT INTO mistakes (
@@ -232,6 +234,20 @@ type ExtractedBackupArchive = {
   countsFromManifest: BackupCounts;
   appVersionInBackup: string;
   createdAtInBackup: string;
+};
+
+type StreamExtractResult = {
+  archiveFileMap: Map<string, File>;
+  imageTotalBytes: number;
+  entryCount: number;
+  fileCount: number;
+  directoryCount: number;
+  bytesRead: number;
+};
+
+type StreamManifestReadResult = {
+  manifestBytes: Uint8Array;
+  bytesRead: number;
 };
 
 type RestoreImageMaterializedResult = {
@@ -711,6 +727,362 @@ function normalizeArchiveEntryPath(path: string): string {
   return isDirectoryPath ? `${normalizedWithoutTrailingSlash}/` : normalizedWithoutTrailingSlash;
 }
 
+function isArchiveDirectoryEntry(path: string): boolean {
+  return normalizeArchiveEntryPath(path).endsWith('/');
+}
+
+function concatUint8Chunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
+}
+
+function closeFileHandleBestEffort(handle: FileHandle | null): void {
+  if (!handle) {
+    return;
+  }
+  try {
+    handle.close();
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function resolveReadableFileSize(file: File, fallbackSizeBytes?: number | null): number {
+  if (ensureNonNegativeNumber(fallbackSizeBytes)) {
+    return Math.floor(fallbackSizeBytes);
+  }
+
+  const info = file.info();
+  if (ensureNonNegativeNumber(info.size)) {
+    return Math.floor(info.size);
+  }
+
+  if (ensureNonNegativeNumber(file.size)) {
+    return Math.floor(file.size);
+  }
+
+  return 0;
+}
+
+function ensureExtractParentDirectory(extractDirectory: Directory, normalizedPath: string): void {
+  const slashIndex = normalizedPath.lastIndexOf('/');
+  if (slashIndex < 0) {
+    return;
+  }
+
+  const parentPath = normalizedPath.slice(0, slashIndex);
+  if (parentPath.trim().length <= 0) {
+    return;
+  }
+
+  const parentDir = new Directory(extractDirectory, parentPath);
+  parentDir.create({ intermediates: true, idempotent: true });
+}
+
+function streamFileIntoUnzip(options: {
+  archiveFile: File;
+  archiveSizeBytes?: number | null;
+  unzipper: Unzip;
+  getStreamError?: () => unknown | null;
+  shouldStop?: () => boolean;
+  allowPartialRead?: boolean;
+}): number {
+  const {
+    archiveFile,
+    archiveSizeBytes,
+    unzipper,
+    getStreamError,
+    shouldStop,
+    allowPartialRead = false,
+  } = options;
+  const totalSizeBytes = resolveReadableFileSize(archiveFile, archiveSizeBytes);
+  if (totalSizeBytes <= 0) {
+    throw new Error('Backup archive is empty or unreadable.');
+  }
+
+  let handle: FileHandle | null = null;
+  let bytesRead = 0;
+  try {
+    handle = archiveFile.open();
+
+    while (bytesRead < totalSizeBytes) {
+      const remainingBytes = totalSizeBytes - bytesRead;
+      const readLength = Math.min(RESTORE_ARCHIVE_STREAM_CHUNK_BYTES, remainingBytes);
+      const chunk = handle.readBytes(readLength);
+      if (chunk.byteLength <= 0) {
+        break;
+      }
+
+      bytesRead += chunk.byteLength;
+      unzipper.push(chunk, bytesRead >= totalSizeBytes);
+
+      const streamError = getStreamError?.();
+      if (streamError) {
+        throw streamError;
+      }
+
+      if (shouldStop?.()) {
+        return bytesRead;
+      }
+    }
+  } finally {
+    closeFileHandleBestEffort(handle);
+  }
+
+  if (!allowPartialRead && bytesRead < totalSizeBytes) {
+    throw new Error('Backup archive ended before all bytes were read.');
+  }
+
+  return bytesRead;
+}
+
+function copyFileInChunks(sourceFile: File, targetFile: File, sourceSizeBytes?: number | null): number {
+  const totalSizeBytes = resolveReadableFileSize(sourceFile, sourceSizeBytes);
+  if (totalSizeBytes <= 0) {
+    throw new Error('Source backup file is empty or unreadable.');
+  }
+
+  if (targetFile.exists) {
+    targetFile.delete();
+  }
+  targetFile.create({ intermediates: true, overwrite: true });
+
+  let sourceHandle: FileHandle | null = null;
+  let targetHandle: FileHandle | null = null;
+  let copiedBytes = 0;
+  try {
+    sourceHandle = sourceFile.open();
+    targetHandle = targetFile.open();
+
+    while (copiedBytes < totalSizeBytes) {
+      const remainingBytes = totalSizeBytes - copiedBytes;
+      const readLength = Math.min(RESTORE_ARCHIVE_STREAM_CHUNK_BYTES, remainingBytes);
+      const chunk = sourceHandle.readBytes(readLength);
+      if (chunk.byteLength <= 0) {
+        break;
+      }
+      targetHandle.writeBytes(chunk);
+      copiedBytes += chunk.byteLength;
+    }
+  } finally {
+    closeFileHandleBestEffort(sourceHandle);
+    closeFileHandleBestEffort(targetHandle);
+  }
+
+  if (copiedBytes < totalSizeBytes) {
+    throw new Error('Source backup file ended before copy completed.');
+  }
+
+  return copiedBytes;
+}
+
+function readManifestBytesFromArchiveStream(
+  archiveFile: File,
+  archiveSizeBytes?: number | null,
+): StreamManifestReadResult {
+  let manifestBytes: Uint8Array | null = null;
+  let streamError: unknown | null = null;
+
+  const unzipper = new Unzip((entry) => {
+    let normalizedPath = '';
+    try {
+      normalizedPath = normalizeArchiveEntryPath(entry.name);
+    } catch (error) {
+      streamError = error;
+      return;
+    }
+
+    if (isArchiveDirectoryEntry(entry.name)) {
+      return;
+    }
+
+    if (normalizedPath !== BACKUP_MANIFEST_FILE_NAME) {
+      entry.ondata = (error) => {
+        if (error) {
+          streamError = error;
+        }
+      };
+      try {
+        entry.start();
+      } catch (error) {
+        streamError = error;
+      }
+      return;
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalLength = 0;
+    entry.ondata = (error, chunk, final) => {
+      if (error) {
+        streamError = error;
+        return;
+      }
+      if (chunk.byteLength > 0) {
+        totalLength += chunk.byteLength;
+        if (totalLength > RESTORE_MANIFEST_MAX_BYTES) {
+          streamError = new Error('Backup manifest is too large.');
+          return;
+        }
+        chunks.push(new Uint8Array(chunk));
+      }
+      if (final) {
+        manifestBytes = concatUint8Chunks(chunks, totalLength);
+      }
+    };
+
+    try {
+      entry.start();
+    } catch (error) {
+      streamError = error;
+    }
+  });
+  unzipper.register(UnzipInflate);
+
+  const bytesRead = streamFileIntoUnzip({
+    archiveFile,
+    archiveSizeBytes,
+    unzipper,
+    getStreamError: () => streamError,
+    shouldStop: () => manifestBytes !== null,
+    allowPartialRead: true,
+  });
+
+  if (streamError) {
+    throw streamError;
+  }
+  if (!manifestBytes) {
+    throw new BackupRestoreError(
+      'RESTORE_MANIFEST_MISSING',
+      getBackupErrorUserMessage('RESTORE_MANIFEST_MISSING'),
+      {
+        stage: 'package_read',
+        step: 'ensure_manifest_exists',
+      },
+    );
+  }
+
+  return {
+    manifestBytes,
+    bytesRead,
+  };
+}
+
+function extractArchiveToDirectoryStream(options: {
+  archiveFile: File;
+  archiveSizeBytes?: number | null;
+  extractDirectory: Directory;
+}): StreamExtractResult {
+  const { archiveFile, archiveSizeBytes, extractDirectory } = options;
+  const archiveFileMap = new Map<string, File>();
+  const openHandles = new Set<FileHandle>();
+  let streamError: unknown | null = null;
+  let imageTotalBytes = 0;
+  let entryCount = 0;
+  let fileCount = 0;
+  let directoryCount = 0;
+
+  const unzipper = new Unzip((entry) => {
+    try {
+      const normalizedPath = normalizeArchiveEntryPath(entry.name);
+      entryCount += 1;
+
+      if (normalizedPath.endsWith('/')) {
+        const directory = new Directory(extractDirectory, normalizedPath);
+        directory.create({ intermediates: true, idempotent: true });
+        directoryCount += 1;
+        return;
+      }
+
+      ensureExtractParentDirectory(extractDirectory, normalizedPath);
+      const extractedFile = new File(extractDirectory, normalizedPath);
+      if (extractedFile.exists) {
+        extractedFile.delete();
+      }
+      extractedFile.create({ intermediates: true, overwrite: true });
+
+      let targetHandle: FileHandle | null = extractedFile.open();
+      openHandles.add(targetHandle);
+      let bytesWritten = 0;
+      entry.ondata = (error, chunk, final) => {
+        if (error) {
+          streamError = error;
+          if (targetHandle) {
+            openHandles.delete(targetHandle);
+            closeFileHandleBestEffort(targetHandle);
+            targetHandle = null;
+          }
+          return;
+        }
+
+        try {
+          if (chunk.byteLength > 0 && targetHandle) {
+            targetHandle.writeBytes(chunk);
+            bytesWritten += chunk.byteLength;
+          }
+
+          if (final && targetHandle) {
+            openHandles.delete(targetHandle);
+            closeFileHandleBestEffort(targetHandle);
+            targetHandle = null;
+            archiveFileMap.set(normalizedPath, extractedFile);
+            fileCount += 1;
+            if (normalizedPath.startsWith(`${BACKUP_IMAGES_DIR_NAME}/`)) {
+              imageTotalBytes += bytesWritten;
+            }
+          }
+        } catch (errorInHandler) {
+          streamError = errorInHandler;
+          if (targetHandle) {
+            openHandles.delete(targetHandle);
+            closeFileHandleBestEffort(targetHandle);
+            targetHandle = null;
+          }
+        }
+      };
+
+      entry.start();
+    } catch (error) {
+      streamError = error;
+    }
+  });
+  unzipper.register(UnzipInflate);
+
+  try {
+    const bytesRead = streamFileIntoUnzip({
+      archiveFile,
+      archiveSizeBytes,
+      unzipper,
+      getStreamError: () => streamError,
+    });
+
+    if (streamError) {
+      throw streamError;
+    }
+    if (openHandles.size > 0) {
+      throw new Error('Backup archive ended before all entries were extracted.');
+    }
+
+    return {
+      archiveFileMap,
+      imageTotalBytes,
+      entryCount,
+      fileCount,
+      directoryCount,
+      bytesRead,
+    };
+  } finally {
+    for (const handle of openHandles) {
+      closeFileHandleBestEffort(handle);
+    }
+    openHandles.clear();
+  }
+}
+
 function getFileShortInfo(fileUri: string): string {
   try {
     return shortFileInfo({
@@ -946,9 +1318,11 @@ async function collectImageArtifacts(
         continue;
       }
 
+      const sourceInfo = sourceFile.info();
       archiveImages.push({
         backupRelativePath,
-        bytes: await sourceFile.bytes(),
+        sourceUri: sourceFile.uri,
+        sizeBytes: ensureNonNegativeNumber(sourceInfo.size) ? Math.floor(sourceInfo.size) : null,
       });
       copiedImageCount += 1;
     } catch (error) {
@@ -1109,13 +1483,14 @@ async function collectVoiceArtifacts(
           `VOICE_FILE_MISSING:voiceNoteId=${normalizedVoiceNote.id},reviewRecordId=${reviewRecord.id},mistakeId=${reviewRecord.mistake_id},fileName=${normalizedVoiceNote.fileName}`,
         );
       } else {
+        const sourceInfo = sourceFile.info();
         archiveVoiceFiles.push({
           backupRelativePath,
-          bytes: await sourceFile.bytes(),
+          sourceUri: sourceFile.uri,
+          sizeBytes: ensureNonNegativeNumber(sourceInfo.size) ? Math.floor(sourceInfo.size) : null,
         });
         copiedVoiceFileCount += 1;
 
-        const sourceInfo = sourceFile.info();
         if (ensureNonNegativeNumber(sourceInfo.size)) {
           sizeBytes = Math.floor(sourceInfo.size);
         }
@@ -1285,8 +1660,8 @@ async function copyBackupFileToTemp(
     try {
       sourceFile.copy(tempArchiveFile);
     } catch {
-      tempArchiveFile.create({ intermediates: true, overwrite: true });
-      tempArchiveFile.write(await sourceFile.bytes());
+      const sourceInfo = sourceFile.info();
+      copyFileInChunks(sourceFile, tempArchiveFile, sourceInfo.size ?? null);
     }
   } catch (error) {
     throw buildRestoreError({
@@ -1333,9 +1708,16 @@ async function readBackupPackageFromTemp(options: {
     tempFileSizeBytes: tempArchiveSizeBytes,
   });
 
-  let archiveEntries: Record<string, Uint8Array>;
+  const extractDirectory = new Directory(tempDirectory, 'extract');
+  extractDirectory.create({ intermediates: true, idempotent: true });
+
+  let streamResult: StreamExtractResult;
   try {
-    archiveEntries = unzipSync(await tempArchiveFile.bytes());
+    streamResult = extractArchiveToDirectoryStream({
+      archiveFile: tempArchiveFile,
+      archiveSizeBytes: tempArchiveSizeBytes,
+      extractDirectory,
+    });
   } catch (error) {
     throw buildRestoreError({
       errorCode: 'RESTORE_PACKAGE_READ_FAILED',
@@ -1349,37 +1731,7 @@ async function readBackupPackageFromTemp(options: {
     });
   }
 
-  const extractDirectory = new Directory(tempDirectory, 'extract');
-  extractDirectory.create({ intermediates: true, idempotent: true });
-  const archiveFileMap = new Map<string, File>();
-  let imageTotalBytes = 0;
-
-  for (const [entryPath, bytes] of Object.entries(archiveEntries)) {
-    const normalizedPath = normalizeArchiveEntryPath(entryPath);
-    if (normalizedPath.endsWith('/')) {
-      const dir = new Directory(extractDirectory, normalizedPath);
-      dir.create({ intermediates: true, idempotent: true });
-      continue;
-    }
-
-    const slashIndex = normalizedPath.lastIndexOf('/');
-    if (slashIndex >= 0) {
-      const parentPath = normalizedPath.slice(0, slashIndex);
-      if (parentPath.trim().length > 0) {
-        const parentDir = new Directory(extractDirectory, parentPath);
-        parentDir.create({ intermediates: true, idempotent: true });
-      }
-    }
-
-    const extractedFile = new File(extractDirectory, normalizedPath);
-    extractedFile.create({ intermediates: true, overwrite: true });
-    extractedFile.write(bytes);
-    archiveFileMap.set(normalizedPath, extractedFile);
-
-    if (normalizedPath.startsWith(`${BACKUP_IMAGES_DIR_NAME}/`)) {
-      imageTotalBytes += bytes.byteLength;
-    }
-  }
+  const { archiveFileMap, imageTotalBytes } = streamResult;
 
   const manifestFile = archiveFileMap.get(BACKUP_MANIFEST_FILE_NAME);
   if (!manifestFile || !manifestFile.exists) {
@@ -1492,6 +1844,10 @@ async function readBackupPackageFromTemp(options: {
     countsFromManifest: manifest.counts,
     voiceNoteCount: voiceNotes.length,
     voiceWarningCount: voiceNotesWarnings.length,
+    streamBytesRead: streamResult.bytesRead,
+    archiveEntryCount: streamResult.entryCount,
+    archiveFileCount: streamResult.fileCount,
+    archiveDirectoryCount: streamResult.directoryCount,
     durationMs: nowMs() - readStartedAt,
   });
 
@@ -2339,6 +2695,14 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       images: imageArtifacts.archiveImages,
       voiceNotes: voiceArtifacts.backupVoiceNotes,
       voiceFiles: voiceArtifacts.archiveVoiceFiles,
+      onFilePacked: (event) => {
+        emitProgress(
+          'package',
+          `正在写入备份文件 ${event.current} / ${event.total}`,
+          event.current,
+          event.total,
+        );
+      },
     });
     emitProgress('success', '备份文件已生成', packageFileCount, packageFileCount);
 
@@ -2417,10 +2781,17 @@ export async function inspectBackup(
       );
     }
 
-    let archiveEntries: Record<string, Uint8Array>;
+    let manifestBytes: Uint8Array;
+    let manifestBytesRead = 0;
     try {
-      archiveEntries = unzipSync(await file.bytes());
+      const fileInfo = file.info();
+      const manifestReadResult = readManifestBytesFromArchiveStream(file, fileInfo.size ?? null);
+      manifestBytes = manifestReadResult.manifestBytes;
+      manifestBytesRead = manifestReadResult.bytesRead;
     } catch (error) {
+      if (error instanceof BackupRestoreError) {
+        throw error;
+      }
       throw new BackupRestoreError(
         'RESTORE_PACKAGE_READ_FAILED',
         getBackupErrorUserMessage('RESTORE_PACKAGE_READ_FAILED'),
@@ -2430,14 +2801,6 @@ export async function inspectBackup(
           cause: error,
         },
       );
-    }
-
-    const manifestBytes = archiveEntries[BACKUP_MANIFEST_FILE_NAME];
-    if (!manifestBytes) {
-      throw new BackupRestoreError('RESTORE_MANIFEST_MISSING', getBackupErrorUserMessage('RESTORE_MANIFEST_MISSING'), {
-        stage: 'package_read',
-        step: 'ensure_manifest_exists',
-      });
     }
 
     let manifestRaw: unknown;
@@ -2491,6 +2854,7 @@ export async function inspectBackup(
       fileShortInfo,
       durationMs: nowMs() - startedAt,
       counts: normalizedManifest.counts,
+      inspectedBytes: manifestBytesRead,
       warningCount: warnings.length,
     });
 

@@ -76,7 +76,8 @@ export interface BackupDataPayload {
 
 export interface BackupImageArchiveFile {
   backupRelativePath: string;
-  bytes: Uint8Array;
+  sourceUri: string;
+  sizeBytes: number | null;
 }
 
 export interface BackupPackagePreview {
