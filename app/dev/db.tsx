@@ -211,6 +211,28 @@ function buildConsistencyChecks(
     });
   }
 
+  if (mistake.status === REVIEW_STATUS.COLLECTED) {
+    const collectedRulePassed =
+      mistake.review_count === 0 &&
+      mistake.next_review_at === null &&
+      reviewRecords.length === 0;
+    checks.push({
+      key: 'collected-rule',
+      label: 'collected status rule',
+      level: collectedRulePassed ? 'pass' : 'fail',
+      message: collectedRulePassed
+        ? 'pass: review_count=0, next_review_at=null, review_records=0'
+        : `fail: review_count=${mistake.review_count}, next_review_at=${formatNullable(mistake.next_review_at)}, review_records=${reviewRecords.length}`,
+    });
+  } else {
+    checks.push({
+      key: 'collected-rule',
+      label: 'collected status rule',
+      level: 'pass',
+      message: `pass: skipped, current status=${mistake.status}`,
+    });
+  }
+
   const nonReviewWithBinding = mistakeImages.filter(
     (item) =>
       (item.type === 'question' || item.type === 'my_solution' || item.type === 'answer') &&
@@ -830,6 +852,7 @@ export default function DevDatabasePage() {
           {stats ? (
             <>
               <Text style={styles.monoText}>total: {stats.total}</Text>
+              <Text style={styles.monoText}>collected: {stats.collected}</Text>
               <Text style={styles.monoText}>active: {stats.active}</Text>
               <Text style={styles.monoText}>mastered: {stats.mastered}</Text>
               <Text style={styles.monoText}>dueToday: {stats.dueToday}</Text>

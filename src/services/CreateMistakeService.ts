@@ -1,4 +1,5 @@
 import { getDatabase } from '@/src/db';
+import { REVIEW_STATUS } from '@/src/constants/review';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { ImageType } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
@@ -23,6 +24,7 @@ type CreateMistakeFromDraftResult = {
 
 type CreateMistakeFromDraftOptions = {
   questionNo?: number;
+  joinReviewPlan?: boolean;
 };
 
 type MistakeImageInput = {
@@ -125,6 +127,7 @@ async function persistDraft(
   draft: AddMistakeDraft,
   mistakeId: string,
   questionNo: number | undefined,
+  joinReviewPlan: boolean,
   onMistakeCreated?: () => void,
 ): Promise<number> {
   const moduleName = draft.module?.trim();
@@ -157,7 +160,8 @@ async function persistDraft(
     error_reason: normalizeOptionalText(draft.errorReason),
     difficulty: draft.difficulty,
     note: normalizeOptionalText(draft.note),
-    next_review_at: new Date().toISOString(),
+    status: joinReviewPlan ? REVIEW_STATUS.ACTIVE : REVIEW_STATUS.COLLECTED,
+    next_review_at: joinReviewPlan ? new Date().toISOString() : null,
   });
   onMistakeCreated?.();
   Logger.info(SERVICE_SCOPE, 'Created mistakes row successfully.', {
@@ -240,9 +244,15 @@ export async function createMistakeFromDraft(
     const db = (await getDatabase()) as TransactionCapableDatabase;
     const runPersistFlow = async () => {
       const questionNo = await resolveQuestionNoForDraft(db, draft, options);
-      mistakeImageCount = await persistDraft(draft, mistakeId, questionNo, () => {
-        mistakeCreated = true;
-      });
+      mistakeImageCount = await persistDraft(
+        draft,
+        mistakeId,
+        questionNo,
+        options?.joinReviewPlan === true,
+        () => {
+          mistakeCreated = true;
+        },
+      );
     };
 
     if (typeof db.withTransactionAsync === 'function') {

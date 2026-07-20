@@ -1,4 +1,4 @@
-export type MistakeStatus = 'active' | 'mastered' | 'archived';
+export type MistakeStatus = 'collected' | 'active' | 'mastered' | 'archived';
 
 export type ImageType = 'question' | 'my_solution' | 'answer' | 'review_solution';
 export type MistakeImageType = ImageType;
@@ -34,6 +34,7 @@ export interface CreateMistakeInput {
   note?: string | null;
   note_highlights?: string | null;
   subject?: string;
+  status?: MistakeStatus;
   next_review_at?: string | null;
   last_review_at?: string | null;
   last_review_result?: ReviewResult | null;

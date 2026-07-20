@@ -1,7 +1,7 @@
 import type { MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeTag } from '@/src/models/MistakeTag';
 
-export type MistakeListStatus = 'due_today' | 'upcoming' | 'mastered' | 'archived';
+export type MistakeListStatus = 'collected' | 'due_today' | 'upcoming' | 'mastered' | 'archived';
 
 export interface MistakeListItem {
   id: string;
@@ -25,7 +25,7 @@ export interface MistakeListItem {
 }
 
 export interface MistakeListFilter {
-  segment: 'all' | 'due' | 'mastered';
+  segment: 'all' | 'collected' | 'due' | 'mastered';
   keyword: string;
   module?: string | null;
   tagKeys?: string[];

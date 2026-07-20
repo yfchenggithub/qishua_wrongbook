@@ -16,7 +16,7 @@
 | note | string | 可空 | 备注原文 |
 | note_highlights | string | 可空 | 备注高亮区间 JSON，元素为 `{ start, end, color }`，`color` 枚举：`yellow/red/green` |
 | review_count | number | 默认 `0`，范围 `0-7` | 当前已重做次数 |
-| status | string | 必填，枚举：`active/mastered/archived` | 错题状态 |
+| status | string | 必填，枚举：`collected/active/mastered/archived` | 错题状态：`collected` 表示已记录但未加入七刷，`active` 表示七刷中 |
 | created_at | string | 必填 | 创建时间（ISO 8601 字符串） |
 | updated_at | string | 必填 | 更新时间（ISO 8601 字符串） |
 | next_review_at | string | 可空 | 下次复习时间（ISO 8601 字符串） |
@@ -152,9 +152,11 @@
 
 - `MAX_REVIEW_COUNT = 7`。
 - `REVIEW_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60]`。
+- 新增页直接保存的错题默认 `status = collected`，`review_count = 0`，`next_review_at = null`，不进入今日复做。
+- 用户明确选择“加入七刷”后，错题从 `collected` 变为 `active`，`next_review_at` 设置为加入时间。
 - 当 `review_count >= 7` 时，`status = mastered`。
 - 当 `status = mastered` 时，`next_review_at = null`。
-- 当 `status = mastered` 或 `status = archived` 时，业务层必须拒绝继续复做。
+- 当 `status = collected`、`status = mastered` 或 `status = archived` 时，业务层必须拒绝继续复做。
 
 ## 十四、数据兼容原则
 

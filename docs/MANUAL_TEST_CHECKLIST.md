@@ -42,7 +42,8 @@
 9. 预期结果：
    - 保存成功提示出现。
    - 自动返回或可进入题库看到新错题。
-   - 新错题 `review_count = 0`，`status = active`。
+   - 默认新错题 `review_count = 0`，`status = collected`，`next_review_at = null`。
+   - 开启“同时加入 7 刷”后，新错题 `status = active`，当天可复做。
 10. 如果失败，记录：
    - 操作步骤
    - 页面报错文案

@@ -34,7 +34,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "appName": "七刷错题本",
   "appVersion": "0.1.0",
   "createdAt": "2026-05-17T21:30:45.123+08:00",
-  "schemaVersion": 7,
+  "schemaVersion": 8,
   "devicePlatform": "android",
   "counts": {
     "mistakes": 128,
@@ -156,6 +156,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - schemaVersion 7 起，备份包会包含自定义模块和自定义错因。
 - 恢复 schemaVersion 7 及以上备份时，自定义配置随备份全量覆盖。
 - 恢复 schemaVersion 6 及更早备份时，因为旧包没有自定义配置，本机已有自定义模块和自定义错因会保留。
+- schemaVersion 8 起，`mistakes.status` 支持 `collected`，表示已记录但尚未加入七刷。
 
 ### 5.9 extra
 - 预留扩展字段，当前可为空对象 `{}`。

@@ -141,6 +141,15 @@ function buildListQueryOptions(filter: MistakeListFilter): ListMistakesOptions {
     };
   }
 
+  if (filter.segment === 'collected') {
+    return {
+      ...baseOptions,
+      status: REVIEW_STATUS.COLLECTED,
+      sortBy: 'updated_at',
+      sortOrder: 'desc',
+    };
+  }
+
   if (filter.segment === 'mastered') {
     return {
       ...baseOptions,
@@ -162,6 +171,9 @@ function buildDisplayStatus(
   status: MistakeStatus,
   nextReviewAt?: string | null,
 ): MistakeListStatus {
+  if (status === REVIEW_STATUS.COLLECTED) {
+    return 'collected';
+  }
   if (status === REVIEW_STATUS.MASTERED) {
     return 'mastered';
   }
@@ -181,6 +193,9 @@ function buildReviewIndexLabel(reviewCount: number): string {
 }
 
 function buildStatusLabel(mistake: Mistake): string {
+  if (mistake.status === REVIEW_STATUS.COLLECTED) {
+    return '待整理';
+  }
   if (mistake.status === REVIEW_STATUS.MASTERED) {
     return '已掌握';
   }
@@ -359,6 +374,7 @@ export async function getMistakeListItems(filter: MistakeListFilter): Promise<Mi
 
 export async function getMistakeListStats(): Promise<{
   total: number;
+  collected: number;
   due: number;
   mastered: number;
 }> {
@@ -367,6 +383,7 @@ export async function getMistakeListStats(): Promise<{
     const stats = await MistakeRepository.getMistakeStats();
     const mappedStats = {
       total: stats.total,
+      collected: stats.collected,
       due: stats.dueToday,
       mastered: stats.mastered,
     };

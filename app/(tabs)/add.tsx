@@ -585,6 +585,7 @@ export default function AddScreen() {
   const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [joinReviewPlanOnSave, setJoinReviewPlanOnSave] = useState(false);
   const [showOptionalInfo, setShowOptionalInfo] = useState(false);
   const [customModules, setCustomModules] = useState<CustomModule[]>([]);
   const [customModuleModalVisible, setCustomModuleModalVisible] = useState(false);
@@ -622,7 +623,7 @@ export default function AddScreen() {
   const canSave = !isBusy && !missingQuestionImage && !missingModule;
   const queueCount = photoQueue.length;
   const saveBarBottomOffset = Math.max(insets.bottom + spacing.xs, spacing.xs);
-  const fallbackSaveBarHeight = 96;
+  const fallbackSaveBarHeight = 138;
   const effectiveSaveBarHeight = saveBarHeight > 0 ? saveBarHeight : fallbackSaveBarHeight;
   const contentBottomPadding = saveBarBottomOffset + effectiveSaveBarHeight + spacing.lg;
   const toastBottomOffset = saveBarBottomOffset + effectiveSaveBarHeight + spacing.sm;
@@ -659,14 +660,22 @@ export default function AddScreen() {
         : missingModule
           ? '请选择模块'
           : queueCount > 1
-            ? `将保存 ${queueCount} 道错题`
-            : '可以保存并加入 7 刷';
+            ? joinReviewPlanOnSave
+              ? `将保存 ${queueCount} 道并加入 7 刷`
+              : `将保存 ${queueCount} 道到题库`
+            : joinReviewPlanOnSave
+              ? '保存后立即进入 7 刷'
+              : '仅保存到题库，可稍后加入 7 刷';
 
   const saveButtonTitle = isSaving
     ? '正在保存...'
     : queueCount > 1
-      ? `保存 ${queueCount} 道并加入 7 刷`
-      : '保存并加入 7 刷';
+      ? joinReviewPlanOnSave
+        ? `保存 ${queueCount} 道并加入 7 刷`
+        : `保存 ${queueCount} 道`
+      : joinReviewPlanOnSave
+        ? '保存并加入 7 刷'
+        : '保存到题库';
 
   const _legacySaveHintText = isSaving
     ? '保存中，请稍候...'
@@ -676,7 +685,7 @@ export default function AddScreen() {
         ? '请先拍题目照片'
         : missingModule
           ? '请选择模块'
-          : '可以保存并加入 7 刷';
+          : '仅保存到题库，可稍后加入 7 刷';
 
   void _legacySaveHintText;
 
@@ -1658,7 +1667,9 @@ export default function AddScreen() {
       for (let index = 0; index < totalCount; index += 1) {
         const photo = photoQueue[index];
         const saveDraft = buildDraftForQueuedPhoto(draft, photo, index, totalCount);
-        const saveResult = await createMistakeFromDraft(saveDraft);
+        const saveResult = await createMistakeFromDraft(saveDraft, {
+          joinReviewPlan: joinReviewPlanOnSave,
+        });
 
         if (saveResult.ok) {
           successCount += 1;
@@ -1706,8 +1717,15 @@ export default function AddScreen() {
         setValidationErrors([]);
         setSaveErrorMessage(null);
         setShowOptionalInfo(false);
+        setJoinReviewPlanOnSave(false);
         showToast(
-          successCount > 1 ? `已保存 ${successCount} 道题` : '保存成功，已加入题库',
+          joinReviewPlanOnSave
+            ? successCount > 1
+              ? `已保存 ${successCount} 道并加入 7 刷`
+              : '保存成功，已加入 7 刷'
+            : successCount > 1
+              ? `已保存 ${successCount} 道到题库`
+              : '保存成功，已加入题库',
           'success',
         );
         return true;
@@ -1770,7 +1788,9 @@ export default function AddScreen() {
     setIsSaving(true);
 
     try {
-      const saveResult = await createMistakeFromDraft(draft);
+      const saveResult = await createMistakeFromDraft(draft, {
+        joinReviewPlan: joinReviewPlanOnSave,
+      });
       if (!saveResult.ok) {
         const message = saveResult.errorMessage ?? '保存失败，请稍后重试。';
         Logger.error(PAGE_SCOPE, 'Failed to save draft.', {
@@ -1785,7 +1805,7 @@ export default function AddScreen() {
       const previousDraftId = draft.draftId;
       Alert.alert(
         '保存成功',
-        `错题已加入 7 刷计划!`,
+        joinReviewPlanOnSave ? '错题已加入 7 刷计划。' : '错题已保存到题库，可在详情页加入 7 刷。',
       );
       setDraft(createNextDraft(previousDraftId));
       setPhotoQueue([]);
@@ -1794,6 +1814,7 @@ export default function AddScreen() {
       setValidationErrors([]);
       setSaveErrorMessage(null);
       setShowOptionalInfo(false);
+      setJoinReviewPlanOnSave(false);
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Unexpected error while saving draft.', {
         draftId: draft.draftId,
@@ -1815,7 +1836,7 @@ export default function AddScreen() {
         safeAreaEdges={['top']}
         contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
         onScroll={handleAddScroll}>
-      <BrandHeader title="新增错题" subtitle="拍题目，选模块，保存到 7 刷计划" />
+      <BrandHeader title="新增错题" subtitle="快速记录错题，需要时再加入 7 刷" />
 
       <View onLayout={handleAnchorNavLayout}>
         <QuickAnchorNav
@@ -2129,6 +2150,34 @@ export default function AddScreen() {
         onHeightChange={(nextHeight) => {
           setSaveBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
         }}>
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityState={{
+            checked: joinReviewPlanOnSave,
+            disabled: isBusy,
+          }}
+          disabled={isBusy}
+          onPress={() => setJoinReviewPlanOnSave((current) => !current)}
+          style={({ pressed }) => [
+            styles.savePlanToggle,
+            joinReviewPlanOnSave ? styles.savePlanToggleActive : null,
+            pressed && !isBusy ? styles.savePlanTogglePressed : null,
+            isBusy ? styles.disabledButton : null,
+          ]}>
+          <MaterialIcons
+            name={joinReviewPlanOnSave ? 'check-circle' : 'radio-button-unchecked'}
+            size={22}
+            color={joinReviewPlanOnSave ? colors.success : colors.textMuted}
+          />
+          <View style={styles.savePlanTextWrap}>
+            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.savePlanTitle}>
+              同时加入 7 刷
+            </Text>
+            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.savePlanSubtitle}>
+              {joinReviewPlanOnSave ? '保存后今天可复做' : '默认仅保存到题库'}
+            </Text>
+          </View>
+        </Pressable>
         <PrimaryButton
           title={saveButtonTitle}
           disabled={!canSave}
@@ -2160,6 +2209,40 @@ const styles = StyleSheet.create({
     right: spacing.screenPadding,
     zIndex: 30,
     elevation: 30,
+  },
+  savePlanToggle: {
+    minHeight: 46,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  savePlanToggleActive: {
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  savePlanTogglePressed: {
+    opacity: 0.86,
+  },
+  savePlanTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  savePlanTitle: {
+    ...typography.bodySmall,
+    color: colors.textPrimary,
+    fontWeight: '800',
+  },
+  savePlanSubtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    fontWeight: '600',
   },
   anchorSectionHighlighted: {
     marginHorizontal: -spacing.sm,

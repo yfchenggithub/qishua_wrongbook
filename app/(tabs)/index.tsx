@@ -96,7 +96,7 @@ function buildExportModeHintText(mode: PrintEnhanceMode | null): string {
 
 function buildHomePrimaryMessage(summary: HomeTaskSummary): string {
   if (summary.homeStatus === 'empty') {
-    return '还没有错题\n先拍一道错题，开始七刷计划';
+    return '还没有错题\n先拍一道错题，需要时再加入七刷';
   }
   if (summary.homeStatus === 'dueToday') {
     return `今天该复做\n${summary.todayDueCount} 道`;

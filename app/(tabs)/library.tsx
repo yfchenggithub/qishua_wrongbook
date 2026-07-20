@@ -77,6 +77,7 @@ type LibrarySortKey =
   | 'nearMastered'
   | 'title';
 type LibrarySectionId =
+  | 'collected'
   | 'overdue'
   | 'today'
   | 'future7'
@@ -182,6 +183,9 @@ function getQuickViewToneColor(tone: LibraryQuickViewOption['tone']): string {
 }
 
 function getSectionColor(sectionId: LibrarySectionId): string {
+  if (sectionId === 'collected') {
+    return colors.success;
+  }
   if (sectionId === 'overdue') {
     return colors.danger;
   }
@@ -200,6 +204,9 @@ function getSectionColor(sectionId: LibrarySectionId): string {
 function getSectionIcon(
   sectionId: LibrarySectionId,
 ): ComponentProps<typeof MaterialIcons>['name'] {
+  if (sectionId === 'collected') {
+    return 'inventory-2';
+  }
   if (sectionId === 'overdue') {
     return 'error-outline';
   }
@@ -230,6 +237,9 @@ function sanitizeNextReviewText(text: string): string {
 }
 
 function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListFilter['segment'] {
+  if (value === 'collected') {
+    return 'collected';
+  }
   if (value === 'pending') {
     return 'due';
   }
@@ -607,7 +617,7 @@ function groupMistakesByReviewDate(
     return section ? [section] : [];
   }
 
-  if (selectedFilter === 'mastered') {
+  if (selectedFilter === 'collected' || selectedFilter === 'mastered') {
     return [
       {
         id: 'flat',
@@ -619,6 +629,7 @@ function groupMistakesByReviewDate(
     ];
   }
 
+  const collected: MistakeListItem[] = [];
   const overdue: MistakeListItem[] = [];
   const today: MistakeListItem[] = [];
   const future7: MistakeListItem[] = [];
@@ -630,6 +641,11 @@ function groupMistakesByReviewDate(
   const eightDaysLaterStart = bounds.startOfEightDaysLater.getTime();
 
   for (const item of sourceItems) {
+    if (item.status === 'collected') {
+      collected.push(item);
+      continue;
+    }
+
     const nextReviewTime = getTimeValue(item.nextReviewAt);
     if (nextReviewTime === null) {
       if (item.status !== 'archived') {
@@ -649,6 +665,7 @@ function groupMistakesByReviewDate(
   }
 
   return [
+    buildSection('collected', '待整理', collected, false),
     buildSection('overdue', '已逾期', overdue, false),
     buildSection('today', '今天应复做', today, false),
     buildSection('future7', '未来 7 天', future7, true),
@@ -712,6 +729,7 @@ function MistakeLibraryCard({
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const didLongPressRef = useRef(false);
+  const isCollected = item.status === 'collected';
 
   useEffect(() => {
     setImageFailed(false);
@@ -728,6 +746,10 @@ function MistakeLibraryCard({
     [item.maxReviewCount, item.nextReviewAt, item.reviewCount],
   );
   const nextReviewLineText = useMemo(() => {
+    if (isCollected) {
+      return '未加入七刷';
+    }
+
     const sanitized = sanitizeNextReviewText(nextReviewInfo.displayText);
     if (!nextReviewInfo.absoluteDate) {
       return sanitized;
@@ -740,7 +762,7 @@ function MistakeLibraryCard({
     }
 
     return `${nextReviewInfo.label}(${nextReviewInfo.absoluteDate})`;
-  }, [nextReviewInfo.absoluteDate, nextReviewInfo.displayText, nextReviewInfo.label]);
+  }, [isCollected, nextReviewInfo.absoluteDate, nextReviewInfo.displayText, nextReviewInfo.label]);
 
   return (
     <Pressable
@@ -853,7 +875,7 @@ function MistakeLibraryCard({
                 allowFontScaling={false}
                 maxFontSizeMultiplier={1.0}
                 style={styles.nextReviewLabel}>
-                下一次复做
+                {isCollected ? '状态' : '下一次复做'}
               </Text>
               <Text
                 numberOfLines={1}
@@ -1238,6 +1260,7 @@ export default function LibraryScreen() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [deletingMistakeId, setDeletingMistakeId] = useState<string | null>(null);
   const [pinningMistakeId, setPinningMistakeId] = useState<string | null>(null);
+  const [joiningReviewPlanMistakeId, setJoiningReviewPlanMistakeId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const hasLoadedRef = useRef(false);
@@ -1706,6 +1729,76 @@ export default function LibraryScreen() {
     [deletingMistakeId, isLoading, isRefreshing, pinningMistakeId],
   );
 
+  const handleJoinReviewPlan = useCallback(
+    (item: MistakeListItem) => {
+      if (deletingMistakeId !== null || joiningReviewPlanMistakeId !== null || isLoading || isRefreshing) {
+        return;
+      }
+
+      const mistakeId = normalizeMistakeId(item.id);
+      if (!mistakeId) {
+        Logger.warn(PAGE_SCOPE, 'Skip joining review plan because mistake id is empty.', { id: item.id });
+        return;
+      }
+
+      setJoiningReviewPlanMistakeId(mistakeId);
+      void (async () => {
+        try {
+          const result = await MistakeDetailService.joinMistakeReviewPlan(mistakeId);
+          if (!result.ok) {
+            Alert.alert('加入失败', result.errorMessage ?? '加入七刷失败，请稍后重试。');
+            return;
+          }
+
+          showToast('已加入七刷，今天可复做', 'success');
+          const listFilter = buildLibraryListFilter(
+            selectedFilter,
+            debouncedKeyword,
+            selectedModuleFilter,
+            selectedTagFilters,
+          );
+          const moduleOptionsFilter = buildLibraryListFilter(
+            selectedFilter,
+            debouncedKeyword,
+            null,
+            selectedTagFilters,
+          );
+          const tagOptionsFilter = buildLibraryListFilter(
+            selectedFilter,
+            debouncedKeyword,
+            selectedModuleFilter,
+            [],
+          );
+          void loadList(listFilter, 'filter');
+          void loadModuleFilterOptions(moduleOptionsFilter);
+          void loadTagFilterOptions(tagOptionsFilter);
+        } catch (error) {
+          Logger.error(PAGE_SCOPE, 'Failed to join review plan from library.', {
+            mistakeId,
+            error,
+          });
+          Alert.alert('加入失败', error instanceof Error ? error.message : '加入七刷失败，请稍后重试。');
+        } finally {
+          setJoiningReviewPlanMistakeId(null);
+        }
+      })();
+    },
+    [
+      debouncedKeyword,
+      deletingMistakeId,
+      isLoading,
+      isRefreshing,
+      joiningReviewPlanMistakeId,
+      loadList,
+      loadModuleFilterOptions,
+      loadTagFilterOptions,
+      selectedFilter,
+      selectedModuleFilter,
+      selectedTagFilters,
+      showToast,
+    ],
+  );
+
   const handleLongPressDelete = useCallback(
     (item: MistakeListItem) => {
       if (deletingMistakeId !== null || isLoading || isRefreshing) {
@@ -1768,7 +1861,13 @@ export default function LibraryScreen() {
 
   const handleOpenMistakeMenu = useCallback(
     (item: MistakeListItem) => {
-      if (deletingMistakeId !== null || pinningMistakeId !== null || isLoading || isRefreshing) {
+      if (
+        deletingMistakeId !== null
+        || joiningReviewPlanMistakeId !== null
+        || pinningMistakeId !== null
+        || isLoading
+        || isRefreshing
+      ) {
         return;
       }
 
@@ -1776,6 +1875,16 @@ export default function LibraryScreen() {
         '题目操作',
         item.title,
         [
+          ...(item.status === 'collected'
+            ? [
+                {
+                  text: '加入七刷',
+                  onPress: () => {
+                    handleJoinReviewPlan(item);
+                  },
+                },
+              ]
+            : []),
           {
             text: item.isPinned ? '取消置顶' : '置顶题目',
             onPress: () => {
@@ -1796,10 +1905,12 @@ export default function LibraryScreen() {
     },
     [
       deletingMistakeId,
+      handleJoinReviewPlan,
       handleLongPressDelete,
       handleTogglePinned,
       isLoading,
       isRefreshing,
+      joiningReviewPlanMistakeId,
       pinningMistakeId,
     ],
   );
@@ -2038,6 +2149,13 @@ export default function LibraryScreen() {
       };
     }
 
+    if (selectedFilter === 'collected') {
+      return {
+        message: '还没有待整理题目',
+        showAddButton: true,
+      };
+    }
+
     if (selectedFilter === 'mastered') {
       return {
         message: '还没有完成七刷的错题',
@@ -2150,7 +2268,7 @@ export default function LibraryScreen() {
           />
         )}
         ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
-        stickySectionHeadersEnabled={selectedFilter !== 'mastered'}
+        stickySectionHeadersEnabled={selectedFilter !== 'collected' && selectedFilter !== 'mastered'}
         showsVerticalScrollIndicator={false}
         onScroll={handleLibraryScroll}
         scrollEventThrottle={16}

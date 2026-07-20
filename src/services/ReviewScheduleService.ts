@@ -25,6 +25,13 @@ export function getNextReviewIndex(reviewCount: number): number {
 }
 
 export function canStartReview(params: CanStartReviewParams): CanStartReviewResult {
+  if (params.status === REVIEW_STATUS.COLLECTED) {
+    return {
+      canReview: false,
+      reason: '尚未加入七刷',
+    };
+  }
+
   if (params.status === REVIEW_STATUS.MASTERED) {
     return {
       canReview: false,

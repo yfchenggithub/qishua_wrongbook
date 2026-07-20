@@ -20,6 +20,7 @@ import {
 import { Logger } from '@/src/services/Logger';
 import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
 import * as MistakeListService from '@/src/services/MistakeListService';
+import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { formatDateShort } from '@/src/utils/date';
 import { parseStoredTextHighlights, serializeTextHighlights } from '@/src/utils/textHighlights';
@@ -146,6 +147,12 @@ export type DeleteMistakeResult = {
   errorMessage?: string;
 };
 
+export type JoinMistakeReviewPlanResult = {
+  ok: boolean;
+  detail?: MistakeDetailViewModel;
+  errorMessage?: string;
+};
+
 type SlotSeed = {
   type: DetailImageSlot['type'];
   title: string;
@@ -249,6 +256,9 @@ function findImagesByType(images: MistakeImage[], type: DetailImageSlot['type'])
 }
 
 function buildStatusLabel(status: MistakeStatus, reviewCount: number): string {
+  if (status === REVIEW_STATUS.COLLECTED) {
+    return '待整理';
+  }
   if (status === REVIEW_STATUS.MASTERED) {
     return '已七刷';
   }
@@ -782,6 +792,93 @@ export async function deleteMistake(mistakeIdInput: string): Promise<DeleteMista
     return {
       ok: false,
       errorMessage: toErrorMessage(error, DELETE_MISTAKE_ERROR_MESSAGE),
+    };
+  }
+}
+
+export async function joinMistakeReviewPlan(
+  mistakeIdInput: string,
+): Promise<JoinMistakeReviewPlanResult> {
+  const mistakeId = normalizeMistakeId(mistakeIdInput);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  try {
+    const current = await MistakeRepository.getMistakeById(mistakeId);
+    if (!current) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    if (current.status === REVIEW_STATUS.ACTIVE) {
+      const detailResult = await getMistakeDetail(mistakeId);
+      return {
+        ok: detailResult.ok,
+        detail: detailResult.detail,
+        errorMessage: detailResult.ok ? undefined : detailResult.errorMessage,
+      };
+    }
+
+    if (current.status === REVIEW_STATUS.MASTERED) {
+      return {
+        ok: false,
+        errorMessage: '这道题已完成七刷，不能重新加入七刷。',
+      };
+    }
+
+    if (current.status === REVIEW_STATUS.ARCHIVED) {
+      return {
+        ok: false,
+        errorMessage: '这道题已归档，不能加入七刷。',
+      };
+    }
+
+    const updated = await MistakeRepository.joinMistakeReviewPlan(mistakeId, new Date().toISOString());
+    if (!updated) {
+      return {
+        ok: false,
+        errorMessage: '错题状态已变化，请刷新后重试。',
+      };
+    }
+
+    void ReviewReminderService.refreshReminderSchedule({ reason: 'join_review_plan' }).catch((error) => {
+      Logger.warn(SERVICE_SCOPE, 'Reminder schedule refresh failed after joining review plan.', {
+        mistakeId,
+        error,
+      });
+    });
+
+    const detailResult = await getMistakeDetail(mistakeId);
+    if (!detailResult.ok || !detailResult.detail) {
+      return {
+        ok: false,
+        errorMessage: detailResult.errorMessage ?? '已加入七刷，但刷新详情失败。',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Joined mistake review plan successfully.', {
+      mistakeId,
+      nextReviewAt: updated.next_review_at ?? null,
+    });
+
+    return {
+      ok: true,
+      detail: detailResult.detail,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'joinMistakeReviewPlan failed.', {
+      mistakeId,
+      error,
+    });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error),
     };
   }
 }

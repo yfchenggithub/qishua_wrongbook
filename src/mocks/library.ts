@@ -1,4 +1,4 @@
-export type LibraryFilterValue = 'all' | 'pending' | 'mastered';
+export type LibraryFilterValue = 'all' | 'collected' | 'pending' | 'mastered';
 
 export interface LibraryFilterOptionMock {
   label: string;
@@ -30,6 +30,7 @@ export const libraryMock = {
   searchPlaceholder: '搜索：模块 / 错因 / 来源 / 标签',
   filters: [
     { label: '全部', value: 'all' },
+    { label: '待整理', value: 'collected' },
     { label: '待复做', value: 'pending' },
     { label: '已七刷', value: 'mastered' },
   ] satisfies LibraryFilterOptionMock[],

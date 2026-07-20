@@ -83,7 +83,7 @@ import * as ReviewRecordVoiceService from '@/src/services/ReviewRecordVoiceServi
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
-import { formatDateShort } from '@/src/utils/date';
+import { formatDateShort, isDueTodayOrBefore } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 import { areTextHighlightsEqual, normalizeTextHighlights } from '@/src/utils/textHighlights';
 
@@ -208,6 +208,9 @@ function toBriefErrorMessage(message?: string): string {
 }
 
 function buildCurrentReviewIndex(detail: MistakeDetailViewModel): number | undefined {
+  if (detail.status === 'collected') {
+    return undefined;
+  }
   if (detail.reviewCount >= detail.maxReviewCount) {
     return undefined;
   }
@@ -227,6 +230,9 @@ function buildSummaryReviewLabel(detail: MistakeDetailViewModel): string {
   }
   if (detail.status === 'archived') {
     return `已完成 ${completed}/${total} · 已归档`;
+  }
+  if (detail.status === 'collected') {
+    return `已完成 ${completed}/${total} · 待整理`;
   }
 
   const nextReviewIndex = Math.min(total, completed + 1);
@@ -1259,6 +1265,7 @@ export default function MistakeDetailScreen() {
   const [noteModalMessage, setNoteModalMessage] = useState<string | null>(null);
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isDeletingMistake, setIsDeletingMistake] = useState(false);
+  const [isJoiningReviewPlan, setIsJoiningReviewPlan] = useState(false);
   const [customModules, setCustomModules] = useState<CustomModule[]>([]);
   const [customErrorReasons, setCustomErrorReasons] = useState<CustomErrorReason[]>([]);
   const [existingMistakeModules, setExistingMistakeModules] = useState<string[]>([]);
@@ -2938,6 +2945,7 @@ export default function MistakeDetailScreen() {
 
   const isDeleteMistakeDisabled =
     isDeletingMistake
+    || isJoiningReviewPlan
     || isRefreshing
     || isSavingModule
     || isSavingMetadata
@@ -2954,9 +2962,19 @@ export default function MistakeDetailScreen() {
       return false;
     }
 
-    return browseContext.mode === 'today_due' && browseContext.ids.includes(state.detail.id);
+    if (state.detail.status !== 'active') {
+      return false;
+    }
+
+    if (browseContext.mode === 'today_due' && browseContext.ids.includes(state.detail.id)) {
+      return true;
+    }
+
+    return isDueTodayOrBefore(state.detail.nextReviewAt);
   }, [browseContext.ids, browseContext.mode, state]);
   const isStartDetailReviewDisabled = isDeleteMistakeDisabled;
+  const canJoinReviewPlan = state.kind === 'success' && state.detail.status === 'collected';
+  const isJoinReviewPlanDisabled = isDeleteMistakeDisabled;
   const hasNoteContent = normalizeNoteDraft(noteInput).length > 0;
   const currentModule = state.kind === 'success' ? state.detail.module : null;
   const modulePickerOptions = useMemo(
@@ -3343,6 +3361,37 @@ export default function MistakeDetailScreen() {
       },
     } as never);
   }, [canStartDetailReview, router, showToast, state]);
+
+  const handleJoinReviewPlanFromDetail = useCallback(() => {
+    if (state.kind !== 'success' || state.detail.status !== 'collected' || isJoiningReviewPlan) {
+      return;
+    }
+
+    setIsJoiningReviewPlan(true);
+    void (async () => {
+      try {
+        const result = await MistakeDetailService.joinMistakeReviewPlan(state.detail.id);
+        if (!result.ok || !result.detail) {
+          showToast(result.errorMessage ?? '加入七刷失败，请稍后重试', 'error');
+          return;
+        }
+
+        setState({
+          kind: 'success',
+          detail: result.detail,
+        });
+        showToast('已加入七刷，今天可复做', 'success');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'join review plan from detail failed.', {
+          mistakeId: state.detail.id,
+          error,
+        });
+        showToast('加入七刷失败，请稍后重试', 'error');
+      } finally {
+        setIsJoiningReviewPlan(false);
+      }
+    })();
+  }, [isJoiningReviewPlan, showToast, state]);
 
   const handleOpenRelatedMistakes = useCallback(() => {
     if (state.kind !== 'success') {
@@ -4153,7 +4202,29 @@ export default function MistakeDetailScreen() {
                 />
               </View>
 
-              {canStartDetailReview ? (
+              {canJoinReviewPlan ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="加入七刷"
+                  disabled={isJoinReviewPlanDisabled}
+                  onPress={handleJoinReviewPlanFromDetail}
+                  style={({ pressed }) => [
+                    styles.detailReviewButton,
+                    pressed && !isJoinReviewPlanDisabled && styles.detailReviewButtonPressed,
+                    isJoinReviewPlanDisabled && styles.detailReviewButtonDisabled,
+                  ]}>
+                  <View style={styles.detailReviewButtonContent}>
+                    <MaterialIcons
+                      name={isJoiningReviewPlan ? 'hourglass-empty' : 'playlist-add-check'}
+                      size={22}
+                      color={colors.white}
+                    />
+                    <Text style={styles.detailReviewButtonText}>
+                      {isJoiningReviewPlan ? '加入中...' : '加入七刷'}
+                    </Text>
+                  </View>
+                </Pressable>
+              ) : canStartDetailReview ? (
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel="立即复做这道错题"
@@ -4480,11 +4551,14 @@ export default function MistakeDetailScreen() {
                 <Text
                   style={[
                     styles.reviewRecordsNextReviewText,
+                    state.detail.status === 'collected' && styles.reviewRecordsNextReviewTextMuted,
                     nextReviewInfo?.tone === 'success' && styles.reviewRecordsNextReviewTextSuccess,
                     nextReviewInfo?.tone === 'muted' && styles.reviewRecordsNextReviewTextMuted,
                     nextReviewInfo?.tone === 'danger' && styles.reviewRecordsNextReviewTextDanger,
                   ]}>
-                  {nextReviewInfo?.displayText ?? '⏳ 待安排（完成本次复做后自动生成）'}
+                  {state.detail.status === 'collected'
+                    ? '未加入七刷'
+                    : (nextReviewInfo?.displayText ?? '⏳ 待安排（完成本次复做后自动生成）')}
                 </Text>
               </View>
               {state.detail.reviewRecords.length <= 0 ? (

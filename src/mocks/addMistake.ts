@@ -33,6 +33,5 @@ export const addMistakeMock = {
   ] satisfies CaptureEntryMock[],
   tagTitle: '最少标签',
   tags: ['高中数学', '圆锥曲线', '中高难度', '公式误用', '月考'],
-  submitText: '保存错题，并加入 7 刷计划',
+  submitText: '保存到题库',
 } as const;
-

@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 
 import { DATABASE_NAME, DATABASE_VERSION } from '@/src/db/constants';
-import { CREATE_SCHEMA_SQL } from '@/src/db/schema';
+import { CREATE_MISTAKES_TABLE_SQL, CREATE_SCHEMA_SQL } from '@/src/db/schema';
 import { Logger } from '@/src/services/Logger';
 
 const DB_SCOPE = 'DatabaseService';
@@ -28,6 +28,10 @@ type TableRow = {
 
 type TableColumnRow = {
   name: string;
+};
+
+type TableSqlRow = {
+  sql: string | null;
 };
 
 export interface DatabaseHealthReport {
@@ -122,10 +126,78 @@ CREATE INDEX IF NOT EXISTS idx_mistakes_last_viewed_at ON mistakes(last_viewed_a
 `);
 }
 
+async function ensureMistakesCollectedStatusSupport(db: SQLite.SQLiteDatabase): Promise<void> {
+  const row = await db.getFirstAsync<TableSqlRow>(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mistakes' LIMIT 1;",
+  );
+  const createSql = row?.sql ?? '';
+  if (!createSql) {
+    return;
+  }
+  if (createSql.includes("'collected'")) {
+    return;
+  }
+
+  Logger.info(DB_SCOPE, 'Rebuilding mistakes table to support collected status.');
+  const createMigrationTableSql = CREATE_MISTAKES_TABLE_SQL.replace(
+    'CREATE TABLE IF NOT EXISTS mistakes',
+    'CREATE TABLE IF NOT EXISTS mistakes_new',
+  );
+
+  await db.execAsync(`
+PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS mistakes_new;
+${createMigrationTableSql}
+INSERT INTO mistakes_new (
+  id,
+  subject,
+  module,
+  title,
+  error_reason,
+  difficulty,
+  note,
+  note_highlights,
+  review_count,
+  status,
+  created_at,
+  updated_at,
+  next_review_at,
+  last_review_at,
+  last_review_result,
+  is_pinned,
+  last_viewed_at
+)
+SELECT
+  id,
+  subject,
+  module,
+  title,
+  error_reason,
+  difficulty,
+  note,
+  note_highlights,
+  review_count,
+  status,
+  created_at,
+  updated_at,
+  next_review_at,
+  last_review_at,
+  last_review_result,
+  is_pinned,
+  last_viewed_at
+FROM mistakes;
+DROP TABLE mistakes;
+ALTER TABLE mistakes_new RENAME TO mistakes;
+PRAGMA foreign_keys = ON;
+`);
+  await applyBaseSchema(db);
+}
+
 async function ensureBackwardCompatibleColumns(db: SQLite.SQLiteDatabase): Promise<void> {
   await ensureReviewRecordsVoiceNoteColumn(db);
   await ensureTextHighlightColumns(db);
   await ensureLibraryColumns(db);
+  await ensureMistakesCollectedStatusSupport(db);
 }
 
 async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {

@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS mistakes (
   note TEXT,
   note_highlights TEXT,
   review_count INTEGER NOT NULL DEFAULT 0 CHECK (review_count BETWEEN 0 AND ${MAX_REVIEW_COUNT}),
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'mastered', 'archived')),
+  status TEXT NOT NULL DEFAULT 'collected' CHECK (status IN ('collected', 'active', 'mastered', 'archived')),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   next_review_at TEXT,

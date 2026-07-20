@@ -73,6 +73,7 @@ export interface ListMistakesOptions {
 
 export interface MistakeStats {
   total: number;
+  collected: number;
   active: number;
   mastered: number;
   dueToday: number;
@@ -132,6 +133,7 @@ export interface UpdateLastReviewResultInTransactionParams {
 
 type MistakeStatsRow = {
   total: number | null;
+  collected: number | null;
   active: number | null;
   mastered: number | null;
   dueToday: number | null;
@@ -484,6 +486,7 @@ function normalizeStatusFilter(
   value: ListMistakesOptions['status'] | undefined,
 ): MistakeStatus | 'all' {
   if (
+    value === REVIEW_STATUS.COLLECTED ||
     value === REVIEW_STATUS.ACTIVE ||
     value === REVIEW_STATUS.MASTERED ||
     value === REVIEW_STATUS.ARCHIVED ||
@@ -665,6 +668,13 @@ export const MistakeRepository = {
 
       const createdAt = nowIso();
       const inputId = input.id?.trim();
+      const status = input.status ?? REVIEW_STATUS.COLLECTED;
+      const nextReviewAt =
+        input.next_review_at === undefined
+          ? status === REVIEW_STATUS.ACTIVE
+            ? createdAt
+            : null
+          : input.next_review_at;
       const record: Mistake = {
         id: inputId && inputId.length > 0 ? inputId : buildMistakeId(),
         subject: input.subject?.trim() || DEFAULT_SUBJECT,
@@ -675,10 +685,10 @@ export const MistakeRepository = {
         note: input.note ?? null,
         note_highlights: input.note_highlights ?? null,
         review_count: 0,
-        status: REVIEW_STATUS.ACTIVE,
+        status,
         created_at: createdAt,
         updated_at: createdAt,
-        next_review_at: input.next_review_at === undefined ? createdAt : input.next_review_at,
+        next_review_at: nextReviewAt,
         last_review_at: input.last_review_at ?? null,
         last_review_result: input.last_review_result ?? null,
         is_pinned: input.is_pinned ?? false,
@@ -1062,10 +1072,12 @@ ${paginationSql};`,
       const row = await db.getFirstAsync<MistakeStatsRow>(
         `SELECT
   COUNT(*) AS total,
+  SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS collected,
   SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS active,
   SUM(CASE WHEN status = ? THEN 1 ELSE 0 END) AS mastered,
   SUM(CASE WHEN status = ? AND next_review_at IS NOT NULL AND next_review_at <= ? THEN 1 ELSE 0 END) AS dueToday
 FROM mistakes;`,
+        REVIEW_STATUS.COLLECTED,
         REVIEW_STATUS.ACTIVE,
         REVIEW_STATUS.MASTERED,
         REVIEW_STATUS.ACTIVE,
@@ -1074,6 +1086,7 @@ FROM mistakes;`,
 
       return {
         total: Number(row?.total ?? 0),
+        collected: Number(row?.collected ?? 0),
         active: Number(row?.active ?? 0),
         mastered: Number(row?.mastered ?? 0),
         dueToday: Number(row?.dueToday ?? 0),
@@ -1186,6 +1199,39 @@ WHERE id = ?;`,
       return await getByIdInternal(id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'setMistakePinned failed.', { id, isPinned, error });
+      throw error;
+    }
+  },
+
+  async joinMistakeReviewPlan(id: string, nextReviewAt = nowIso()): Promise<Mistake | null> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const updatedAt = nowIso();
+      const normalizedNextReviewAt = normalizeIsoDateTime(nextReviewAt, 'nextReviewAt');
+      const result = await db.runAsync(
+        `UPDATE mistakes
+SET review_count = 0,
+  status = ?,
+  next_review_at = ?,
+  last_review_at = NULL,
+  last_review_result = NULL,
+  updated_at = ?
+WHERE id = ? AND status = ?;`,
+        REVIEW_STATUS.ACTIVE,
+        normalizedNextReviewAt,
+        updatedAt,
+        id,
+        REVIEW_STATUS.COLLECTED,
+      );
+
+      if (result.changes <= 0) {
+        return null;
+      }
+
+      return await getByIdInternal(id);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'joinMistakeReviewPlan failed.', { id, nextReviewAt, error });
       throw error;
     }
   },
