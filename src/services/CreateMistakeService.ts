@@ -1,4 +1,4 @@
-import { getDatabase } from '@/src/db';
+import { withDatabaseTransaction } from '@/src/db';
 import { REVIEW_STATUS } from '@/src/constants/review';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { ImageType } from '@/src/models/Mistake';
@@ -11,10 +11,6 @@ import type * as SQLite from 'expo-sqlite';
 const SERVICE_SCOPE = 'CreateMistakeService';
 const DEFAULT_SUBJECT = 'math';
 const FALLBACK_ERROR_MESSAGE = '保存错题失败，请稍后重试。';
-
-type TransactionCapableDatabase = SQLite.SQLiteDatabase & {
-  withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
-};
 
 type CreateMistakeFromDraftResult = {
   ok: boolean;
@@ -124,6 +120,7 @@ function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
 }
 
 async function persistDraft(
+  db: SQLite.SQLiteDatabase,
   draft: AddMistakeDraft,
   mistakeId: string,
   questionNo: number | undefined,
@@ -152,7 +149,7 @@ async function persistDraft(
     answerImageUriShort: toShortUri(answerImageUri),
   });
 
-  await MistakeRepository.createMistake({
+  await MistakeRepository.createMistakeInTransaction(db, {
     id: mistakeId,
     subject: draft.subject?.trim() || DEFAULT_SUBJECT,
     module: moduleName,
@@ -170,7 +167,7 @@ async function persistDraft(
   });
 
   const imageInputs = collectImageInputs(draft);
-  await MistakeImageRepository.insertMistakeImages(mistakeId, imageInputs);
+  await MistakeImageRepository.insertMistakeImagesInTransaction(db, mistakeId, imageInputs);
 
   Logger.info(SERVICE_SCOPE, 'Created mistake_images rows successfully.', {
     draftId: draft.draftId,
@@ -241,10 +238,10 @@ export async function createMistakeFromDraft(
   let mistakeImageCount = 0;
 
   try {
-    const db = (await getDatabase()) as TransactionCapableDatabase;
-    const runPersistFlow = async () => {
+    await withDatabaseTransaction(async (db) => {
       const questionNo = await resolveQuestionNoForDraft(db, draft, options);
       mistakeImageCount = await persistDraft(
+        db,
         draft,
         mistakeId,
         questionNo,
@@ -253,15 +250,7 @@ export async function createMistakeFromDraft(
           mistakeCreated = true;
         },
       );
-    };
-
-    if (typeof db.withTransactionAsync === 'function') {
-      await db.withTransactionAsync(runPersistFlow);
-    } else {
-      // Fallback path without transaction wrapper.
-      // If any later step fails, we try compensating cleanup on the created mistake row.
-      await runPersistFlow();
-    }
+    });
 
     Logger.info(SERVICE_SCOPE, 'Saved mistake draft successfully.', {
       draftId: draft.draftId,

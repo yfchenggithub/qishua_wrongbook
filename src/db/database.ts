@@ -1,4 +1,5 @@
 import * as SQLite from 'expo-sqlite';
+import { Platform } from 'react-native';
 
 import { DATABASE_NAME, DATABASE_VERSION } from '@/src/db/constants';
 import { CREATE_MISTAKES_TABLE_SQL, CREATE_SCHEMA_SQL } from '@/src/db/schema';
@@ -45,10 +46,15 @@ export type DatabaseTransactionCallback<T> = (db: SQLite.SQLiteDatabase) => Prom
 
 type TransactionCapableDatabase = SQLite.SQLiteDatabase & {
   withTransactionAsync?: (task: () => Promise<void>) => Promise<void>;
+  withExclusiveTransactionAsync?: (
+    task: (transaction: SQLite.SQLiteDatabase) => Promise<void>,
+  ) => Promise<void>;
 };
 
 let databaseInstance: SQLite.SQLiteDatabase | null = null;
 let openingDatabasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let databaseInitialized = false;
+let databaseInitializationPromise: Promise<void> | null = null;
 
 async function readUserVersion(db: SQLite.SQLiteDatabase): Promise<number> {
   const row = await db.getFirstAsync<UserVersionRow>('PRAGMA user_version');
@@ -283,6 +289,39 @@ export async function withDatabaseTransaction<T>(
   const db = await getDatabase();
   const transactionDatabase = db as TransactionCapableDatabase;
 
+  // A regular Expo SQLite transaction shares the main connection. Unrelated UI
+  // queries can then enter that transaction and be aborted by its rollback.
+  // Native exclusive transactions use a dedicated connection instead.
+  if (
+    Platform.OS !== 'web' &&
+    typeof transactionDatabase.withExclusiveTransactionAsync === 'function'
+  ) {
+    let hasResult = false;
+    let result!: T;
+
+    try {
+      await transactionDatabase.withExclusiveTransactionAsync(async (transaction) => {
+        result = await callback(transaction);
+        hasResult = true;
+      });
+    } catch (error) {
+      Logger.error(DB_SCOPE, 'Transaction failed via withExclusiveTransactionAsync.', error);
+      throw error;
+    }
+
+    if (!hasResult) {
+      const missingResultError = new Error('Transaction callback completed without a result.');
+      Logger.error(
+        DB_SCOPE,
+        'Transaction result is missing after withExclusiveTransactionAsync.',
+        missingResultError,
+      );
+      throw missingResultError;
+    }
+
+    return result;
+  }
+
   if (typeof transactionDatabase.withTransactionAsync === 'function') {
     let hasResult = false;
     let result!: T;
@@ -329,7 +368,7 @@ export async function withDatabaseTransaction<T>(
   }
 }
 
-export async function initDatabase(): Promise<void> {
+async function initializeDatabase(): Promise<void> {
   try {
     const db = await getDatabase();
 
@@ -350,6 +389,24 @@ export async function initDatabase(): Promise<void> {
     Logger.error(DB_SCOPE, 'Database initialization failed.', error);
     throw error;
   }
+}
+
+export async function initDatabase(): Promise<void> {
+  if (databaseInitialized) {
+    return;
+  }
+
+  if (!databaseInitializationPromise) {
+    databaseInitializationPromise = initializeDatabase()
+      .then(() => {
+        databaseInitialized = true;
+      })
+      .finally(() => {
+        databaseInitializationPromise = null;
+      });
+  }
+
+  return databaseInitializationPromise;
 }
 
 export async function getDatabaseVersion(): Promise<number> {
@@ -383,6 +440,7 @@ PRAGMA foreign_keys = ON;
 `);
 
     Logger.warn(DB_SCOPE, 'Database reset for development has been executed.');
+    databaseInitialized = false;
     await initDatabase();
   } catch (error) {
     Logger.error(DB_SCOPE, 'Failed to reset database for development.', error);

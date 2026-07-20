@@ -432,8 +432,10 @@ function mapMistakeRow(row: Mistake): Mistake {
   };
 }
 
-async function getByIdInternal(id: string): Promise<Mistake | null> {
-  const db = await getDatabase();
+async function getByIdInternal(
+  db: SQLite.SQLiteDatabase,
+  id: string,
+): Promise<Mistake | null> {
   const row = await db.getFirstAsync<Mistake>(
     `${SELECT_MISTAKE_FIELDS_SQL}
 WHERE id = ?
@@ -446,6 +448,68 @@ LIMIT 1;`,
   }
 
   return mapMistakeRow(row);
+}
+
+async function createMistakeInDatabase(
+  db: SQLite.SQLiteDatabase,
+  input: CreateMistakeInput,
+): Promise<Mistake> {
+  const createdAt = nowIso();
+  const inputId = input.id?.trim();
+  const status = input.status ?? REVIEW_STATUS.COLLECTED;
+  const nextReviewAt =
+    input.next_review_at === undefined
+      ? status === REVIEW_STATUS.ACTIVE
+        ? createdAt
+        : null
+      : input.next_review_at;
+  const record: Mistake = {
+    id: inputId && inputId.length > 0 ? inputId : buildMistakeId(),
+    subject: input.subject?.trim() || DEFAULT_SUBJECT,
+    module: input.module,
+    title: input.title ?? null,
+    error_reason: input.error_reason ?? null,
+    difficulty: normalizeDifficulty(input.difficulty),
+    note: input.note ?? null,
+    note_highlights: input.note_highlights ?? null,
+    review_count: 0,
+    status,
+    created_at: createdAt,
+    updated_at: createdAt,
+    next_review_at: nextReviewAt,
+    last_review_at: input.last_review_at ?? null,
+    last_review_result: input.last_review_result ?? null,
+    is_pinned: input.is_pinned ?? false,
+    last_viewed_at: input.last_viewed_at ?? null,
+  };
+
+  await db.runAsync(
+    INSERT_MISTAKE_SQL,
+    record.id,
+    record.subject,
+    record.module,
+    record.title ?? null,
+    record.error_reason ?? null,
+    record.difficulty,
+    record.note ?? null,
+    record.note_highlights ?? null,
+    record.review_count,
+    record.status,
+    record.created_at,
+    record.updated_at,
+    record.next_review_at ?? null,
+    record.last_review_at ?? null,
+    record.last_review_result ?? null,
+    toPinnedInteger(record.is_pinned),
+    record.last_viewed_at ?? null,
+  );
+
+  const created = await getByIdInternal(db, record.id);
+  if (!created) {
+    throw new Error('Failed to load the created mistake record.');
+  }
+
+  return created;
 }
 
 function normalizeKeyword(value: string | null | undefined): string | null {
@@ -665,65 +729,21 @@ export const MistakeRepository = {
     try {
       await ensureDatabaseReady();
       const db = await getDatabase();
-
-      const createdAt = nowIso();
-      const inputId = input.id?.trim();
-      const status = input.status ?? REVIEW_STATUS.COLLECTED;
-      const nextReviewAt =
-        input.next_review_at === undefined
-          ? status === REVIEW_STATUS.ACTIVE
-            ? createdAt
-            : null
-          : input.next_review_at;
-      const record: Mistake = {
-        id: inputId && inputId.length > 0 ? inputId : buildMistakeId(),
-        subject: input.subject?.trim() || DEFAULT_SUBJECT,
-        module: input.module,
-        title: input.title ?? null,
-        error_reason: input.error_reason ?? null,
-        difficulty: normalizeDifficulty(input.difficulty),
-        note: input.note ?? null,
-        note_highlights: input.note_highlights ?? null,
-        review_count: 0,
-        status,
-        created_at: createdAt,
-        updated_at: createdAt,
-        next_review_at: nextReviewAt,
-        last_review_at: input.last_review_at ?? null,
-        last_review_result: input.last_review_result ?? null,
-        is_pinned: input.is_pinned ?? false,
-        last_viewed_at: input.last_viewed_at ?? null,
-      };
-
-      await db.runAsync(
-        INSERT_MISTAKE_SQL,
-        record.id,
-        record.subject,
-        record.module,
-        record.title ?? null,
-        record.error_reason ?? null,
-        record.difficulty,
-        record.note ?? null,
-        record.note_highlights ?? null,
-        record.review_count,
-        record.status,
-        record.created_at,
-        record.updated_at,
-        record.next_review_at ?? null,
-        record.last_review_at ?? null,
-        record.last_review_result ?? null,
-        toPinnedInteger(record.is_pinned),
-        record.last_viewed_at ?? null,
-      );
-
-      const created = await getByIdInternal(record.id);
-      if (!created) {
-        throw new Error('Failed to load the created mistake record.');
-      }
-
-      return created;
+      return await createMistakeInDatabase(db, input);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createMistake failed.', error);
+      throw error;
+    }
+  },
+
+  async createMistakeInTransaction(
+    db: SQLite.SQLiteDatabase,
+    input: CreateMistakeInput,
+  ): Promise<Mistake> {
+    try {
+      return await createMistakeInDatabase(db, input);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'createMistakeInTransaction failed.', error);
       throw error;
     }
   },
@@ -731,7 +751,8 @@ export const MistakeRepository = {
   async getMistakeById(id: string): Promise<Mistake | null> {
     try {
       await ensureDatabaseReady();
-      return await getByIdInternal(id);
+      const db = await getDatabase();
+      return await getByIdInternal(db, id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'getMistakeById failed.', { id, error });
       throw error;
@@ -1154,7 +1175,7 @@ FROM mistakes;`,
       }
 
       if (setClauses.length === 0) {
-        return await getByIdInternal(id);
+        return await getByIdInternal(db, id);
       }
 
       setClauses.push('updated_at = ?');
@@ -1172,7 +1193,7 @@ WHERE id = ?;`,
         return null;
       }
 
-      return await getByIdInternal(id);
+      return await getByIdInternal(db, id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'updateMistake failed.', { id, input, error });
       throw error;
@@ -1196,7 +1217,7 @@ WHERE id = ?;`,
         return null;
       }
 
-      return await getByIdInternal(id);
+      return await getByIdInternal(db, id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'setMistakePinned failed.', { id, isPinned, error });
       throw error;
@@ -1229,7 +1250,7 @@ WHERE id = ? AND status = ?;`,
         return null;
       }
 
-      return await getByIdInternal(id);
+      return await getByIdInternal(db, id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'joinMistakeReviewPlan failed.', { id, nextReviewAt, error });
       throw error;
