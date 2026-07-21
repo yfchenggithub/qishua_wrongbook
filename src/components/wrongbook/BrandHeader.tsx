@@ -10,6 +10,7 @@ export interface BrandHeaderProps {
   subtitle: string;
   showOffline?: boolean;
   offlineLabel?: string;
+  offlineBadgeStyle?: StyleProp<ViewStyle>;
   rightAccessory?: ReactNode;
   style?: StyleProp<ViewStyle>;
   titleStyle?: StyleProp<TextStyle>;
@@ -21,6 +22,7 @@ export function BrandHeader({
   subtitle,
   showOffline = true,
   offlineLabel = '离线',
+  offlineBadgeStyle,
   rightAccessory,
   style,
   titleStyle,
@@ -33,7 +35,7 @@ export function BrandHeader({
           <Text numberOfLines={1} maxFontSizeMultiplier={1.15} style={[styles.title, titleStyle]}>
             {title}
           </Text>
-          {showOffline ? <OfflineBadge label={offlineLabel} /> : null}
+          {showOffline ? <OfflineBadge label={offlineLabel} style={offlineBadgeStyle} /> : null}
         </View>
         {rightAccessory ? <View style={styles.rightAccessory}>{rightAccessory}</View> : null}
       </View>

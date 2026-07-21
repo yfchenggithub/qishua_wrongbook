@@ -4,16 +4,11 @@ import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState 
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   Image,
-  type LayoutChangeEvent,
-  Modal,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
   Pressable,
   RefreshControl,
   ScrollView,
-  SectionList,
-  type SectionListData,
   StyleSheet,
   Text,
   TextInput,
@@ -24,352 +19,113 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AppToast,
   BrandHeader,
-  CardContainer,
+  CustomModuleManagerModal,
+  LibraryBottomSheet,
+  LibraryQuickView,
+  LibrarySegmentedControl,
   ProgressDots,
-  QuickAnchorNav,
-  type QuickAnchorNavItem,
   ScreenContainer,
-  SegmentControl,
 } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
+import type { CustomModule } from '@/src/models/CustomModule';
 import type { MistakeListFilter, MistakeListItem } from '@/src/models/MistakeListItem';
-import { libraryMock, type LibraryFilterValue } from '@/src/mocks/library';
+import { CustomModuleService } from '@/src/services/CustomModuleService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
-import type { MistakeModuleCount, MistakeTagFilterCount } from '@/src/services/MistakeListService';
 import { normalizeMistakeTagKey } from '@/src/services/MistakeTagService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { addDays, parseLocalDateTime, startOfLocalDay } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
-const SEARCH_DEBOUNCE_MS = 350;
-const INLINE_MODULE_FILTER_OPTION_LIMIT = 3;
-const INLINE_TAG_FILTER_OPTION_LIMIT = 6;
-const INITIAL_VISIBLE_MISTAKE_LIMIT = 60;
-const VISIBLE_MISTAKE_INCREMENT = 60;
 const PAGE_SCOPE = 'LibraryScreen';
-const TOAST_DURATION_DEFAULT = 1800;
-const LIBRARY_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
-const LIBRARY_ANCHOR_ACTIVE_OFFSET = 104;
-const LIBRARY_ANCHOR_SCROLL_OFFSET = spacing.sm;
-const LIBRARY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
-const LIBRARY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
+const SEARCH_DEBOUNCE_MS = 280;
 
-type LibraryAnchorId = 'search' | 'filters' | 'quickView' | 'list';
-
-type LibraryModuleFilterValue = string | null;
-type ListLoadMode = 'initial' | 'refresh' | 'filter';
-type LibraryQuickViewId =
-  | 'today'
-  | 'overdue'
-  | 'recent'
-  | 'recentViewed'
-  | 'never'
-  | 'nearlyDone'
-  | 'pinned';
+type LibraryStatusMode = 'all' | 'collected' | 'active' | 'mastered';
+type LibraryQuickMode = 'today' | 'overdue' | 'recentViewed' | 'recentAdded';
+type LibraryViewMode = LibraryStatusMode | LibraryQuickMode;
 type LibrarySortKey =
-  | 'reviewTime'
-  | 'overdueLongest'
+  | 'lastReviewed'
+  | 'nextReview'
   | 'recentAdded'
   | 'recentViewed'
   | 'reviewCountAsc'
   | 'nearMastered'
   | 'title';
-type LibrarySectionId =
-  | 'collected'
-  | 'overdue'
-  | 'today'
-  | 'future7'
-  | 'later'
-  | 'noPlan'
-  | 'recent'
-  | 'recentViewed'
-  | 'flat';
+type ListLoadMode = 'initial' | 'filter' | 'refresh';
 
-const LIBRARY_ANCHOR_LABELS: Record<LibraryAnchorId, string> = {
-  search: '搜索',
-  filters: '筛选',
-  quickView: '快速查看',
-  list: '题目列表',
-};
+interface SelectedTag {
+  key: string;
+  label: string;
+}
 
-const LIBRARY_ANCHOR_ITEMS: readonly QuickAnchorNavItem<LibraryAnchorId>[] = [
-  { id: 'search', label: LIBRARY_ANCHOR_LABELS.search, shortLabel: '搜索', icon: 'search' },
-  { id: 'filters', label: LIBRARY_ANCHOR_LABELS.filters, shortLabel: '筛选', icon: 'filter-list' },
-  { id: 'quickView', label: LIBRARY_ANCHOR_LABELS.quickView, shortLabel: '快看', icon: 'bolt' },
-  { id: 'list', label: LIBRARY_ANCHOR_LABELS.list, shortLabel: '题目', icon: 'view-list' },
-];
+interface LibraryFilterState {
+  keyword: string;
+  module: string | null;
+  tag: SelectedTag | null;
+  viewMode: LibraryViewMode;
+  sortKey: LibrarySortKey;
+}
 
-interface LibraryDateBounds {
-  startOfRecentWindow: Date;
+interface ModuleOption {
+  key: string;
+  value: string | null;
+  label: string;
+  count: number;
+}
+
+interface TagOption {
+  key: string;
+  value: string | null;
+  label: string;
+  count: number;
+}
+
+interface DateBounds {
   startOfToday: Date;
   startOfTomorrow: Date;
-  startOfEightDaysLater: Date;
 }
 
-interface LibraryQuickViewOption {
-  id: LibraryQuickViewId;
-  label: string;
-  icon: ComponentProps<typeof MaterialIcons>['name'];
-  tone: 'success' | 'danger' | 'info' | 'neutral' | 'warning' | 'pinned';
-}
-
-interface LibrarySortOption {
+interface SortOption {
   key: LibrarySortKey;
   label: string;
   description: string;
 }
 
-interface LibraryListSection {
-  id: LibrarySectionId;
-  title: string;
-  count: number;
-  defaultCollapsed: boolean;
-  data: MistakeListItem[];
-}
+const DEFAULT_FILTER_STATE: LibraryFilterState = {
+  keyword: '',
+  module: null,
+  tag: null,
+  viewMode: 'all',
+  sortKey: 'lastReviewed',
+};
 
-interface LibraryModuleFilterOption {
-  key: string;
-  value: LibraryModuleFilterValue;
-  label: string;
-  count: number;
-}
-
-interface LibraryTagFilterOption {
-  key: string;
-  value: string;
-  label: string;
-  count: number;
-}
-
-const QUICK_VIEW_OPTIONS: readonly LibraryQuickViewOption[] = [
-  { id: 'today', label: '今日应做', icon: 'event-available', tone: 'success' },
-  { id: 'overdue', label: '已逾期', icon: 'timer', tone: 'danger' },
-  { id: 'recent', label: '最近添加', icon: 'schedule', tone: 'info' },
-  { id: 'recentViewed', label: '最近访问', icon: 'visibility', tone: 'info' },
-  { id: 'never', label: '从未复做', icon: 'history', tone: 'neutral' },
-  { id: 'nearlyDone', label: '接近完成', icon: 'filter-alt', tone: 'warning' },
-  { id: 'pinned', label: '我的置顶', icon: 'star-outline', tone: 'pinned' },
+const SORT_OPTIONS: readonly SortOption[] = [
+  { key: 'lastReviewed', label: '最近复做', description: '按最后一次复做时间倒序' },
+  { key: 'nextReview', label: '复做计划', description: '应复做日期较早的排在前面' },
+  { key: 'recentAdded', label: '最近增加', description: '按录入时间倒序' },
+  { key: 'recentViewed', label: '最近访问', description: '按最后访问时间倒序' },
+  { key: 'reviewCountAsc', label: '复做次数少', description: '优先显示复做次数较少的题' },
+  { key: 'nearMastered', label: '接近七刷', description: '优先显示复做进度较高的题' },
+  { key: 'title', label: '题目名称', description: '按题目名称排序' },
 ] as const;
 
-const SORT_OPTIONS: readonly LibrarySortOption[] = [
-  { key: 'reviewTime', label: '复做时间最近', description: '逾期和今日题优先' },
-  { key: 'overdueLongest', label: '逾期最久', description: '逾期天数从大到小' },
-  { key: 'recentAdded', label: '最近添加', description: '按录入时间倒序' },
-  { key: 'recentViewed', label: '最近查看', description: '未查看的排在最后' },
-  { key: 'reviewCountAsc', label: '复做次数少', description: '优先处理刷数更少的题' },
-  { key: 'nearMastered', label: '接近七刷', description: '刷数高的排在前面' },
-  { key: 'title', label: '标题名称', description: '按标题稳定排序' },
-] as const;
-
-function getQuickViewToneColor(tone: LibraryQuickViewOption['tone']): string {
-  if (tone === 'danger') {
-    return colors.danger;
-  }
-  if (tone === 'info') {
-    return '#2563EB';
-  }
-  if (tone === 'warning') {
-    return '#D97706';
-  }
-  if (tone === 'pinned') {
-    return '#D97706';
-  }
-  if (tone === 'neutral') {
-    return colors.textSecondary;
-  }
-  return colors.success;
+function isStatusMode(value: LibraryViewMode): value is LibraryStatusMode {
+  return value === 'all' || value === 'collected' || value === 'active' || value === 'mastered';
 }
 
-function getSectionColor(sectionId: LibrarySectionId): string {
-  if (sectionId === 'collected') {
-    return colors.success;
-  }
-  if (sectionId === 'overdue') {
-    return colors.danger;
-  }
-  if (sectionId === 'today') {
-    return '#F97316';
-  }
-  if (sectionId === 'future7') {
-    return '#2563EB';
-  }
-  if (sectionId === 'recent' || sectionId === 'recentViewed') {
-    return '#2563EB';
-  }
-  return colors.textSecondary;
+function isQuickMode(value: LibraryViewMode): value is LibraryQuickMode {
+  return !isStatusMode(value);
 }
 
-function getSectionIcon(
-  sectionId: LibrarySectionId,
-): ComponentProps<typeof MaterialIcons>['name'] {
-  if (sectionId === 'collected') {
-    return 'inventory-2';
-  }
-  if (sectionId === 'overdue') {
-    return 'error-outline';
-  }
-  if (sectionId === 'today') {
-    return 'event-available';
-  }
-  if (sectionId === 'future7') {
-    return 'date-range';
-  }
-  if (sectionId === 'later') {
-    return 'event-note';
-  }
-  if (sectionId === 'recent') {
-    return 'schedule';
-  }
-  if (sectionId === 'recentViewed') {
-    return 'visibility';
-  }
-  return 'pending-actions';
-}
-
-function sanitizeNextReviewText(text: string): string {
-  const normalized = typeof text === 'string' ? text.trim() : '';
-  if (!normalized) {
-    return '';
-  }
-  return normalized.replace(/^[^\u4E00-\u9FFF0-9A-Za-z]+/u, '').trim();
-}
-
-function mapSegmentValueToFilterSegment(value: LibraryFilterValue): MistakeListFilter['segment'] {
-  if (value === 'collected') {
-    return 'collected';
-  }
-  if (value === 'pending') {
-    return 'due';
-  }
-  if (value === 'mastered') {
-    return 'mastered';
-  }
-  return 'all';
-}
-
-function buildLibraryListFilter(
-  filterValue: LibraryFilterValue,
-  keyword: string,
-  module: LibraryModuleFilterValue,
-  tagKeys: string[] = [],
-): MistakeListFilter {
-  return {
-    segment: mapSegmentValueToFilterSegment(filterValue),
-    keyword,
-    module,
-    tagKeys,
-    limit: null,
-  };
-}
-
-function normalizeModuleFilterValue(moduleName: string | null | undefined): string | null {
-  const normalized = typeof moduleName === 'string' ? moduleName.trim() : '';
+function normalizeMistakeId(value: string): string | null {
+  const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
 }
 
-function buildLibraryModuleFilterOptions(
-  moduleCounts: MistakeModuleCount[],
-): LibraryModuleFilterOption[] {
-  const moduleOptions = moduleCounts.reduce<LibraryModuleFilterOption[]>((options, item) => {
-    const moduleName = normalizeModuleFilterValue(item.module);
-    const count = Number.isFinite(item.count) ? Math.max(0, Math.floor(item.count)) : 0;
-    if (!moduleName || count <= 0) {
-      return options;
-    }
-
-    options.push({
-      key: `module:${moduleName}`,
-      value: moduleName,
-      label: moduleName,
-      count,
-    });
-    return options;
-  }, []);
-  const allCount = moduleOptions.reduce((sum, option) => sum + option.count, 0);
-
-  return [
-    {
-      key: 'all',
-      value: null,
-      label: '全部',
-      count: allCount,
-    },
-    ...moduleOptions,
-  ];
-}
-
-function formatLibraryModuleFilterOptionText(option: LibraryModuleFilterOption): string {
-  if (option.count <= 0) {
-    return option.label;
-  }
-  return `${option.label} ${option.count}题`;
-}
-
-function formatLibraryModuleFilterAccessibilityLabel(option: LibraryModuleFilterOption): string {
-  if (option.value === null) {
-    return `显示全部模块，共${option.count}道错题`;
-  }
-  return `筛选${option.label}模块，共${option.count}道错题`;
-}
-
-function formatLibraryModuleFilterHint(
-  option: LibraryModuleFilterOption | null,
-  selectedModuleFilter: LibraryModuleFilterValue,
-): string {
-  if (selectedModuleFilter === null) {
-    const count = option?.count ?? 0;
-    return `已筛选：全部模块，共 ${count} 题`;
-  }
-
-  const countText = option ? `，共 ${option.count} 题` : '';
-  return `已筛选：“${selectedModuleFilter}”模块${countText}`;
-}
-
-function buildLibraryTagFilterOptions(
-  tagCounts: MistakeTagFilterCount[],
-): LibraryTagFilterOption[] {
-  return tagCounts.reduce<LibraryTagFilterOption[]>((options, item) => {
-    const label = typeof item.name === 'string' ? item.name.trim() : '';
-    const normalizedName = typeof item.normalizedName === 'string'
-      ? item.normalizedName.trim()
-      : '';
-    const count = Number.isFinite(item.count) ? Math.max(0, Math.floor(item.count)) : 0;
-    if (!label || !normalizedName || count <= 0) {
-      return options;
-    }
-
-    options.push({
-      key: `tag:${normalizedName}`,
-      value: normalizedName,
-      label,
-      count,
-    });
-    return options;
-  }, []);
-}
-
-function formatLibraryTagFilterAccessibilityLabel(option: LibraryTagFilterOption): string {
-  return `筛选标签：${option.label}，共${option.count}道错题`;
-}
-
-function normalizeMistakeId(id: string): string | null {
-  const normalized = typeof id === 'string' ? id.trim() : '';
+function normalizeModuleName(value: string | null | undefined): string | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
   return normalized.length > 0 ? normalized : null;
-}
-
-function buildLibraryDateBounds(baseDate = new Date()): LibraryDateBounds {
-  const startOfToday = startOfLocalDay(baseDate);
-  const startOfTomorrow = addDays(startOfToday, 1);
-  const startOfEightDaysLater = addDays(startOfToday, 8);
-  const startOfRecentWindow = addDays(startOfToday, -6);
-  return {
-    startOfRecentWindow,
-    startOfToday,
-    startOfTomorrow,
-    startOfEightDaysLater,
-  };
 }
 
 function getTimeValue(value: string | null | undefined): number | null {
@@ -381,7 +137,15 @@ function getTimeValue(value: string | null | undefined): number | null {
   return Number.isNaN(time) ? null : time;
 }
 
-function isTodayDueItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
+function buildDateBounds(baseDate = new Date()): DateBounds {
+  const startOfToday = startOfLocalDay(baseDate);
+  return {
+    startOfToday,
+    startOfTomorrow: addDays(startOfToday, 1),
+  };
+}
+
+function isTodayDueItem(item: MistakeListItem, bounds: DateBounds): boolean {
   if (item.status !== 'active') {
     return false;
   }
@@ -393,7 +157,7 @@ function isTodayDueItem(item: MistakeListItem, bounds: LibraryDateBounds): boole
   );
 }
 
-function isOverdueItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
+function isOverdueItem(item: MistakeListItem, bounds: DateBounds): boolean {
   if (item.status !== 'active') {
     return false;
   }
@@ -401,111 +165,40 @@ function isOverdueItem(item: MistakeListItem, bounds: LibraryDateBounds): boolea
   return nextReviewTime !== null && nextReviewTime < bounds.startOfToday.getTime();
 }
 
-function isRecentlyAddedItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
-  const createdTime = getTimeValue(item.createdAt);
-  return (
-    createdTime !== null
-    && createdTime >= bounds.startOfRecentWindow.getTime()
-  );
-}
-
-function isRecentlyViewedItem(item: MistakeListItem, bounds: LibraryDateBounds): boolean {
-  const viewedTime = getTimeValue(item.lastViewedAt ?? null);
-  return (
-    viewedTime !== null
-    && viewedTime >= bounds.startOfRecentWindow.getTime()
-  );
-}
-
-function isNeverReviewedItem(item: MistakeListItem): boolean {
-  return item.reviewCount === 0 && item.status !== 'archived';
-}
-
-function isNearlyDoneItem(item: MistakeListItem): boolean {
-  return item.status === 'active' && (item.reviewCount === 5 || item.reviewCount === 6);
-}
-
-function isRecentQuickView(
-  quickViewId: LibraryQuickViewId | null,
-): quickViewId is 'recent' | 'recentViewed' {
-  return quickViewId === 'recent' || quickViewId === 'recentViewed';
-}
-
-function getDefaultSortKeyForRecentQuickView(quickViewId: 'recent' | 'recentViewed'): LibrarySortKey {
-  return quickViewId === 'recentViewed' ? 'recentViewed' : 'recentAdded';
-}
-
-function getQuickViewCounts(
-  sourceItems: readonly MistakeListItem[],
-  bounds: LibraryDateBounds,
-): Record<LibraryQuickViewId, number> {
-  const counts: Record<LibraryQuickViewId, number> = {
-    today: 0,
-    overdue: 0,
-    recent: 0,
-    recentViewed: 0,
-    never: 0,
-    nearlyDone: 0,
-    pinned: 0,
-  };
-
-  for (const item of sourceItems) {
-    if (isTodayDueItem(item, bounds)) {
-      counts.today += 1;
-    }
-    if (isOverdueItem(item, bounds)) {
-      counts.overdue += 1;
-    }
-    if (isRecentlyAddedItem(item, bounds)) {
-      counts.recent += 1;
-    }
-    if (isRecentlyViewedItem(item, bounds)) {
-      counts.recentViewed += 1;
-    }
-    if (isNeverReviewedItem(item)) {
-      counts.never += 1;
-    }
-    if (isNearlyDoneItem(item)) {
-      counts.nearlyDone += 1;
-    }
-    if (item.isPinned) {
-      counts.pinned += 1;
-    }
+function matchesViewMode(
+  item: MistakeListItem,
+  viewMode: LibraryViewMode,
+  bounds: DateBounds,
+): boolean {
+  if (viewMode === 'all' || viewMode === 'recentAdded') {
+    return true;
   }
-
-  return counts;
+  if (viewMode === 'collected') {
+    return item.status === 'collected';
+  }
+  if (viewMode === 'active') {
+    return item.status === 'active';
+  }
+  if (viewMode === 'mastered') {
+    return item.status === 'mastered';
+  }
+  if (viewMode === 'today') {
+    return isTodayDueItem(item, bounds);
+  }
+  if (viewMode === 'overdue') {
+    return isOverdueItem(item, bounds);
+  }
+  return getTimeValue(item.lastViewedAt) !== null;
 }
 
-function filterMistakesByQuickView(
-  sourceItems: readonly MistakeListItem[],
-  quickViewId: LibraryQuickViewId | null,
-  bounds: LibraryDateBounds,
-): MistakeListItem[] {
-  if (!quickViewId) {
-    return [...sourceItems];
+function getEffectiveSortKey(filters: LibraryFilterState): LibrarySortKey {
+  if (filters.viewMode === 'recentViewed') {
+    return 'recentViewed';
   }
-
-  return sourceItems.filter((item) => {
-    if (quickViewId === 'today') {
-      return isTodayDueItem(item, bounds);
-    }
-    if (quickViewId === 'overdue') {
-      return isOverdueItem(item, bounds);
-    }
-    if (quickViewId === 'recent') {
-      return isRecentlyAddedItem(item, bounds);
-    }
-    if (quickViewId === 'recentViewed') {
-      return isRecentlyViewedItem(item, bounds);
-    }
-    if (quickViewId === 'never') {
-      return isNeverReviewedItem(item);
-    }
-    if (quickViewId === 'nearlyDone') {
-      return isNearlyDoneItem(item);
-    }
-    return item.isPinned;
-  });
+  if (filters.viewMode === 'recentAdded') {
+    return 'recentAdded';
+  }
+  return filters.sortKey;
 }
 
 function compareNullableTime(
@@ -527,39 +220,25 @@ function compareNullableTime(
   return direction === 'asc' ? leftTime - rightTime : rightTime - leftTime;
 }
 
-function sortMistakes(
+function sortItems(
   sourceItems: readonly MistakeListItem[],
   sortKey: LibrarySortKey,
-  bounds: LibraryDateBounds,
-  selectedFilter: LibraryFilterValue,
-  activeQuickViewId: LibraryQuickViewId | null,
 ): MistakeListItem[] {
-  const indexById = new Map(sourceItems.map((item, index) => [item.id, index]));
-  const itemsWithIndex = [...sourceItems];
-
-  itemsWithIndex.sort((left, right) => {
-    if (!isRecentQuickView(activeQuickViewId) && activeQuickViewId !== 'pinned' && left.isPinned !== right.isPinned) {
+  return [...sourceItems].sort((left, right) => {
+    const ignoresPinned = sortKey === 'recentViewed' || sortKey === 'recentAdded';
+    if (!ignoresPinned && left.isPinned !== right.isPinned) {
       return left.isPinned ? -1 : 1;
     }
 
     let result = 0;
-    if (sortKey === 'reviewTime') {
-      result = selectedFilter === 'mastered'
-        ? compareNullableTime(left.updatedAt, right.updatedAt, 'desc')
-        : compareNullableTime(left.nextReviewAt, right.nextReviewAt, 'asc');
-    } else if (sortKey === 'overdueLongest') {
-      const leftOverdueTime = isOverdueItem(left, bounds) ? getTimeValue(left.nextReviewAt) : null;
-      const rightOverdueTime = isOverdueItem(right, bounds) ? getTimeValue(right.nextReviewAt) : null;
-      result = compareNullableTime(leftOverdueTime === null ? null : new Date(leftOverdueTime).toISOString(), rightOverdueTime === null ? null : new Date(rightOverdueTime).toISOString(), 'asc');
-      if (leftOverdueTime === null && rightOverdueTime !== null) {
-        result = 1;
-      } else if (leftOverdueTime !== null && rightOverdueTime === null) {
-        result = -1;
-      }
+    if (sortKey === 'lastReviewed') {
+      result = compareNullableTime(left.lastReviewAt, right.lastReviewAt, 'desc');
+    } else if (sortKey === 'nextReview') {
+      result = compareNullableTime(left.nextReviewAt, right.nextReviewAt, 'asc');
     } else if (sortKey === 'recentAdded') {
       result = compareNullableTime(left.createdAt, right.createdAt, 'desc');
     } else if (sortKey === 'recentViewed') {
-      result = compareNullableTime(left.lastViewedAt ?? null, right.lastViewedAt ?? null, 'desc');
+      result = compareNullableTime(left.lastViewedAt, right.lastViewedAt, 'desc');
     } else if (sortKey === 'reviewCountAsc') {
       result = left.reviewCount - right.reviewCount;
     } else if (sortKey === 'nearMastered') {
@@ -571,201 +250,168 @@ function sortMistakes(
     if (result !== 0) {
       return result;
     }
-
     const createdTieBreak = compareNullableTime(left.createdAt, right.createdAt, 'desc');
-    if (createdTieBreak !== 0) {
-      return createdTieBreak;
-    }
-
-    return (indexById.get(left.id) ?? 0) - (indexById.get(right.id) ?? 0);
+    return createdTieBreak !== 0 ? createdTieBreak : left.id.localeCompare(right.id);
   });
-
-  return itemsWithIndex;
 }
 
-function buildSection(
-  id: LibrarySectionId,
-  title: string,
-  items: MistakeListItem[],
-  defaultCollapsed: boolean,
-): LibraryListSection | null {
-  if (items.length <= 0) {
-    return null;
+function itemHasTag(item: MistakeListItem, tagKey: string): boolean {
+  return item.tags.some(
+    (tag) => normalizeMistakeTagKey(tag.normalized_name || tag.name) === tagKey,
+  );
+}
+
+function filterByModuleAndTag(
+  sourceItems: readonly MistakeListItem[],
+  moduleName: string | null,
+  tag: SelectedTag | null,
+): MistakeListItem[] {
+  return sourceItems.filter((item) => {
+    if (moduleName !== null && item.module !== moduleName) {
+      return false;
+    }
+    return tag === null || itemHasTag(item, tag.key);
+  });
+}
+
+function buildModuleOptions(
+  sourceItems: readonly MistakeListItem[],
+  selectedModule: string | null,
+): ModuleOption[] {
+  const counts = new Map<string, number>();
+  for (const item of sourceItems) {
+    const moduleName = normalizeModuleName(item.module);
+    if (moduleName) {
+      counts.set(moduleName, (counts.get(moduleName) ?? 0) + 1);
+    }
   }
+  if (selectedModule && !counts.has(selectedModule)) {
+    counts.set(selectedModule, 0);
+  }
+
+  const moduleOptions = [...counts.entries()]
+    .sort(([leftName, leftCount], [rightName, rightCount]) => (
+      rightCount - leftCount || leftName.localeCompare(rightName, 'zh-Hans-CN')
+    ))
+    .map(([moduleName, count]) => ({
+      key: `module:${moduleName}`,
+      value: moduleName,
+      label: moduleName,
+      count,
+    }));
+
+  return [
+    { key: 'module:all', value: null, label: '全部模块', count: sourceItems.length },
+    ...moduleOptions,
+  ];
+}
+
+function buildTagOptions(
+  sourceItems: readonly MistakeListItem[],
+  moduleName: string | null,
+  selectedTag?: SelectedTag | null,
+): TagOption[] {
+  const counts = new Map<string, { label: string; count: number }>();
+  const candidates = moduleName === null
+    ? sourceItems
+    : sourceItems.filter((item) => item.module === moduleName);
+
+  for (const item of candidates) {
+    const seen = new Set<string>();
+    for (const tag of item.tags) {
+      const key = normalizeMistakeTagKey(tag.normalized_name || tag.name);
+      const label = tag.name.trim();
+      if (!key || !label || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      const current = counts.get(key);
+      counts.set(key, { label: current?.label ?? label, count: (current?.count ?? 0) + 1 });
+    }
+  }
+  if (selectedTag && !counts.has(selectedTag.key)) {
+    counts.set(selectedTag.key, { label: selectedTag.label, count: 0 });
+  }
+
+  const tagOptions = [...counts.entries()]
+    .sort(([leftKey, left], [rightKey, right]) => (
+      right.count - left.count
+      || left.label.localeCompare(right.label, 'zh-Hans-CN')
+      || leftKey.localeCompare(rightKey)
+    ))
+    .map(([key, value]) => ({
+      key: `tag:${key}`,
+      value: key,
+      label: value.label,
+      count: value.count,
+    }));
+
+  return [
+    { key: 'tag:all', value: null, label: '全部标签', count: candidates.length },
+    ...tagOptions,
+  ];
+}
+
+function buildSearchFilter(keyword: string): MistakeListFilter {
   return {
-    id,
-    title,
-    count: items.length,
-    defaultCollapsed,
-    data: items,
+    segment: 'all',
+    keyword,
+    module: null,
+    tagKeys: [],
+    limit: null,
   };
 }
 
-function groupMistakesByReviewDate(
-  sourceItems: readonly MistakeListItem[],
-  selectedFilter: LibraryFilterValue,
-  bounds: LibraryDateBounds,
-  activeQuickViewId: LibraryQuickViewId | null,
-): LibraryListSection[] {
-  if (activeQuickViewId === 'recent' || activeQuickViewId === 'recentViewed') {
-    const section = buildSection(
-      activeQuickViewId,
-      activeQuickViewId === 'recent' ? '最近添加' : '最近访问',
-      [...sourceItems],
-      false,
-    );
-    return section ? [section] : [];
-  }
-
-  if (selectedFilter === 'collected' || selectedFilter === 'mastered') {
-    return [
-      {
-        id: 'flat',
-        title: '',
-        count: sourceItems.length,
-        defaultCollapsed: false,
-        data: [...sourceItems],
-      },
-    ];
-  }
-
-  const collected: MistakeListItem[] = [];
-  const overdue: MistakeListItem[] = [];
-  const today: MistakeListItem[] = [];
-  const future7: MistakeListItem[] = [];
-  const later: MistakeListItem[] = [];
-  const noPlan: MistakeListItem[] = [];
-
-  const todayStart = bounds.startOfToday.getTime();
-  const tomorrowStart = bounds.startOfTomorrow.getTime();
-  const eightDaysLaterStart = bounds.startOfEightDaysLater.getTime();
-
-  for (const item of sourceItems) {
-    if (item.status === 'collected') {
-      collected.push(item);
-      continue;
-    }
-
-    const nextReviewTime = getTimeValue(item.nextReviewAt);
-    if (nextReviewTime === null) {
-      if (item.status !== 'archived') {
-        noPlan.push(item);
-      }
-      continue;
-    }
-    if (nextReviewTime < todayStart) {
-      overdue.push(item);
-    } else if (nextReviewTime >= todayStart && nextReviewTime < tomorrowStart) {
-      today.push(item);
-    } else if (nextReviewTime >= tomorrowStart && nextReviewTime < eightDaysLaterStart) {
-      future7.push(item);
-    } else {
-      later.push(item);
-    }
-  }
-
-  return [
-    buildSection('collected', '待整理', collected, false),
-    buildSection('overdue', '已逾期', overdue, false),
-    buildSection('today', '今天应复做', today, false),
-    buildSection('future7', '未来 7 天', future7, true),
-    buildSection('later', '更晚复做', later, true),
-    buildSection('noPlan', '暂无复做计划', noPlan, true),
-  ].filter((section): section is LibraryListSection => section !== null);
-}
-
-function limitLibrarySectionData(
-  sections: readonly LibraryListSection[],
-  limit: number,
-): LibraryListSection[] {
-  const normalizedLimit = Math.max(0, Math.floor(limit));
-  let remaining = normalizedLimit;
-
-  return sections.reduce<LibraryListSection[]>((visibleSections, section) => {
-    const isCollapsedHeader = section.count > 0 && section.data.length <= 0;
-    if (isCollapsedHeader) {
-      visibleSections.push(section);
-      return visibleSections;
-    }
-
-    if (remaining <= 0) {
-      return visibleSections;
-    }
-
-    const visibleData = section.data.slice(0, remaining);
-    remaining -= visibleData.length;
-    if (visibleData.length > 0) {
-      visibleSections.push({
-        ...section,
-        data: visibleData,
-      });
-    }
-    return visibleSections;
-  }, []);
+function sanitizeNextReviewText(text: string): string {
+  return text.replace(/^[^\u4E00-\u9FFF0-9A-Za-z]+/u, '').trim();
 }
 
 function ThumbnailPlaceholder() {
   return (
-    <View style={styles.thumb}>
-      <MaterialIcons size={28} name="image-not-supported" color={colors.textMuted} />
-      <Text style={styles.thumbPlaceholderText}>题目</Text>
-      <Text style={styles.thumbPlaceholderText}>无图</Text>
+    <View style={styles.thumbnailPlaceholder}>
+      <MaterialIcons name="image-not-supported" size={25} color={colors.textMuted} />
+      <Text style={styles.thumbnailPlaceholderText}>暂无题图</Text>
     </View>
   );
 }
 
-function MistakeLibraryCard({
+function MistakeCard({
   item,
-  isDeleting = false,
+  isDeleting,
   onPress,
   onLongPress,
   onMorePress,
 }: {
   item: MistakeListItem;
-  isDeleting?: boolean;
+  isDeleting: boolean;
   onPress: () => void;
   onLongPress: () => void;
   onMorePress: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const didLongPressRef = useRef(false);
-  const isCollected = item.status === 'collected';
 
   useEffect(() => {
     setImageFailed(false);
   }, [item.thumbnailUri]);
 
-  const showImage = !!item.thumbnailUri && !imageFailed;
   const nextReviewInfo = useMemo(
-    () =>
-      resolveNextReviewAtText({
-        reviewCount: item.reviewCount,
-        maxReviewCount: item.maxReviewCount,
-        nextReviewAt: item.nextReviewAt ?? null,
-      }),
+    () => resolveNextReviewAtText({
+      reviewCount: item.reviewCount,
+      maxReviewCount: item.maxReviewCount,
+      nextReviewAt: item.nextReviewAt ?? null,
+    }),
     [item.maxReviewCount, item.nextReviewAt, item.reviewCount],
   );
-  const nextReviewLineText = useMemo(() => {
-    if (isCollected) {
-      return '未加入七刷';
-    }
-
-    const sanitized = sanitizeNextReviewText(nextReviewInfo.displayText);
-    if (!nextReviewInfo.absoluteDate) {
-      return sanitized;
-    }
-
-    const groupedDateMatch = /[\(\uFF08]([^\)\uFF09]+)[\)\uFF09]/.exec(sanitized);
-    if (groupedDateMatch && groupedDateMatch[1]) {
-      const compactDatePart = groupedDateMatch[1].replace(/\s+/g, '');
-      return `${nextReviewInfo.label}(${compactDatePart})`;
-    }
-
-    return `${nextReviewInfo.label}(${nextReviewInfo.absoluteDate})`;
-  }, [isCollected, nextReviewInfo.absoluteDate, nextReviewInfo.displayText, nextReviewInfo.label]);
+  const nextReviewText = item.status === 'collected'
+    ? '待加入七刷'
+    : sanitizeNextReviewText(nextReviewInfo.displayText);
+  const showImage = !!item.thumbnailUri && !imageFailed;
+  const currentProgress = Math.min(item.maxReviewCount, item.reviewCount + 1);
 
   return (
     <Pressable
+      accessibilityLabel={`${item.title}，复做进度${item.reviewCount}/${item.maxReviewCount}`}
       disabled={isDeleting}
       onLongPress={() => {
         didLongPressRef.current = true;
@@ -778,784 +424,211 @@ function MistakeLibraryCard({
         }
         onPress();
       }}
-      style={[styles.cardPressable, isDeleting && styles.cardPressableDisabled]}>
-      <CardContainer padding={14} style={styles.card}>
-        <View style={styles.cardRow}>
-          {showImage ? (
-            <Image
-              source={{ uri: item.thumbnailUri! }}
-              style={styles.thumbImage}
-              resizeMode="cover"
-              onError={() => setImageFailed(true)}
-            />
-          ) : (
-            <ThumbnailPlaceholder />
-          )}
+      style={({ pressed }) => [
+        styles.card,
+        pressed ? styles.cardPressed : null,
+        isDeleting ? styles.cardDisabled : null,
+      ]}>
+      <View style={styles.cardRow}>
+        {showImage ? (
+          <Image
+            onError={() => setImageFailed(true)}
+            resizeMode="cover"
+            source={{ uri: item.thumbnailUri! }}
+            style={styles.thumbnail}
+          />
+        ) : (
+          <ThumbnailPlaceholder />
+        )}
 
-          <View style={styles.cardMain}>
-            <View style={styles.cardTopLine}>
-              <View style={styles.modulePill}>
-                <Text
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                  allowFontScaling={false}
-                  maxFontSizeMultiplier={1.0}
-                  style={styles.cardMeta}>
-                  {item.module}
-                </Text>
-              </View>
-              <View style={styles.cardTopLineEnd}>
-                {item.isPinned ? (
-                  <View style={styles.pinnedMark}>
-                    <MaterialIcons name="star" size={13} color="#D97706" />
-                  </View>
-                ) : null}
-                <View style={styles.difficultyPill}>
-                  <Text
-                    numberOfLines={1}
-                    allowFontScaling={false}
-                    maxFontSizeMultiplier={1.0}
-                    style={styles.difficultyText}>
-                    难度 {item.difficulty}
-                  </Text>
-                </View>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={item.isPinned ? '打开题目菜单，当前已置顶' : '打开题目菜单'}
-                  hitSlop={8}
-                  onPress={onMorePress}
-                  style={({ pressed }) => [
-                    styles.cardMoreButton,
-                    pressed ? styles.cardMoreButtonPressed : null,
-                  ]}>
-                  <MaterialIcons name="more-vert" size={18} color={colors.textMuted} />
-                </Pressable>
-              </View>
-            </View>
-
-            <View style={styles.titleRow}>
-              <Text
-                numberOfLines={1}
-                ellipsizeMode="tail"
-                allowFontScaling={false}
-                maxFontSizeMultiplier={1.0}
-                style={styles.cardTitle}>
-                {item.title}
-              </Text>
-            </View>
-            {item.tags.length > 0 ? (
-              <View style={styles.cardTagRow}>
-                {item.tags.slice(0, 2).map((tag) => (
-                  <View key={tag.id} style={styles.cardTagPill}>
-                    <Text numberOfLines={1} style={styles.cardTagText}>
-                      {tag.name}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-            ) : null}
-            <View style={styles.progressRow}>
-              <Text
-                numberOfLines={1}
-                allowFontScaling={false}
-                maxFontSizeMultiplier={1.0}
-                style={styles.progressLabel}>
-                进度 {item.reviewCount}/{item.maxReviewCount}
-              </Text>
-              <ProgressDots
-                total={item.maxReviewCount}
-                current={item.reviewCount}
-                completed={item.reviewCount}
-                style={styles.progressDots}
-              />
-            </View>
-            <View style={styles.nextReviewWrap}>
-              <Text
-                numberOfLines={1}
-                allowFontScaling={false}
-                maxFontSizeMultiplier={1.0}
-                style={styles.nextReviewLabel}>
-                {isCollected ? '状态' : '下一次复做'}
-              </Text>
-              <Text
-                numberOfLines={1}
-                allowFontScaling={false}
-                maxFontSizeMultiplier={1.0}
-                style={[
-                  styles.nextReviewText,
-                  nextReviewInfo.tone === 'success' && styles.nextReviewTextSuccess,
-                  nextReviewInfo.tone === 'muted' && styles.nextReviewTextMuted,
-                  nextReviewInfo.tone === 'danger' && styles.nextReviewTextDanger,
+        <View style={styles.cardBody}>
+          <View style={styles.cardTopRow}>
+            <Text numberOfLines={1} style={styles.moduleText}>
+              {item.module}
+            </Text>
+            <View style={styles.cardTopActions}>
+              {item.isPinned ? <MaterialIcons name="star" size={16} color="#D58A18" /> : null}
+              <Pressable
+                accessibilityLabel="更多题目操作"
+                accessibilityRole="button"
+                hitSlop={10}
+                onPress={onMorePress}
+                style={({ pressed }) => [
+                  styles.moreButton,
+                  pressed ? styles.iconButtonPressed : null,
                 ]}>
-                {nextReviewLineText}
-              </Text>
+                <MaterialIcons name="more-vert" size={20} color={colors.textMuted} />
+              </Pressable>
             </View>
+          </View>
+
+          <Text numberOfLines={2} style={styles.cardTitle}>
+            {item.title}
+          </Text>
+
+          {item.tags.length > 0 ? (
+            <Text numberOfLines={1} style={styles.cardTags}>
+              {item.tags.slice(0, 2).map((tag) => `#${tag.name}`).join('  ')}
+            </Text>
+          ) : null}
+
+          <View style={styles.progressRow}>
+            <Text numberOfLines={1} style={styles.progressText}>
+              {item.reviewCount}/{item.maxReviewCount}
+            </Text>
+            <ProgressDots
+              completed={item.reviewCount}
+              current={currentProgress}
+              style={styles.progressDots}
+              total={item.maxReviewCount}
+            />
+          </View>
+
+          <View style={styles.cardFooterRow}>
+            <Text numberOfLines={1} style={styles.nextReviewText}>
+              {nextReviewText}
+            </Text>
+            <Text style={styles.difficultyText}>难度 {item.difficulty}</Text>
           </View>
         </View>
-        {isDeleting ? (
-          <View pointerEvents="none" style={styles.cardDeletingMask}>
-            <ActivityIndicator size="small" color={colors.danger} />
-            <Text style={styles.cardDeletingText}>删除中...</Text>
-          </View>
-        ) : null}
-      </CardContainer>
+      </View>
+
+      {isDeleting ? (
+        <View style={styles.deletingOverlay}>
+          <ActivityIndicator color={colors.danger} size="small" />
+          <Text style={styles.deletingText}>删除中…</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
 
-function QuickViewBar({
-  activeQuickViewId,
-  counts,
-  onSelect,
+function OptionRow({
+  label,
+  count,
+  selected,
+  onPress,
 }: {
-  activeQuickViewId: LibraryQuickViewId | null;
-  counts: Record<LibraryQuickViewId, number>;
-  onSelect: (quickViewId: LibraryQuickViewId) => void;
+  label: string;
+  count: number;
+  selected: boolean;
+  onPress: () => void;
 }) {
   return (
-    <View style={styles.quickViewBlock}>
-      <Text style={styles.quickViewTitle}>快速查看</Text>
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.quickViewContent}>
-        {QUICK_VIEW_OPTIONS.map((option) => {
-          const selected = activeQuickViewId === option.id;
-          const count = counts[option.id] ?? 0;
-          const countText = ` ${count}`;
-          return (
-            <Pressable
-              key={option.id}
-              accessibilityRole="button"
-              accessibilityLabel={`${selected ? '取消' : '启用'}快速查看：${option.label}`}
-              onPress={() => onSelect(option.id)}
-              style={({ pressed }) => [
-                styles.quickViewChip,
-                selected ? styles.quickViewChipSelected : null,
-                selected && option.tone === 'danger' ? styles.quickViewChipDangerSelected : null,
-                selected && option.tone === 'info' ? styles.quickViewChipInfoSelected : null,
-                selected && option.tone === 'warning' ? styles.quickViewChipWarningSelected : null,
-                selected && option.tone === 'pinned' ? styles.quickViewChipPinnedSelected : null,
-                pressed ? styles.moduleFilterChipPressed : null,
-              ]}>
-              <MaterialIcons
-                name={option.icon}
-                size={16}
-                color={selected ? getQuickViewToneColor(option.tone) : colors.textSecondary}
-              />
-              <Text
-                numberOfLines={1}
-                style={[
-                  styles.quickViewChipText,
-                  selected ? { color: getQuickViewToneColor(option.tone) } : null,
-                ]}>
-                {option.label}
-                {countText}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </ScrollView>
-    </View>
-  );
-}
-
-function SortSelectorSheet({
-  visible,
-  selectedSortKey,
-  onClose,
-  onSelect,
-}: {
-  visible: boolean;
-  selectedSortKey: LibrarySortKey;
-  onClose: () => void;
-  onSelect: (sortKey: LibrarySortKey) => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.moduleSheetOverlay}>
-        <Pressable style={styles.moduleSheetBackdrop} onPress={onClose} />
-        <View style={styles.moduleSheet}>
-          <View style={styles.moduleSheetHandle} />
-          <View style={styles.moduleSheetHeader}>
-            <View style={styles.moduleSheetHeaderTextWrap}>
-              <Text style={styles.moduleSheetTitle}>排序方式</Text>
-              <Text style={styles.moduleSheetSubtitle}>切换后立即应用到当前结果</Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="关闭排序选择"
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.moduleSheetCloseButton,
-                pressed ? styles.moduleSheetCloseButtonPressed : null,
-              ]}>
-              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
-            </Pressable>
-          </View>
-
-          <View style={styles.sortSheetList}>
-            {SORT_OPTIONS.map((option) => {
-              const selected = selectedSortKey === option.key;
-              return (
-                <Pressable
-                  key={option.key}
-                  accessibilityRole="button"
-                  accessibilityLabel={`排序：${option.label}`}
-                  onPress={() => onSelect(option.key)}
-                  style={({ pressed }) => [
-                    styles.sortSheetOption,
-                    selected ? styles.sortSheetOptionSelected : null,
-                    pressed ? styles.moduleFilterChipPressed : null,
-                  ]}>
-                  <View style={styles.sortSheetOptionTextWrap}>
-                    <Text
-                      numberOfLines={1}
-                      style={[
-                        styles.sortSheetOptionTitle,
-                        selected ? styles.sortSheetOptionTitleSelected : null,
-                      ]}>
-                      {option.label}
-                    </Text>
-                    <Text numberOfLines={1} style={styles.sortSheetOptionDescription}>
-                      {option.description}
-                    </Text>
-                  </View>
-                  {selected ? <MaterialIcons name="check" size={20} color={colors.success} /> : null}
-                </Pressable>
-              );
-            })}
-          </View>
+    <Pressable
+      accessibilityLabel={`${label}，${count}道错题`}
+      accessibilityRole="radio"
+      accessibilityState={{ checked: selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.sheetOption,
+        selected ? styles.sheetOptionSelected : null,
+        pressed ? styles.sheetOptionPressed : null,
+      ]}>
+      <Text numberOfLines={1} style={[styles.sheetOptionLabel, selected ? styles.sheetOptionLabelSelected : null]}>
+        {label}
+      </Text>
+      <View style={styles.sheetOptionEnd}>
+        <Text style={styles.sheetOptionCount}>{count}</Text>
+        <View style={styles.sheetCheckSlot}>
+          {selected ? <MaterialIcons name="check" size={21} color={colors.success} /> : null}
         </View>
       </View>
-    </Modal>
-  );
-}
-
-function ReviewSectionHeader({
-  section,
-  collapsed,
-  onToggle,
-}: {
-  section: SectionListData<MistakeListItem, LibraryListSection>;
-  collapsed: boolean;
-  onToggle: (sectionId: LibrarySectionId) => void;
-}) {
-  if (section.id === 'flat') {
-    return null;
-  }
-
-  return (
-    <View style={styles.sectionHeaderOuter}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${collapsed ? '展开' : '收起'}${section.title}`}
-        onPress={() => onToggle(section.id)}
-        style={({ pressed }) => [
-          styles.reviewSectionHeader,
-          pressed ? styles.moduleFilterChipPressed : null,
-        ]}>
-        <View style={styles.reviewSectionTitleWrap}>
-          <MaterialIcons
-            name={getSectionIcon(section.id)}
-            size={18}
-            color={getSectionColor(section.id)}
-          />
-          <Text
-            numberOfLines={1}
-            style={[
-              styles.reviewSectionTitle,
-              { color: getSectionColor(section.id) },
-            ]}>
-            {section.title} · {section.count}题
-          </Text>
-        </View>
-        <View style={styles.reviewSectionToggle}>
-          <Text style={styles.reviewSectionToggleText}>{collapsed ? '展开' : '收起'}</Text>
-          <MaterialIcons
-            name={collapsed ? 'keyboard-arrow-down' : 'keyboard-arrow-up'}
-            size={20}
-            color={colors.textSecondary}
-          />
-        </View>
-      </Pressable>
-    </View>
-  );
-}
-
-function LibraryModuleFilterSheet({
-  visible,
-  options,
-  selectedValue,
-  onClose,
-  onSelectOption,
-}: {
-  visible: boolean;
-  options: LibraryModuleFilterOption[];
-  selectedValue: LibraryModuleFilterValue;
-  onClose: () => void;
-  onSelectOption: (value: LibraryModuleFilterValue) => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.moduleSheetOverlay}>
-        <Pressable style={styles.moduleSheetBackdrop} onPress={onClose} />
-        <View style={styles.moduleSheet}>
-          <View style={styles.moduleSheetHandle} />
-          <View style={styles.moduleSheetHeader}>
-            <View style={styles.moduleSheetHeaderTextWrap}>
-              <Text style={styles.moduleSheetTitle}>选择模块</Text>
-              <Text style={styles.moduleSheetSubtitle}>{`共 ${options.length} 个筛选项`}</Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="关闭模块选择"
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.moduleSheetCloseButton,
-                pressed ? styles.moduleSheetCloseButtonPressed : null,
-              ]}>
-              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={styles.moduleFilterSheetScroll}
-            contentContainerStyle={styles.moduleFilterSheetContent}>
-            {options.map((option) => {
-              const selected = selectedValue === option.value;
-              return (
-                <Pressable
-                  key={option.key}
-                  accessibilityRole="button"
-                  accessibilityLabel={formatLibraryModuleFilterAccessibilityLabel(option)}
-                  onPress={() => onSelectOption(option.value)}
-                  style={({ pressed }) => [
-                    styles.moduleFilterSheetChip,
-                    selected ? styles.moduleFilterSheetChipSelected : null,
-                    pressed ? styles.moduleFilterChipPressed : null,
-                  ]}>
-                  <Text
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={1.1}
-                    style={[
-                      styles.moduleFilterChipText,
-                      selected ? styles.moduleFilterChipTextSelected : null,
-                    ]}>
-                    {formatLibraryModuleFilterOptionText(option)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function LibraryTagFilterSheet({
-  visible,
-  options,
-  selectedValues,
-  onClose,
-  onToggleOption,
-}: {
-  visible: boolean;
-  options: LibraryTagFilterOption[];
-  selectedValues: string[];
-  onClose: () => void;
-  onToggleOption: (value: string) => void;
-}) {
-  const selectedSet = useMemo(() => new Set(selectedValues), [selectedValues]);
-
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.moduleSheetOverlay}>
-        <Pressable style={styles.moduleSheetBackdrop} onPress={onClose} />
-        <View style={styles.moduleSheet}>
-          <View style={styles.moduleSheetHandle} />
-          <View style={styles.moduleSheetHeader}>
-            <View style={styles.moduleSheetHeaderTextWrap}>
-              <Text style={styles.moduleSheetTitle}>选择标签</Text>
-              <Text style={styles.moduleSheetSubtitle}>{`共 ${options.length} 个标签`}</Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="关闭标签选择"
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.moduleSheetCloseButton,
-                pressed ? styles.moduleSheetCloseButtonPressed : null,
-              ]}>
-              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={styles.moduleFilterSheetScroll}
-            contentContainerStyle={styles.moduleFilterSheetContent}>
-            {options.map((option) => {
-              const selected = selectedSet.has(option.value);
-              return (
-                <Pressable
-                  key={option.key}
-                  accessibilityRole="button"
-                  accessibilityLabel={formatLibraryTagFilterAccessibilityLabel(option)}
-                  onPress={() => onToggleOption(option.value)}
-                  style={({ pressed }) => [
-                    styles.tagFilterSheetChip,
-                    selected ? styles.tagFilterChipSelected : null,
-                    pressed ? styles.moduleFilterChipPressed : null,
-                  ]}>
-                  <Text
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={1.1}
-                    style={[
-                      styles.tagFilterChipText,
-                      selected ? styles.tagFilterChipTextSelected : null,
-                    ]}>
-                    {option.label}
-                  </Text>
-                  {selected ? <MaterialIcons name="check" size={16} color={colors.success} /> : null}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
+    </Pressable>
   );
 }
 
 export default function LibraryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const listRef = useRef<FlatList<MistakeListItem>>(null);
+  const mountedRef = useRef(true);
+  const requestIdRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const hasFocusedRef = useRef(false);
+  const { props: toastProps, showToast } = useAppToast();
+
   const [searchText, setSearchText] = useState('');
-  const [debouncedKeyword, setDebouncedKeyword] = useState('');
-  const [selectedFilter, setSelectedFilter] = useState<LibraryFilterValue>('all');
-  const [selectedModuleFilter, setSelectedModuleFilter] = useState<LibraryModuleFilterValue>(null);
-  const [selectedTagFilters, setSelectedTagFilters] = useState<string[]>([]);
-  const [moduleFilterOptions, setModuleFilterOptions] = useState<LibraryModuleFilterOption[]>([
-    { key: 'all', value: null, label: '全部', count: 0 },
-  ]);
-  const [tagFilterOptions, setTagFilterOptions] = useState<LibraryTagFilterOption[]>([]);
-  const [activeQuickViewId, setActiveQuickViewId] = useState<LibraryQuickViewId | null>(null);
-  const [activeAnchorId, setActiveAnchorId] = useState<LibraryAnchorId>('search');
-  const [highlightedAnchorId, setHighlightedAnchorId] = useState<LibraryAnchorId | null>(null);
-  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
-  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
-  const [sortKey, setSortKey] = useState<LibrarySortKey>('reviewTime');
-  const [sortSheetVisible, setSortSheetVisible] = useState(false);
-  const [collapsedSectionIds, setCollapsedSectionIds] = useState<Partial<Record<LibrarySectionId, boolean>>>({});
-  const [isModuleFilterLoading, setIsModuleFilterLoading] = useState(false);
-  const [isTagFilterLoading, setIsTagFilterLoading] = useState(false);
-  const [moduleFilterErrorMessage, setModuleFilterErrorMessage] = useState<string | null>(null);
-  const [tagFilterErrorMessage, setTagFilterErrorMessage] = useState<string | null>(null);
-  const [moduleFilterSheetVisible, setModuleFilterSheetVisible] = useState(false);
-  const [tagFilterSheetVisible, setTagFilterSheetVisible] = useState(false);
+  const [filters, setFilters] = useState<LibraryFilterState>(DEFAULT_FILTER_STATE);
   const [items, setItems] = useState<MistakeListItem[]>([]);
-  const [visibleItemLimit, setVisibleItemLimit] = useState(INITIAL_VISIBLE_MISTAKE_LIMIT);
   const [isLoading, setIsLoading] = useState(true);
+  const [isFiltering, setIsFiltering] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [deletingMistakeId, setDeletingMistakeId] = useState<string | null>(null);
   const [pinningMistakeId, setPinningMistakeId] = useState<string | null>(null);
   const [joiningReviewPlanMistakeId, setJoiningReviewPlanMistakeId] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const hasLoadedRef = useRef(false);
-  const hasFocusedRef = useRef(false);
-  const libraryListRef = useRef<SectionList<MistakeListItem, LibraryListSection>>(null);
-  const anchorLayoutsRef = useRef<Partial<Record<LibraryAnchorId, number>>>({});
-  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
-  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
-  const requestIdRef = useRef(0);
-  const moduleFilterRequestIdRef = useRef(0);
-  const tagFilterRequestIdRef = useRef(0);
-  const sortBeforeRecentQuickViewRef = useRef<LibrarySortKey>('reviewTime');
-  const quickViewSortWasAppliedRef = useRef(false);
+  const [moduleSheetVisible, setModuleSheetVisible] = useState(false);
+  const [draftModule, setDraftModule] = useState<string | null>(null);
+  const [tagSheetVisible, setTagSheetVisible] = useState(false);
+  const [draftTag, setDraftTag] = useState<SelectedTag | null>(null);
+  const [tagSearchText, setTagSearchText] = useState('');
+  const [sortSheetVisible, setSortSheetVisible] = useState(false);
 
-  useEffect(
-    () => () => {
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-        anchorHighlightTimerRef.current = null;
-      }
-    },
-    [],
-  );
+  const [customModuleModalVisible, setCustomModuleModalVisible] = useState(false);
+  const [customModules, setCustomModules] = useState<CustomModule[]>([]);
+  const [customModuleBusy, setCustomModuleBusy] = useState(false);
+  const [customModuleMessage, setCustomModuleMessage] = useState<string | null>(null);
 
-  const scrollToLibraryOffset = useCallback((offset: number) => {
-    const targetOffset = Math.max(0, offset);
-    const listRef = libraryListRef.current as unknown as {
-      getScrollResponder?: () => {
-        scrollTo?: (params: { x?: number; y?: number; animated?: boolean }) => void;
-        scrollResponderScrollTo?: (params: { x?: number; y?: number; animated?: boolean }) => void;
-      } | null;
-    };
-    const scrollResponder = listRef?.getScrollResponder?.();
-    if (scrollResponder?.scrollTo) {
-      scrollResponder.scrollTo({
-        x: 0,
-        y: targetOffset,
-        animated: true,
-      });
-      return;
-    }
-    scrollResponder?.scrollResponderScrollTo?.({
-      x: 0,
-      y: targetOffset,
-      animated: true,
-    });
-  }, []);
-
-  const handleAnchorLayout = useCallback(
-    (anchorId: LibraryAnchorId, event: LayoutChangeEvent) => {
-      anchorLayoutsRef.current = {
-        ...anchorLayoutsRef.current,
-        [anchorId]: event.nativeEvent.layout.y,
-      };
-    },
-    [],
-  );
-
-  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    anchorNavLayoutRef.current = {
-      y: Math.max(0, Math.round(y)),
-      height: Math.max(0, Math.round(height)),
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      requestIdRef.current += 1;
     };
   }, []);
 
-  const handleAnchorPress = useCallback(
-    (anchorId: LibraryAnchorId) => {
-      setActiveAnchorId(anchorId);
-      const anchorOffset = anchorLayoutsRef.current[anchorId];
-      const label = LIBRARY_ANCHOR_LABELS[anchorId];
-      if (typeof anchorOffset === 'number') {
-        const anchorNavLayout = anchorNavLayoutRef.current;
-        const floatingTriggerY = anchorNavLayout
-          ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
-          : Number.POSITIVE_INFINITY;
-        const willShowFloatingAnchor =
-          Math.max(0, anchorOffset - LIBRARY_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
-
-        let scrollOffset: number = LIBRARY_ANCHOR_SCROLL_OFFSET;
-        if (isFloatingAnchorVisible || willShowFloatingAnchor) {
-          scrollOffset = isAnchorNavCollapsed
-            ? LIBRARY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
-            : LIBRARY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
-        }
-
-        scrollToLibraryOffset(anchorOffset - scrollOffset);
-        setHighlightedAnchorId(anchorId);
-        if (anchorHighlightTimerRef.current) {
-          clearTimeout(anchorHighlightTimerRef.current);
-        }
-        anchorHighlightTimerRef.current = setTimeout(() => {
-          setHighlightedAnchorId(null);
-          anchorHighlightTimerRef.current = null;
-        }, LIBRARY_ANCHOR_HIGHLIGHT_DURATION_MS);
-        showToast(`已跳转到 ${label}`, 'anchor');
-        return;
-      }
-      showToast(`${label}位置准备中，请稍后再试`, 'anchor');
-    },
-    [isAnchorNavCollapsed, isFloatingAnchorVisible, scrollToLibraryOffset, showToast],
-  );
-
-  const handleLibraryScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const activeOffset = event.nativeEvent.contentOffset.y + LIBRARY_ANCHOR_ACTIVE_OFFSET;
-    let nextAnchorId: LibraryAnchorId = LIBRARY_ANCHOR_ITEMS[0].id;
-
-    for (const item of LIBRARY_ANCHOR_ITEMS) {
-      const anchorOffset = anchorLayoutsRef.current[item.id];
-      if (typeof anchorOffset === 'number' && anchorOffset <= activeOffset) {
-        nextAnchorId = item.id;
-      }
+  const loadItems = useCallback(async (keyword: string, mode: ListLoadMode) => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    if (mode === 'initial') {
+      setIsLoading(true);
+    } else if (mode === 'refresh') {
+      setIsRefreshing(true);
+    } else {
+      setIsFiltering(true);
     }
-
-    setActiveAnchorId((currentAnchorId) =>
-      currentAnchorId === nextAnchorId ? currentAnchorId : nextAnchorId,
-    );
-
-    const anchorNavLayout = anchorNavLayoutRef.current;
-    const y = event.nativeEvent.contentOffset.y;
-    const nextFloatingAnchorVisible = anchorNavLayout
-      ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
-      : false;
-    setIsFloatingAnchorVisible((current) =>
-      current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible,
-    );
-    if (!nextFloatingAnchorVisible) {
-      setIsAnchorNavCollapsed((current) => (current ? current : true));
-    }
-  }, []);
-
-  const handleToggleAnchorNavCollapsed = useCallback(() => {
-    setIsAnchorNavCollapsed((current) => !current);
-  }, []);
-
-  const loadList = useCallback(
-    async (filter: MistakeListFilter, mode: ListLoadMode) => {
-      const requestId = requestIdRef.current + 1;
-      requestIdRef.current = requestId;
-
-      if (mode === 'initial') {
-        setIsLoading(true);
-      } else if (mode === 'refresh') {
-        setIsRefreshing(true);
-      }
-      setErrorMessage(null);
-
-      try {
-        const listItems = await MistakeListService.getMistakeListItems(filter);
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-        setItems(listItems);
-      } catch (error) {
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-        Logger.error(PAGE_SCOPE, 'Failed to load library list.', {
-          filter,
-          mode,
-          error,
-        });
-        setItems([]);
-        setErrorMessage(error instanceof Error ? error.message : String(error));
-      } finally {
-        if (requestId !== requestIdRef.current) {
-          return;
-        }
-        setIsLoading(false);
-        setIsRefreshing(false);
-      }
-    },
-    []
-  );
-
-  const loadModuleFilterOptions = useCallback(async (filter: MistakeListFilter) => {
-    const requestId = moduleFilterRequestIdRef.current + 1;
-    moduleFilterRequestIdRef.current = requestId;
-    setIsModuleFilterLoading(true);
-    setModuleFilterErrorMessage(null);
+    setErrorMessage(null);
 
     try {
-      const moduleCounts = await MistakeListService.getMistakeModuleCounts(filter);
-      if (requestId !== moduleFilterRequestIdRef.current) {
+      const nextItems = await MistakeListService.getMistakeListItems(buildSearchFilter(keyword));
+      if (!mountedRef.current || requestId !== requestIdRef.current) {
         return;
       }
-
-      const nextOptions = buildLibraryModuleFilterOptions(moduleCounts);
-      const validModules = new Set(
-        nextOptions
-          .map((option) => option.value)
-          .filter((value): value is string => value !== null),
-      );
-      setModuleFilterOptions(nextOptions);
-      setSelectedModuleFilter((currentValue) =>
-        currentValue !== null && !validModules.has(currentValue) ? null : currentValue,
-      );
+      setItems(nextItems);
     } catch (error) {
-      if (requestId !== moduleFilterRequestIdRef.current) {
+      if (!mountedRef.current || requestId !== requestIdRef.current) {
         return;
       }
-      Logger.error(PAGE_SCOPE, 'Failed to load library module filter options.', {
-        filter,
-        error,
-      });
-      setModuleFilterErrorMessage(error instanceof Error ? error.message : String(error));
+      Logger.error(PAGE_SCOPE, 'Failed to load library items.', { keyword, mode, error });
+      setItems([]);
+      setErrorMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      if (requestId !== moduleFilterRequestIdRef.current) {
+      if (!mountedRef.current || requestId !== requestIdRef.current) {
         return;
       }
-      setIsModuleFilterLoading(false);
-    }
-  }, []);
-
-  const loadTagFilterOptions = useCallback(async (filter: MistakeListFilter) => {
-    const requestId = tagFilterRequestIdRef.current + 1;
-    tagFilterRequestIdRef.current = requestId;
-    setIsTagFilterLoading(true);
-    setTagFilterErrorMessage(null);
-
-    try {
-      const tagCounts = await MistakeListService.getMistakeTagFilterCounts(filter);
-      if (requestId !== tagFilterRequestIdRef.current) {
-        return;
-      }
-
-      const nextOptions = buildLibraryTagFilterOptions(tagCounts);
-      const validTagKeys = new Set(nextOptions.map((option) => option.value));
-      setTagFilterOptions(nextOptions);
-      setSelectedTagFilters((currentValues) => {
-        const nextValues = currentValues.filter((tagKey) => validTagKeys.has(tagKey));
-        if (nextValues.length === currentValues.length) {
-          return currentValues;
-        }
-        return nextValues;
-      });
-    } catch (error) {
-      if (requestId !== tagFilterRequestIdRef.current) {
-        return;
-      }
-      Logger.error(PAGE_SCOPE, 'Failed to load library tag filter options.', {
-        filter,
-        error,
-      });
-      setTagFilterErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (requestId !== tagFilterRequestIdRef.current) {
-        return;
-      }
-      setIsTagFilterLoading(false);
+      setIsLoading(false);
+      setIsFiltering(false);
+      setIsRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setDebouncedKeyword(searchText.trim());
+      const keyword = searchText.trim();
+      setFilters((current) => (
+        current.keyword === keyword ? current : { ...current, keyword }
+      ));
     }, SEARCH_DEBOUNCE_MS);
-
     return () => clearTimeout(timer);
   }, [searchText]);
 
   useEffect(() => {
-    setVisibleItemLimit(INITIAL_VISIBLE_MISTAKE_LIMIT);
-  }, [
-    activeQuickViewId,
-    debouncedKeyword,
-    selectedFilter,
-    selectedModuleFilter,
-    selectedTagFilters,
-    sortKey,
-  ]);
-
-  useEffect(() => {
-    const filter = buildLibraryListFilter(
-      selectedFilter,
-      debouncedKeyword,
-      selectedModuleFilter,
-      selectedTagFilters,
-    );
     const mode: ListLoadMode = hasLoadedRef.current ? 'filter' : 'initial';
     hasLoadedRef.current = true;
-
-    void loadList(filter, mode);
-  }, [debouncedKeyword, loadList, selectedFilter, selectedModuleFilter, selectedTagFilters]);
-
-  useEffect(() => {
-    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, null, selectedTagFilters);
-    void loadModuleFilterOptions(filter);
-  }, [debouncedKeyword, loadModuleFilterOptions, selectedFilter, selectedTagFilters]);
-
-  useEffect(() => {
-    const filter = buildLibraryListFilter(selectedFilter, debouncedKeyword, selectedModuleFilter, []);
-    void loadTagFilterOptions(filter);
-  }, [debouncedKeyword, loadTagFilterOptions, selectedFilter, selectedModuleFilter]);
+    void loadItems(filters.keyword, mode);
+  }, [filters.keyword, loadItems]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1563,1016 +636,808 @@ export default function LibraryScreen() {
         hasFocusedRef.current = true;
         return undefined;
       }
-
-      const filter = buildLibraryListFilter(
-        selectedFilter,
-        debouncedKeyword,
-        selectedModuleFilter,
-        selectedTagFilters,
-      );
-      const moduleOptionsFilter = buildLibraryListFilter(
-        selectedFilter,
-        debouncedKeyword,
-        null,
-        selectedTagFilters,
-      );
-      const tagOptionsFilter = buildLibraryListFilter(
-        selectedFilter,
-        debouncedKeyword,
-        selectedModuleFilter,
-        [],
-      );
-      void loadList(filter, 'filter');
-      void loadModuleFilterOptions(moduleOptionsFilter);
-      void loadTagFilterOptions(tagOptionsFilter);
+      void loadItems(filters.keyword, 'filter');
       return undefined;
-    }, [
-      debouncedKeyword,
-      loadList,
-      loadModuleFilterOptions,
-      loadTagFilterOptions,
-      selectedFilter,
-      selectedModuleFilter,
-      selectedTagFilters,
-    ]),
+    }, [filters.keyword, loadItems]),
   );
 
-  const handleClearSearch = useCallback(() => {
-    setSearchText('');
-    setDebouncedKeyword('');
-  }, []);
+  const dateBounds = buildDateBounds();
+  const moduleOptions = useMemo(
+    () => buildModuleOptions(items, filters.module),
+    [filters.module, items],
+  );
+  const tagOptions = useMemo(
+    () => buildTagOptions(items, filters.module, filters.tag),
+    [filters.module, filters.tag, items],
+  );
+  const scopedItems = useMemo(
+    () => filterByModuleAndTag(items, filters.module, filters.tag),
+    [filters.module, filters.tag, items],
+  );
+  const statusCounts = useMemo(() => ({
+    all: scopedItems.length,
+    collected: scopedItems.filter((item) => item.status === 'collected').length,
+    active: scopedItems.filter((item) => item.status === 'active').length,
+    mastered: scopedItems.filter((item) => item.status === 'mastered').length,
+  }), [scopedItems]);
+  const quickCounts = useMemo(() => ({
+    today: scopedItems.filter((item) => isTodayDueItem(item, dateBounds)).length,
+    overdue: scopedItems.filter((item) => isOverdueItem(item, dateBounds)).length,
+  }), [dateBounds, scopedItems]);
+  const effectiveSortKey = getEffectiveSortKey(filters);
+  const resultItems = useMemo(
+    () => sortItems(
+      scopedItems.filter((item) => matchesViewMode(item, filters.viewMode, dateBounds)),
+      effectiveSortKey,
+    ),
+    [dateBounds, effectiveSortKey, filters.viewMode, scopedItems],
+  );
+  const selectedSortOption = SORT_OPTIONS.find((option) => option.key === effectiveSortKey)
+    ?? SORT_OPTIONS[0];
 
-  const handleSelectModuleFilter = useCallback((value: LibraryModuleFilterValue) => {
-    setSelectedModuleFilter(value);
-  }, []);
+  const statusOptions = useMemo(() => [
+    { value: 'all' as const, label: '全部', count: statusCounts.all },
+    { value: 'collected' as const, label: '待整理', count: statusCounts.collected },
+    { value: 'active' as const, label: '待复做', count: statusCounts.active },
+    { value: 'mastered' as const, label: '已七刷', count: statusCounts.mastered },
+  ], [statusCounts]);
+  const quickOptions = useMemo(() => [
+    {
+      value: 'today' as const,
+      label: '今日应做',
+      icon: 'event-available' as ComponentProps<typeof MaterialIcons>['name'],
+      count: quickCounts.today,
+    },
+    {
+      value: 'overdue' as const,
+      label: '已逾期',
+      icon: 'history' as ComponentProps<typeof MaterialIcons>['name'],
+      count: quickCounts.overdue,
+      tone: 'danger' as const,
+    },
+    {
+      value: 'recentViewed' as const,
+      label: '最近访问',
+      icon: 'visibility' as ComponentProps<typeof MaterialIcons>['name'],
+    },
+    {
+      value: 'recentAdded' as const,
+      label: '最近增加',
+      icon: 'more-time' as ComponentProps<typeof MaterialIcons>['name'],
+    },
+  ], [quickCounts]);
 
-  const handleToggleTagFilter = useCallback((value: string) => {
-    const normalized = normalizeMistakeTagKey(value);
-    if (!normalized) {
-      return;
+  const filteredTagOptions = useMemo(() => {
+    const keyword = normalizeMistakeTagKey(tagSearchText);
+    if (!keyword) {
+      return tagOptions;
     }
+    const allOption = tagOptions[0];
+    return [
+      allOption,
+      ...tagOptions.slice(1).filter((option) => (
+        normalizeMistakeTagKey(option.label).includes(keyword)
+      )),
+    ];
+  }, [tagOptions, tagSearchText]);
+  const tagPreviewCount = useMemo(() => {
+    const previewItems = filterByModuleAndTag(items, filters.module, draftTag);
+    return previewItems.filter((item) => matchesViewMode(item, filters.viewMode, dateBounds)).length;
+  }, [dateBounds, draftTag, filters.module, filters.viewMode, items]);
 
-    setSelectedTagFilters((currentValues) =>
-      currentValues.includes(normalized)
-        ? currentValues.filter((tagKey) => tagKey !== normalized)
-        : [...currentValues, normalized],
+  const hasResettableState = (
+    searchText.trim().length > 0
+    || filters.keyword.length > 0
+    || filters.module !== null
+    || filters.tag !== null
+    || filters.viewMode !== 'all'
+    || filters.sortKey !== DEFAULT_FILTER_STATE.sortKey
+  );
+  const hasFilteringConstraint = (
+    filters.keyword.length > 0
+    || filters.module !== null
+    || filters.tag !== null
+    || filters.viewMode !== 'all'
+  );
+
+  const scrollToTop = useCallback((animated = true) => {
+    listRef.current?.scrollToOffset({ animated, offset: 0 });
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setSearchText('');
+    setFilters(DEFAULT_FILTER_STATE);
+    setDraftModule(null);
+    setDraftTag(null);
+    setTagSearchText('');
+    scrollToTop();
+  }, [scrollToTop]);
+
+  const handleOpenModuleSheet = useCallback(() => {
+    setDraftModule(filters.module);
+    setModuleSheetVisible(true);
+  }, [filters.module]);
+
+  const handleApplyModule = useCallback(() => {
+    const validTags = new Set(
+      buildTagOptions(items, draftModule).slice(1).map((option) => option.value),
     );
-  }, []);
+    setFilters((current) => ({
+      ...current,
+      module: draftModule,
+      tag: current.tag && !validTags.has(current.tag.key) ? null : current.tag,
+    }));
+    setModuleSheetVisible(false);
+    scrollToTop();
+  }, [draftModule, items, scrollToTop]);
 
-  const handleRemoveTagFilter = useCallback((value: string) => {
-    const normalized = normalizeMistakeTagKey(value);
-    setSelectedTagFilters((currentValues) => {
-      const nextValues = currentValues.filter((tagKey) => tagKey !== normalized);
-      return nextValues.length === currentValues.length ? currentValues : nextValues;
-    });
-  }, []);
+  const handleOpenTagSheet = useCallback(() => {
+    setDraftTag(filters.tag);
+    setTagSearchText('');
+    setTagSheetVisible(true);
+  }, [filters.tag]);
 
-  const handleClearTagFilters = useCallback(() => {
-    setSelectedTagFilters((currentValues) => (currentValues.length <= 0 ? currentValues : []));
-  }, []);
+  const handleApplyTag = useCallback(() => {
+    setFilters((current) => ({ ...current, tag: draftTag }));
+    setTagSheetVisible(false);
+    scrollToTop();
+  }, [draftTag, scrollToTop]);
+
+  const handleSelectStatus = useCallback((value: LibraryStatusMode) => {
+    setFilters((current) => ({ ...current, viewMode: value }));
+    scrollToTop();
+  }, [scrollToTop]);
+
+  const handleSelectQuick = useCallback((value: LibraryQuickMode) => {
+    setFilters((current) => ({
+      ...current,
+      viewMode: current.viewMode === value ? 'all' : value,
+    }));
+    scrollToTop();
+  }, [scrollToTop]);
+
+  const handleSelectSort = useCallback((sortKey: LibrarySortKey) => {
+    setFilters((current) => ({
+      ...current,
+      sortKey,
+      viewMode: isQuickMode(current.viewMode) ? 'all' : current.viewMode,
+    }));
+    setSortSheetVisible(false);
+    scrollToTop();
+  }, [scrollToTop]);
 
   const handleRetry = useCallback(() => {
-    const filter = buildLibraryListFilter(
-      selectedFilter,
-      debouncedKeyword,
-      selectedModuleFilter,
-      selectedTagFilters,
-    );
-    const moduleOptionsFilter = buildLibraryListFilter(
-      selectedFilter,
-      debouncedKeyword,
-      null,
-      selectedTagFilters,
-    );
-    const tagOptionsFilter = buildLibraryListFilter(
-      selectedFilter,
-      debouncedKeyword,
-      selectedModuleFilter,
-      [],
-    );
-    void loadModuleFilterOptions(moduleOptionsFilter);
-    void loadTagFilterOptions(tagOptionsFilter);
-    void loadList(filter, 'refresh');
-  }, [
-    debouncedKeyword,
-    loadList,
-    loadModuleFilterOptions,
-    loadTagFilterOptions,
-    selectedFilter,
-    selectedModuleFilter,
-    selectedTagFilters,
-  ]);
+    void loadItems(filters.keyword, 'refresh');
+  }, [filters.keyword, loadItems]);
 
-  const handleGoAddMistake = useCallback(() => {
-    router.push('/add' as never);
-  }, [router]);
+  const handleOpenDetail = useCallback((id: string) => {
+    if (deletingMistakeId !== null) {
+      return;
+    }
+    const routeId = normalizeMistakeId(id);
+    if (!routeId) {
+      Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
+      return;
+    }
+    const viewedAt = new Date().toISOString();
+    setItems((current) => current.map((item) => (
+      item.id === routeId ? { ...item, lastViewedAt: viewedAt } : item
+    )));
+    void MistakeListService.markMistakeViewed(routeId);
+    router.push(`/mistake/${routeId}` as never);
+  }, [deletingMistakeId, router]);
 
-  const handleOpenDetail = useCallback(
-    (id: string) => {
-      if (deletingMistakeId !== null) {
+  const handleTogglePinned = useCallback(async (item: MistakeListItem) => {
+    if (deletingMistakeId || pinningMistakeId || isLoading || isRefreshing) {
+      return;
+    }
+    const mistakeId = normalizeMistakeId(item.id);
+    if (!mistakeId) {
+      return;
+    }
+    setPinningMistakeId(mistakeId);
+    try {
+      const updated = await MistakeListService.setMistakePinned(mistakeId, !item.isPinned);
+      if (!mountedRef.current) {
         return;
       }
-
-      const routeId = normalizeMistakeId(id);
-      if (!routeId) {
-        Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
+      if (!updated) {
+        Alert.alert('操作失败', '没有找到这道错题，请刷新后重试。');
         return;
       }
-      const viewedAt = new Date().toISOString();
-      setItems((currentItems) =>
-        currentItems.map((currentItem) =>
-          currentItem.id === routeId ? { ...currentItem, lastViewedAt: viewedAt } : currentItem,
-        ),
-      );
-      void MistakeListService.markMistakeViewed(routeId);
-      router.push(`/mistake/${routeId}` as never);
-    },
-    [deletingMistakeId, router]
-  );
-
-  const handleTogglePinned = useCallback(
-    async (item: MistakeListItem) => {
-      if (deletingMistakeId !== null || pinningMistakeId !== null || isLoading || isRefreshing) {
-        return;
-      }
-
-      const mistakeId = normalizeMistakeId(item.id);
-      if (!mistakeId) {
-        Logger.warn(PAGE_SCOPE, 'Skip pinning because mistake id is empty.', { id: item.id });
-        return;
-      }
-
-      const nextPinned = !item.isPinned;
-      setPinningMistakeId(mistakeId);
-      try {
-        const updated = await MistakeListService.setMistakePinned(mistakeId, nextPinned);
-        if (!updated) {
-          Alert.alert('操作失败', '没有找到这道错题，请刷新后重试。');
-          return;
-        }
-        setItems((currentItems) =>
-          currentItems.map((currentItem) =>
-            currentItem.id === mistakeId ? { ...currentItem, ...updated } : currentItem,
-          ),
-        );
-      } catch (error) {
-        Logger.error(PAGE_SCOPE, 'Failed to toggle pinned state from library.', {
-          mistakeId,
-          nextPinned,
-          error,
-        });
-        Alert.alert('操作失败', error instanceof Error ? error.message : '置顶状态保存失败，请稍后重试。');
-      } finally {
+      setItems((current) => current.map((currentItem) => (
+        currentItem.id === mistakeId ? { ...currentItem, ...updated } : currentItem
+      )));
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to toggle pinned state.', { mistakeId, error });
+      Alert.alert('操作失败', error instanceof Error ? error.message : '置顶状态保存失败。');
+    } finally {
+      if (mountedRef.current) {
         setPinningMistakeId(null);
       }
-    },
-    [deletingMistakeId, isLoading, isRefreshing, pinningMistakeId],
-  );
+    }
+  }, [deletingMistakeId, isLoading, isRefreshing, pinningMistakeId]);
 
-  const handleJoinReviewPlan = useCallback(
-    (item: MistakeListItem) => {
-      if (deletingMistakeId !== null || joiningReviewPlanMistakeId !== null || isLoading || isRefreshing) {
-        return;
-      }
-
-      const mistakeId = normalizeMistakeId(item.id);
-      if (!mistakeId) {
-        Logger.warn(PAGE_SCOPE, 'Skip joining review plan because mistake id is empty.', { id: item.id });
-        return;
-      }
-
-      setJoiningReviewPlanMistakeId(mistakeId);
-      void (async () => {
-        try {
-          const result = await MistakeDetailService.joinMistakeReviewPlan(mistakeId);
-          if (!result.ok) {
-            Alert.alert('加入失败', result.errorMessage ?? '加入七刷失败，请稍后重试。');
-            return;
-          }
-
-          showToast('已加入七刷，今天可复做', 'success');
-          const listFilter = buildLibraryListFilter(
-            selectedFilter,
-            debouncedKeyword,
-            selectedModuleFilter,
-            selectedTagFilters,
-          );
-          const moduleOptionsFilter = buildLibraryListFilter(
-            selectedFilter,
-            debouncedKeyword,
-            null,
-            selectedTagFilters,
-          );
-          const tagOptionsFilter = buildLibraryListFilter(
-            selectedFilter,
-            debouncedKeyword,
-            selectedModuleFilter,
-            [],
-          );
-          void loadList(listFilter, 'filter');
-          void loadModuleFilterOptions(moduleOptionsFilter);
-          void loadTagFilterOptions(tagOptionsFilter);
-        } catch (error) {
-          Logger.error(PAGE_SCOPE, 'Failed to join review plan from library.', {
-            mistakeId,
-            error,
-          });
-          Alert.alert('加入失败', error instanceof Error ? error.message : '加入七刷失败，请稍后重试。');
-        } finally {
+  const handleJoinReviewPlan = useCallback((item: MistakeListItem) => {
+    if (deletingMistakeId || joiningReviewPlanMistakeId || isLoading || isRefreshing) {
+      return;
+    }
+    const mistakeId = normalizeMistakeId(item.id);
+    if (!mistakeId) {
+      return;
+    }
+    setJoiningReviewPlanMistakeId(mistakeId);
+    void (async () => {
+      try {
+        const result = await MistakeDetailService.joinMistakeReviewPlan(mistakeId);
+        if (!mountedRef.current) {
+          return;
+        }
+        if (!result.ok) {
+          Alert.alert('加入失败', result.errorMessage ?? '加入七刷失败，请稍后重试。');
+          return;
+        }
+        showToast('已加入七刷，今天可复做', 'success');
+        await loadItems(filters.keyword, 'filter');
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to join review plan.', { mistakeId, error });
+        Alert.alert('加入失败', error instanceof Error ? error.message : '加入七刷失败。');
+      } finally {
+        if (mountedRef.current) {
           setJoiningReviewPlanMistakeId(null);
         }
-      })();
-    },
-    [
-      debouncedKeyword,
-      deletingMistakeId,
-      isLoading,
-      isRefreshing,
-      joiningReviewPlanMistakeId,
-      loadList,
-      loadModuleFilterOptions,
-      loadTagFilterOptions,
-      selectedFilter,
-      selectedModuleFilter,
-      selectedTagFilters,
-      showToast,
-    ],
-  );
-
-  const handleLongPressDelete = useCallback(
-    (item: MistakeListItem) => {
-      if (deletingMistakeId !== null || isLoading || isRefreshing) {
-        return;
       }
+    })();
+  }, [
+    deletingMistakeId,
+    filters.keyword,
+    isLoading,
+    isRefreshing,
+    joiningReviewPlanMistakeId,
+    loadItems,
+    showToast,
+  ]);
 
-      const mistakeId = normalizeMistakeId(item.id);
-      if (!mistakeId) {
-        Logger.warn(PAGE_SCOPE, 'Skip deleting because mistake id is empty.', { id: item.id });
-        return;
-      }
-
-      const title = item.title.trim();
-      const titlePreview = title.length > 18 ? `${title.slice(0, 18)}...` : title;
-
-      Alert.alert(
-        '删除这道错题？',
-        `将删除「${titlePreview}」及其复做记录、图片和语音讲解，删除后无法恢复。`,
-        [
-          {
-            text: '取消',
-            style: 'cancel',
-          },
-          {
-            text: '确认删除',
-            style: 'destructive',
-            onPress: () => {
-              void (async () => {
-                setDeletingMistakeId(mistakeId);
-                try {
-                  const result = await MistakeDetailService.deleteMistake(mistakeId);
-                  if (!result.ok) {
-                    Alert.alert('删除失败', result.errorMessage ?? '删除错题失败，请稍后重试。');
-                    return;
-                  }
-
-                  setItems((currentItems) =>
-                    currentItems.filter((currentItem) => currentItem.id !== mistakeId),
-                  );
-                } catch (error) {
-                  Logger.error(PAGE_SCOPE, 'Failed to delete mistake from library.', {
-                    mistakeId,
-                    error,
-                  });
-                  Alert.alert(
-                    '删除失败',
-                    error instanceof Error ? error.message : '删除错题失败，请稍后重试。',
-                  );
-                } finally {
+  const handleDelete = useCallback((item: MistakeListItem) => {
+    if (deletingMistakeId || isLoading || isRefreshing) {
+      return;
+    }
+    const mistakeId = normalizeMistakeId(item.id);
+    if (!mistakeId) {
+      return;
+    }
+    const title = item.title.trim();
+    const titlePreview = title.length > 18 ? `${title.slice(0, 18)}…` : title;
+    Alert.alert(
+      '删除这道错题？',
+      `将删除「${titlePreview}」及其复做记录、图片和语音讲解，删除后无法恢复。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '确认删除',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setDeletingMistakeId(mistakeId);
+              try {
+                const result = await MistakeDetailService.deleteMistake(mistakeId);
+                if (!mountedRef.current) {
+                  return;
+                }
+                if (!result.ok) {
+                  Alert.alert('删除失败', result.errorMessage ?? '删除错题失败，请稍后重试。');
+                  return;
+                }
+                setItems((current) => current.filter((currentItem) => currentItem.id !== mistakeId));
+              } catch (error) {
+                Logger.error(PAGE_SCOPE, 'Failed to delete mistake.', { mistakeId, error });
+                Alert.alert('删除失败', error instanceof Error ? error.message : '删除错题失败。');
+              } finally {
+                if (mountedRef.current) {
                   setDeletingMistakeId(null);
                 }
-              })();
-            },
+              }
+            })();
           },
-        ],
-      );
-    },
-    [deletingMistakeId, isLoading, isRefreshing],
-  );
+        },
+      ],
+    );
+  }, [deletingMistakeId, isLoading, isRefreshing]);
 
-  const handleOpenMistakeMenu = useCallback(
-    (item: MistakeListItem) => {
-      if (
-        deletingMistakeId !== null
-        || joiningReviewPlanMistakeId !== null
-        || pinningMistakeId !== null
-        || isLoading
-        || isRefreshing
-      ) {
-        return;
-      }
+  const handleOpenMistakeMenu = useCallback((item: MistakeListItem) => {
+    if (
+      deletingMistakeId
+      || joiningReviewPlanMistakeId
+      || pinningMistakeId
+      || isLoading
+      || isRefreshing
+    ) {
+      return;
+    }
+    Alert.alert('题目操作', item.title, [
+      ...(item.status === 'collected'
+        ? [{ text: '加入七刷', onPress: () => handleJoinReviewPlan(item) }]
+        : []),
+      { text: item.isPinned ? '取消置顶' : '置顶题目', onPress: () => void handleTogglePinned(item) },
+      { text: '删除题目', style: 'destructive' as const, onPress: () => handleDelete(item) },
+      { text: '取消', style: 'cancel' as const },
+    ]);
+  }, [
+    deletingMistakeId,
+    handleDelete,
+    handleJoinReviewPlan,
+    handleTogglePinned,
+    isLoading,
+    isRefreshing,
+    joiningReviewPlanMistakeId,
+    pinningMistakeId,
+  ]);
 
-      Alert.alert(
-        '题目操作',
-        item.title,
-        [
-          ...(item.status === 'collected'
-            ? [
-                {
-                  text: '加入七刷',
-                  onPress: () => {
-                    handleJoinReviewPlan(item);
-                  },
-                },
-              ]
-            : []),
-          {
-            text: item.isPinned ? '取消置顶' : '置顶题目',
-            onPress: () => {
-              void handleTogglePinned(item);
-            },
-          },
-          {
-            text: '删除题目',
-            style: 'destructive',
-            onPress: () => handleLongPressDelete(item),
-          },
-          {
-            text: '取消',
-            style: 'cancel',
-          },
-        ],
-      );
-    },
-    [
-      deletingMistakeId,
-      handleJoinReviewPlan,
-      handleLongPressDelete,
-      handleTogglePinned,
-      isLoading,
-      isRefreshing,
-      joiningReviewPlanMistakeId,
-      pinningMistakeId,
-    ],
-  );
-
-  const handleSelectQuickView = useCallback(
-    (quickViewId: LibraryQuickViewId) => {
-      setActiveQuickViewId((current) => {
-        const currentIsRecentQuickView = isRecentQuickView(current);
-        const nextIsRecentQuickView = isRecentQuickView(quickViewId);
-
-        if (current === quickViewId) {
-          if (currentIsRecentQuickView && quickViewSortWasAppliedRef.current) {
-            setSortKey(sortBeforeRecentQuickViewRef.current);
-          }
-          quickViewSortWasAppliedRef.current = false;
-          return null;
+  const handleOpenCustomModuleManager = useCallback(() => {
+    setModuleSheetVisible(false);
+    setCustomModuleModalVisible(true);
+    setCustomModuleBusy(true);
+    setCustomModuleMessage(null);
+    void CustomModuleService.listCustomModules()
+      .then((modules) => {
+        if (mountedRef.current) {
+          setCustomModules(modules);
         }
-
-        if (nextIsRecentQuickView) {
-          if (!currentIsRecentQuickView) {
-            sortBeforeRecentQuickViewRef.current = sortKey;
-          }
-          setSortKey(getDefaultSortKeyForRecentQuickView(quickViewId));
-          quickViewSortWasAppliedRef.current = true;
-        } else if (currentIsRecentQuickView && quickViewSortWasAppliedRef.current) {
-          setSortKey(sortBeforeRecentQuickViewRef.current);
-          quickViewSortWasAppliedRef.current = false;
+      })
+      .catch((error) => {
+        Logger.error(PAGE_SCOPE, 'Failed to load custom modules.', error);
+        if (mountedRef.current) {
+          setCustomModuleMessage('自定义模块加载失败');
         }
-
-        return quickViewId;
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setCustomModuleBusy(false);
+        }
       });
-    },
-    [sortKey],
-  );
-
-  const handleSelectSort = useCallback((nextSortKey: LibrarySortKey) => {
-    setSortKey(nextSortKey);
-    setSortSheetVisible(false);
-    quickViewSortWasAppliedRef.current = false;
   }, []);
 
-  const handleToggleSection = useCallback((sectionId: LibrarySectionId) => {
-    setCollapsedSectionIds((current) => ({
-      ...current,
-      [sectionId]: !(current[sectionId] ?? (sectionId === 'future7' || sectionId === 'later' || sectionId === 'noPlan')),
-    }));
-  }, []);
-
-  const handleClearQuickView = useCallback(() => {
-    setActiveQuickViewId((current) => {
-      if (isRecentQuickView(current) && quickViewSortWasAppliedRef.current) {
-        setSortKey(sortBeforeRecentQuickViewRef.current);
+  const handleCreateCustomModule = useCallback(async (moduleName: string): Promise<boolean> => {
+    if (customModuleBusy) {
+      return false;
+    }
+    setCustomModuleBusy(true);
+    setCustomModuleMessage(null);
+    try {
+      const result = await CustomModuleService.createCustomModule(moduleName);
+      if (!mountedRef.current) {
+        return false;
       }
-      quickViewSortWasAppliedRef.current = false;
-      return null;
-    });
-  }, []);
-
-  const handleShowMoreResults = useCallback(() => {
-    setVisibleItemLimit((currentLimit) => currentLimit + VISIBLE_MISTAKE_INCREMENT);
-  }, []);
-
-  const inlineModuleFilterOptions = useMemo<LibraryModuleFilterOption[]>(() => {
-    if (moduleFilterOptions.length <= INLINE_MODULE_FILTER_OPTION_LIMIT) {
-      return moduleFilterOptions;
-    }
-
-    const selectedOption =
-      moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
-    const inlineOptions: LibraryModuleFilterOption[] = [];
-    const addOption = (option: LibraryModuleFilterOption | null | undefined) => {
-      if (!option || inlineOptions.some((item) => item.key === option.key)) {
-        return;
+      if (!result.ok) {
+        const message = result.errorMessage ?? '创建自定义模块失败';
+        setCustomModuleMessage(message);
+        showToast(message, 'warning');
+        return false;
       }
-      if (inlineOptions.length < INLINE_MODULE_FILTER_OPTION_LIMIT) {
-        inlineOptions.push(option);
+      if (result.modules) {
+        setCustomModules(result.modules);
       }
-    };
-
-    addOption(moduleFilterOptions[0]);
-    addOption(selectedOption);
-    for (const option of moduleFilterOptions.slice(1)) {
-      addOption(option);
-    }
-
-    return inlineOptions;
-  }, [moduleFilterOptions, selectedModuleFilter]);
-
-  const selectedTagFilterOptions = useMemo<LibraryTagFilterOption[]>(() => {
-    const optionByValue = new Map(tagFilterOptions.map((option) => [option.value, option]));
-
-    return selectedTagFilters.map((value) => {
-      const option = optionByValue.get(value);
-      if (option) {
-        return option;
+      showToast('已添加自定义模块', 'success');
+      return true;
+    } finally {
+      if (mountedRef.current) {
+        setCustomModuleBusy(false);
       }
-
-      return {
-        key: `tag:selected:${value}`,
-        value,
-        label: value,
-        count: 0,
-      };
-    });
-  }, [selectedTagFilters, tagFilterOptions]);
-
-  const inlineTagFilterOptions = useMemo<LibraryTagFilterOption[]>(() => {
-    if (tagFilterOptions.length <= INLINE_TAG_FILTER_OPTION_LIMIT) {
-      return tagFilterOptions;
     }
+  }, [customModuleBusy, showToast]);
 
-    const inlineOptions: LibraryTagFilterOption[] = [];
-    const addOption = (option: LibraryTagFilterOption | null | undefined) => {
-      if (!option || inlineOptions.some((item) => item.value === option.value)) {
-        return;
+  const handleUpdateCustomModule = useCallback(async (
+    moduleId: string,
+    moduleName: string,
+  ): Promise<boolean> => {
+    if (customModuleBusy) {
+      return false;
+    }
+    setCustomModuleBusy(true);
+    setCustomModuleMessage(null);
+    try {
+      const result = await CustomModuleService.updateCustomModuleName(moduleId, moduleName);
+      if (!mountedRef.current) {
+        return false;
       }
-      if (inlineOptions.length < INLINE_TAG_FILTER_OPTION_LIMIT) {
-        inlineOptions.push(option);
+      if (!result.ok) {
+        const message = result.errorMessage ?? '编辑自定义模块失败';
+        setCustomModuleMessage(message);
+        showToast(message, 'warning');
+        return false;
       }
-    };
-
-    selectedTagFilterOptions.forEach(addOption);
-    for (const option of tagFilterOptions) {
-      addOption(option);
-    }
-
-    return inlineOptions;
-  }, [selectedTagFilterOptions, tagFilterOptions]);
-
-  const shouldShowModuleFilterMore = moduleFilterOptions.length > inlineModuleFilterOptions.length;
-  const shouldShowTagFilterMore = tagFilterOptions.length > inlineTagFilterOptions.length;
-  const selectedTagFilterCount = selectedTagFilters.length;
-  const selectedModuleFilterOption =
-    moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
-  const moduleFilterHintText = moduleFilterErrorMessage
-    ? `模块统计失败：${moduleFilterErrorMessage}`
-    : formatLibraryModuleFilterHint(selectedModuleFilterOption, selectedModuleFilter);
-  const dateBounds = useMemo(() => buildLibraryDateBounds(), []);
-  const quickViewCounts = useMemo(
-    () => getQuickViewCounts(items, dateBounds),
-    [dateBounds, items],
-  );
-  const quickFilteredItems = useMemo(
-    () => filterMistakesByQuickView(items, activeQuickViewId, dateBounds),
-    [activeQuickViewId, dateBounds, items],
-  );
-  const sortedItems = useMemo(
-    () => sortMistakes(quickFilteredItems, sortKey, dateBounds, selectedFilter, activeQuickViewId),
-    [activeQuickViewId, dateBounds, quickFilteredItems, selectedFilter, sortKey],
-  );
-  const groupedSections = useMemo(
-    () => groupMistakesByReviewDate(sortedItems, selectedFilter, dateBounds, activeQuickViewId),
-    [activeQuickViewId, dateBounds, selectedFilter, sortedItems],
-  );
-  const collapsedAwareSections = useMemo(
-    () =>
-      groupedSections.map((section) => {
-        const collapsed = collapsedSectionIds[section.id] ?? section.defaultCollapsed;
-        return collapsed ? { ...section, data: [] } : section;
-      }),
-    [collapsedSectionIds, groupedSections],
-  );
-  const visibleSections = useMemo(
-    () => limitLibrarySectionData(collapsedAwareSections, visibleItemLimit),
-    [collapsedAwareSections, visibleItemLimit],
-  );
-  const currentResultCount = sortedItems.length;
-  const visibleCardCount = visibleSections.reduce((sum, section) => sum + section.data.length, 0);
-  const expandedResultLimit = Math.min(currentResultCount, visibleItemLimit);
-  const hasMoreVisibleResults = currentResultCount > visibleItemLimit;
-  const resultCountText =
-    currentResultCount > expandedResultLimit
-      ? `当前匹配 ${currentResultCount} 题 · 已展开 ${expandedResultLimit}`
-      : `当前匹配 ${currentResultCount} 题`;
-  const selectedSortOption = SORT_OPTIONS.find((option) => option.key === sortKey) ?? SORT_OPTIONS[0];
-
-  const emptyConfig = useMemo(() => {
-    if (activeQuickViewId) {
-      if (activeQuickViewId === 'overdue') {
-        return {
-          message: '暂无已逾期题目\n你已经按计划完成了所有复做',
-          showAddButton: false,
-          showClearQuickViewButton: true,
-        };
+      if (result.modules) {
+        setCustomModules(result.modules);
       }
-
-      if (activeQuickViewId === 'pinned') {
-        return {
-          message: '还没有置顶题目\n可以在题目右上角菜单中选择“置顶”',
-          showAddButton: false,
-          showClearQuickViewButton: true,
-        };
+      showToast('自定义模块已更新', 'success');
+      return true;
+    } finally {
+      if (mountedRef.current) {
+        setCustomModuleBusy(false);
       }
-
-      if (activeQuickViewId === 'recentViewed') {
-        return {
-          message: '暂无最近访问题目\n打开题目详情后会记录最近访问',
-          showAddButton: false,
-          showClearQuickViewButton: true,
-        };
-      }
-
-      const activeOption = QUICK_VIEW_OPTIONS.find((option) => option.id === activeQuickViewId);
-      return {
-        message: `暂无${activeOption?.label ?? '相关'}题目`,
-        showAddButton: false,
-        showClearQuickViewButton: true,
-      };
     }
+  }, [customModuleBusy, showToast]);
 
-    if (debouncedKeyword.length > 0) {
-      return {
-        message: '没有找到相关错题',
-        showAddButton: false,
-      };
+  const handleDeleteCustomModule = useCallback((moduleItem: CustomModule) => {
+    if (customModuleBusy) {
+      return;
     }
+    Alert.alert('删除模块', `确认删除“${moduleItem.name}”？已保存错题不会被删除。`, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '删除',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setCustomModuleBusy(true);
+            setCustomModuleMessage(null);
+            try {
+              const result = await CustomModuleService.deleteCustomModule(moduleItem.id);
+              if (!mountedRef.current) {
+                return;
+              }
+              if (!result.ok) {
+                const message = result.errorMessage ?? '删除自定义模块失败';
+                setCustomModuleMessage(message);
+                showToast(message, 'error');
+                return;
+              }
+              if (result.modules) {
+                setCustomModules(result.modules);
+              }
+              showToast('自定义模块已删除', 'info');
+            } finally {
+              if (mountedRef.current) {
+                setCustomModuleBusy(false);
+              }
+            }
+          })();
+        },
+      },
+    ]);
+  }, [customModuleBusy, showToast]);
 
-    if (selectedTagFilterCount > 0) {
-      return {
-        message: '\u5f53\u524d\u6807\u7b7e\u4e0b\u6ca1\u6709\u9519\u9898',
-        showAddButton: false,
-      };
+  const handleMoveCustomModule = useCallback((moduleId: string, direction: 'up' | 'down') => {
+    if (customModuleBusy) {
+      return;
     }
+    setCustomModuleBusy(true);
+    setCustomModuleMessage(null);
+    void CustomModuleService.moveCustomModule(moduleId, direction)
+      .then((result) => {
+        if (!mountedRef.current) {
+          return;
+        }
+        if (!result.ok) {
+          const message = result.errorMessage ?? '调整模块排序失败';
+          setCustomModuleMessage(message);
+          showToast(message, 'warning');
+          return;
+        }
+        if (result.modules) {
+          setCustomModules(result.modules);
+        }
+      })
+      .finally(() => {
+        if (mountedRef.current) {
+          setCustomModuleBusy(false);
+        }
+      });
+  }, [customModuleBusy, showToast]);
 
-    if (selectedModuleFilter !== null) {
-      return {
-        message: `“${selectedModuleFilter}”模块暂无符合条件的错题`,
-        showAddButton: false,
-      };
-    }
-
-    if (selectedFilter === 'pending') {
-      return {
-        message: '今天没有待复做错题',
-        showAddButton: true,
-      };
-    }
-
-    if (selectedFilter === 'collected') {
-      return {
-        message: '还没有待整理题目',
-        showAddButton: true,
-      };
-    }
-
-    if (selectedFilter === 'mastered') {
-      return {
-        message: '还没有完成七刷的错题',
-        showAddButton: true,
-      };
-    }
-
-    return {
-      message: '暂无错题，去新增页录入第一题',
-      showAddButton: true,
-    };
-  }, [activeQuickViewId, debouncedKeyword.length, selectedFilter, selectedModuleFilter, selectedTagFilterCount]);
-
-  const listEmpty = useMemo(() => {
+  const renderEmptyState = () => {
     if (isLoading) {
       return (
         <View style={styles.stateWrap}>
-          <ActivityIndicator size="small" color={colors.textPrimary} />
-          <Text style={styles.stateText}>正在加载错题...</Text>
+          <ActivityIndicator color={colors.textPrimary} size="small" />
+          <Text style={styles.stateText}>正在加载错题…</Text>
         </View>
       );
     }
-
     if (errorMessage) {
       return (
         <View style={styles.stateWrap}>
-          <Text style={styles.stateErrorText}>数据读取失败：{errorMessage}</Text>
-          <Pressable onPress={handleRetry} style={styles.retryButton}>
-            <Text style={styles.retryText}>重试</Text>
+          <MaterialIcons name="error-outline" size={30} color={colors.danger} />
+          <Text style={styles.stateTitle}>错题读取失败</Text>
+          <Text style={styles.stateText}>{errorMessage}</Text>
+          <Pressable onPress={handleRetry} style={styles.secondaryStateButton}>
+            <Text style={styles.secondaryStateButtonText}>重新加载</Text>
           </Pressable>
         </View>
       );
     }
-
+    if (hasFilteringConstraint) {
+      return (
+        <View style={styles.stateWrap}>
+          <MaterialIcons name="search-off" size={32} color={colors.textMuted} />
+          <Text style={styles.stateTitle}>没有找到符合条件的错题</Text>
+          <Text style={styles.stateText}>可以调整搜索词，或清除当前筛选后再试。</Text>
+          <Pressable onPress={handleReset} style={styles.secondaryStateButton}>
+            <Text style={styles.secondaryStateButtonText}>清除筛选</Text>
+          </Pressable>
+        </View>
+      );
+    }
     return (
       <View style={styles.stateWrap}>
-        <Text style={styles.stateText}>{emptyConfig.message}</Text>
-        {emptyConfig.showAddButton ? (
-          <Pressable onPress={handleGoAddMistake} style={styles.goAddButton}>
-            <Text style={styles.goAddButtonText}>去新增错题</Text>
-          </Pressable>
-        ) : null}
-        {emptyConfig.showClearQuickViewButton ? (
-          <Pressable onPress={handleClearQuickView} style={styles.goAddButton}>
-            <Text style={styles.goAddButtonText}>查看全部题目</Text>
-          </Pressable>
-        ) : null}
-      </View>
-    );
-  }, [emptyConfig, errorMessage, handleClearQuickView, handleGoAddMistake, handleRetry, isLoading]);
-
-  const listFooter = useMemo(() => {
-    if (isLoading || currentResultCount <= 0 || !hasMoreVisibleResults) {
-      return null;
-    }
-
-    return (
-      <View style={styles.listFooter}>
-        <Text style={styles.listFooterHint}>
-          已显示 {visibleCardCount} 题，优先用上方搜索和筛选缩小范围
-        </Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="继续显示更多错题"
-          onPress={handleShowMoreResults}
-          style={({ pressed }) => [
-            styles.showMoreButton,
-            pressed ? styles.moduleFilterChipPressed : null,
-          ]}>
-          <Text style={styles.showMoreButtonText}>
-            继续显示更多
-          </Text>
-          <MaterialIcons name="expand-more" size={20} color={colors.success} />
+        <MaterialIcons name="library-books" size={32} color={colors.textMuted} />
+        <Text style={styles.stateTitle}>还没有错题</Text>
+        <Text style={styles.stateText}>去新增页记录第一道错题吧。</Text>
+        <Pressable onPress={() => router.push('/add' as never)} style={styles.secondaryStateButton}>
+          <Text style={styles.secondaryStateButtonText}>新增错题</Text>
         </Pressable>
       </View>
     );
-  }, [
-    currentResultCount,
-    handleShowMoreResults,
-    hasMoreVisibleResults,
-    isLoading,
-    visibleCardCount,
-  ]);
+  };
 
-  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
-  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
-  const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
+  const listHeader = (
+    <View style={styles.headerContent}>
+      <BrandHeader
+        offlineBadgeStyle={styles.offlineBadge}
+        subtitle="只记录错题、做法、答案和 7 次复做"
+        title="错题库"
+      />
+
+      <View style={styles.searchBox}>
+        <MaterialIcons name="search" size={23} color={colors.textMuted} />
+        <TextInput
+          accessibilityLabel="搜索题目、模块或标签"
+          maxFontSizeMultiplier={1.2}
+          onChangeText={setSearchText}
+          placeholder="搜索题目、模块或标签"
+          placeholderTextColor={colors.textMuted}
+          returnKeyType="search"
+          style={styles.searchInput}
+          value={searchText}
+        />
+        {searchText.length > 0 ? (
+          <Pressable
+            accessibilityLabel="清空搜索"
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={() => {
+              setSearchText('');
+              setFilters((current) => ({ ...current, keyword: '' }));
+            }}
+            style={({ pressed }) => [styles.clearSearchButton, pressed ? styles.iconButtonPressed : null]}>
+            <MaterialIcons name="cancel" size={19} color={colors.textMuted} />
+          </Pressable>
+        ) : null}
+      </View>
+
+      <View style={styles.filterRow}>
+        <Pressable
+          accessibilityLabel={`模块筛选，当前${filters.module ?? '全部'}`}
+          accessibilityRole="button"
+          onPress={handleOpenModuleSheet}
+          style={({ pressed }) => [styles.filterButton, pressed ? styles.filterButtonPressed : null]}>
+          <Text style={styles.filterPrefix}>模块</Text>
+          <Text numberOfLines={1} style={styles.filterValue}>{filters.module ?? '全部'}</Text>
+          <MaterialIcons name="keyboard-arrow-down" size={20} color={colors.textSecondary} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel={`标签筛选，当前${filters.tag?.label ?? '全部'}`}
+          accessibilityRole="button"
+          onPress={handleOpenTagSheet}
+          style={({ pressed }) => [styles.filterButton, pressed ? styles.filterButtonPressed : null]}>
+          <Text style={styles.filterPrefix}>标签</Text>
+          <Text numberOfLines={1} style={styles.filterValue}>{filters.tag?.label ?? '全部'}</Text>
+          <MaterialIcons name="keyboard-arrow-down" size={20} color={colors.textSecondary} />
+        </Pressable>
+        <Pressable
+          accessibilityLabel="重置错题库筛选"
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !hasResettableState }}
+          disabled={!hasResettableState}
+          onPress={handleReset}
+          style={({ pressed }) => [styles.resetButton, pressed ? styles.filterButtonPressed : null]}>
+          <Text style={[styles.resetText, !hasResettableState ? styles.resetTextDisabled : null]}>重置</Text>
+        </Pressable>
+      </View>
+
+      <LibrarySegmentedControl
+        onChange={handleSelectStatus}
+        options={statusOptions}
+        value={isStatusMode(filters.viewMode) ? filters.viewMode : null}
+      />
+
+      <View style={styles.quickSection}>
+        <Text style={styles.sectionLabel}>快捷查看</Text>
+        <LibraryQuickView
+          onChange={handleSelectQuick}
+          options={quickOptions}
+          value={isQuickMode(filters.viewMode) ? filters.viewMode : null}
+        />
+      </View>
+
+      <View style={styles.resultsHeader}>
+        <View style={styles.resultCountWrap}>
+          <Text style={styles.resultCount}>{resultItems.length} 道错题</Text>
+          {isFiltering ? <ActivityIndicator color={colors.textMuted} size="small" /> : null}
+        </View>
+        <Pressable
+          accessibilityLabel={`当前排序，${selectedSortOption.label}`}
+          accessibilityRole="button"
+          onPress={() => setSortSheetVisible(true)}
+          style={({ pressed }) => [styles.sortButton, pressed ? styles.filterButtonPressed : null]}>
+          <Text numberOfLines={1} style={styles.sortButtonText}>{selectedSortOption.label}</Text>
+          <MaterialIcons name="keyboard-arrow-down" size={20} color={colors.textPrimary} />
+        </Pressable>
+      </View>
+    </View>
+  );
 
   return (
     <View style={styles.pageRoot}>
-    <ScreenContainer withPadding={false} safeAreaEdges={['top']}>
-      <SectionList<MistakeListItem, LibraryListSection>
-        ref={libraryListRef}
-        sections={currentResultCount <= 0 ? [] : visibleSections}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => (
-          <MistakeLibraryCard
-            item={item}
-            isDeleting={deletingMistakeId === item.id}
-            onPress={() => handleOpenDetail(item.id)}
-            onLongPress={() => handleOpenMistakeMenu(item)}
-            onMorePress={() => handleOpenMistakeMenu(item)}
-          />
-        )}
-        renderSectionHeader={({ section }) => (
-          <ReviewSectionHeader
-            section={section}
-            collapsed={collapsedSectionIds[section.id] ?? section.defaultCollapsed}
-            onToggle={handleToggleSection}
-          />
-        )}
-        ItemSeparatorComponent={() => <View style={styles.listItemSeparator} />}
-        stickySectionHeadersEnabled={selectedFilter !== 'collected' && selectedFilter !== 'mastered'}
-        showsVerticalScrollIndicator={false}
-        onScroll={handleLibraryScroll}
-        scrollEventThrottle={16}
-        contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRetry}
-            tintColor={colors.textPrimary}
-            colors={[colors.textPrimary]}
-          />
-        }
-        ListHeaderComponent={
-          <View style={styles.screenContent}>
-            <BrandHeader title={libraryMock.brand.title} subtitle={libraryMock.brand.subtitle} />
+      <ScreenContainer safeAreaEdges={['top']} withPadding={false}>
+        <FlatList
+          ref={listRef}
+          contentContainerStyle={styles.listContent}
+          data={isLoading || errorMessage ? [] : resultItems}
+          ItemSeparatorComponent={() => <View style={styles.itemSeparator} />}
+          keyExtractor={(item) => item.id}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          ListEmptyComponent={renderEmptyState}
+          ListHeaderComponent={listHeader}
+          refreshControl={(
+            <RefreshControl
+              colors={[colors.textPrimary]}
+              onRefresh={handleRetry}
+              refreshing={isRefreshing}
+              tintColor={colors.textPrimary}
+            />
+          )}
+          renderItem={({ item }) => (
+            <MistakeCard
+              isDeleting={deletingMistakeId === item.id}
+              item={item}
+              onLongPress={() => handleOpenMistakeMenu(item)}
+              onMorePress={() => handleOpenMistakeMenu(item)}
+              onPress={() => handleOpenDetail(item.id)}
+            />
+          )}
+          showsVerticalScrollIndicator={false}
+        />
 
-            <View onLayout={handleAnchorNavLayout}>
-              <QuickAnchorNav
-                items={LIBRARY_ANCHOR_ITEMS}
-                activeAnchorId={activeAnchorId}
-                horizontalCompact
-                onAnchorPress={handleAnchorPress}
+        <LibraryBottomSheet
+          footer={(
+            <Pressable
+              accessibilityRole="button"
+              onPress={handleOpenCustomModuleManager}
+              style={({ pressed }) => [styles.manageModuleButton, pressed ? styles.sheetOptionPressed : null]}>
+              <MaterialIcons name="tune" size={19} color={colors.success} />
+              <Text style={styles.manageModuleText}>管理自定义模块</Text>
+            </Pressable>
+          )}
+          headerActionLabel="完成"
+          onClose={() => setModuleSheetVisible(false)}
+          onHeaderAction={handleApplyModule}
+          title="选择模块"
+          visible={moduleSheetVisible}>
+          <FlatList
+            contentContainerStyle={styles.sheetListContent}
+            data={moduleOptions}
+            keyExtractor={(option) => option.key}
+            renderItem={({ item: option }) => (
+              <OptionRow
+                count={option.count}
+                label={option.label}
+                onPress={() => setDraftModule(option.value)}
+                selected={draftModule === option.value}
               />
-            </View>
+            )}
+            style={styles.sheetList}
+          />
+        </LibraryBottomSheet>
 
-            <View
-              style={[
-                styles.searchPanel,
-                highlightedAnchorId === 'search' ? styles.anchorSectionHighlighted : null,
-              ]}
-              onLayout={(event) => handleAnchorLayout('search', event)}>
-              <View style={styles.searchWrap}>
-              <MaterialIcons size={24} name="search" color={colors.textMuted} />
+        <LibraryBottomSheet
+          footer={(
+            <Pressable
+              accessibilityLabel={`查看${tagPreviewCount}道题`}
+              accessibilityRole="button"
+              onPress={handleApplyTag}
+              style={({ pressed }) => [styles.primarySheetButton, pressed ? styles.primarySheetButtonPressed : null]}>
+              <Text style={styles.primarySheetButtonText}>查看 {tagPreviewCount} 道题</Text>
+            </Pressable>
+          )}
+          onClose={() => setTagSheetVisible(false)}
+          title="选择标签"
+          visible={tagSheetVisible}>
+          <View style={styles.tagSheetContent}>
+            <View style={styles.tagSearchBox}>
+              <MaterialIcons name="search" size={20} color={colors.textMuted} />
               <TextInput
-                value={searchText}
-                onChangeText={setSearchText}
-                  placeholder={libraryMock.searchPlaceholder}
+                accessibilityLabel="搜索标签"
+                onChangeText={setTagSearchText}
+                placeholder="搜索标签"
                 placeholderTextColor={colors.textMuted}
-                style={styles.searchInput}
-                maxFontSizeMultiplier={1.2}
-                returnKeyType="search"
-                onSubmitEditing={() => setDebouncedKeyword(searchText.trim())}
+                style={styles.tagSearchInput}
+                value={tagSearchText}
               />
-              {searchText.length > 0 ? (
+              {tagSearchText.length > 0 ? (
                 <Pressable
-                  style={styles.searchClearButton}
-                  onPress={handleClearSearch}
-                  accessibilityRole="button"
-                  accessibilityLabel="清空搜索">
-                  <MaterialIcons size={20} name="close" color={colors.textMuted} />
+                  accessibilityLabel="清空标签搜索"
+                  hitSlop={8}
+                  onPress={() => setTagSearchText('')}>
+                  <MaterialIcons name="cancel" size={18} color={colors.textMuted} />
                 </Pressable>
               ) : null}
-              </View>
-
-              {selectedTagFilterOptions.length > 0 ? (
-                <View style={styles.activeFilterRow}>
-                  {selectedTagFilterOptions.map((option) => (
-                    <Pressable
-                      key={option.key}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Remove tag filter: ${option.label}`}
-                      onPress={() => handleRemoveTagFilter(option.value)}
-                      style={({ pressed }) => [
-                        styles.activeFilterChip,
-                        pressed ? styles.moduleFilterChipPressed : null,
-                      ]}>
-                      <Text numberOfLines={1} style={styles.activeFilterChipText}>
-                        {option.label}
-                      </Text>
-                      <MaterialIcons name="close" size={14} color={colors.success} />
-                    </Pressable>
-                  ))}
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Clear tag filters"
-                    onPress={handleClearTagFilters}
-                    style={({ pressed }) => [
-                      styles.activeFilterClearButton,
-                      pressed ? styles.moduleFilterChipPressed : null,
-                    ]}>
-                    <Text style={styles.activeFilterClearText}>{'\u6e05\u7a7a'}</Text>
-                  </Pressable>
-                </View>
-              ) : null}
             </View>
-
-            <View
-              style={highlightedAnchorId === 'filters' ? styles.anchorSectionHighlighted : null}
-              onLayout={(event) => handleAnchorLayout('filters', event)}>
-            <CardContainer style={styles.moduleFilterCard} padding={spacing.md}>
-              <View style={styles.moduleFilterHeaderRow}>
-                <View style={styles.moduleFilterTitleWrap}>
-                  <MaterialIcons name="filter-list" size={20} color="#334155" />
-                  <Text style={styles.moduleFilterTitle}>模块筛选</Text>
-                </View>
-                {isModuleFilterLoading ? (
-                  <ActivityIndicator size="small" color={colors.textMuted} />
-                ) : null}
-              </View>
-              <View style={styles.moduleFilterOptions}>
-                {inlineModuleFilterOptions.map((option) => {
-                  const selected = selectedModuleFilter === option.value;
-                  return (
-                    <Pressable
-                      key={option.key}
-                      accessibilityRole="button"
-                      accessibilityLabel={formatLibraryModuleFilterAccessibilityLabel(option)}
-                      onPress={() => handleSelectModuleFilter(option.value)}
-                      style={({ pressed }) => [
-                        styles.moduleFilterChip,
-                        selected ? styles.moduleFilterChipSelected : null,
-                        pressed ? styles.moduleFilterChipPressed : null,
-                      ]}>
-                      <Text
-                        numberOfLines={1}
-                        maxFontSizeMultiplier={1.1}
-                        style={[
-                          styles.moduleFilterChipText,
-                          selected ? styles.moduleFilterChipTextSelected : null,
-                        ]}>
-                        {formatLibraryModuleFilterOptionText(option)}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-                {shouldShowModuleFilterMore ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="查看更多模块"
-                    onPress={() => setModuleFilterSheetVisible(true)}
-                    style={({ pressed }) => [
-                      styles.moduleFilterMoreButton,
-                      pressed ? styles.moduleFilterChipPressed : null,
-                    ]}>
-                    <MaterialIcons name="more-horiz" size={18} color="#334155" />
-                    <Text numberOfLines={1} style={styles.moduleFilterMoreText}>
-                      更多
-                    </Text>
-                  </Pressable>
-                ) : null}
-              </View>
-              <Text numberOfLines={1} style={styles.moduleFilterHint}>
-                {moduleFilterHintText}
-              </Text>
-              <View style={styles.filterDivider} />
-              <View style={styles.tagFilterHeaderRow}>
-                <View style={styles.tagFilterTitleWrap}>
-                  <MaterialIcons name="sell" size={20} color="#334155" />
-                  <Text style={styles.tagFilterTitle}>{'\u6807\u7b7e\u7b5b\u9009'}</Text>
-                </View>
-                {isTagFilterLoading ? (
-                  <ActivityIndicator size="small" color={colors.textMuted} />
-                ) : null}
-              </View>
-              {tagFilterErrorMessage ? (
-                <Text numberOfLines={2} style={styles.tagFilterErrorText}>
-                  {'\u6807\u7b7e\u7edf\u8ba1\u5931\u8d25\uff1a'}
-                  {tagFilterErrorMessage}
-                </Text>
-              ) : null}
-              {tagFilterOptions.length > 0 ? (
-                <View style={styles.tagFilterOptions}>
-                  {inlineTagFilterOptions.map((option) => {
-                    const selected = selectedTagFilters.includes(option.value);
-                    return (
-                      <Pressable
-                        key={option.key}
-                        accessibilityRole="button"
-                        accessibilityLabel={formatLibraryTagFilterAccessibilityLabel(option)}
-                        onPress={() => handleToggleTagFilter(option.value)}
-                        style={({ pressed }) => [
-                          styles.tagFilterChip,
-                          selected ? styles.tagFilterChipSelected : null,
-                          pressed ? styles.moduleFilterChipPressed : null,
-                        ]}>
-                        <Text
-                          numberOfLines={1}
-                          style={[
-                            styles.tagFilterChipText,
-                            selected ? styles.tagFilterChipTextSelected : null,
-                          ]}>
-                          {option.label}
-                        </Text>
-                        {selected ? (
-                          <MaterialIcons name="check" size={15} color={colors.success} />
-                        ) : null}
-                      </Pressable>
-                    );
-                  })}
-                  {shouldShowTagFilterMore ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Show more tags"
-                      onPress={() => setTagFilterSheetVisible(true)}
-                      style={({ pressed }) => [
-                        styles.tagFilterMoreButton,
-                        pressed ? styles.moduleFilterChipPressed : null,
-                      ]}>
-                      <MaterialIcons name="more-horiz" size={18} color="#334155" />
-                      <Text numberOfLines={1} style={styles.tagFilterMoreText}>
-                        {'\u66f4\u591a'}
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              ) : (
-                <Text style={styles.tagFilterEmptyText}>
-                  {isTagFilterLoading
-                    ? '\u6b63\u5728\u52a0\u8f7d\u6807\u7b7e...'
-                    : '\u6682\u65e0\u53ef\u7b5b\u9009\u6807\u7b7e'}
-                </Text>
+            <FlatList
+              contentContainerStyle={styles.tagListContent}
+              data={filteredTagOptions}
+              keyExtractor={(option) => option.key}
+              ListEmptyComponent={<Text style={styles.noTagText}>没有匹配的标签</Text>}
+              renderItem={({ item: option }) => (
+                <OptionRow
+                  count={option.count}
+                  label={option.label}
+                  onPress={() => setDraftTag(
+                    option.value === null ? null : { key: option.value, label: option.label },
+                  )}
+                  selected={draftTag?.key === option.value || (draftTag === null && option.value === null)}
+                />
               )}
-            </CardContainer>
-            </View>
-
-            <SegmentControl
-              options={libraryMock.filters}
-              value={selectedFilter}
-              onChange={(next) => setSelectedFilter(next as LibraryFilterValue)}
+              style={styles.tagList}
             />
-
-            <View
-              style={highlightedAnchorId === 'quickView' ? styles.anchorSectionHighlighted : null}
-              onLayout={(event) => handleAnchorLayout('quickView', event)}>
-              <QuickViewBar
-                activeQuickViewId={activeQuickViewId}
-                counts={quickViewCounts}
-                onSelect={handleSelectQuickView}
-              />
-            </View>
-
-            <View
-              style={[
-                styles.metaRow,
-                highlightedAnchorId === 'list' ? styles.anchorSectionHighlighted : null,
-              ]}
-              onLayout={(event) => handleAnchorLayout('list', event)}>
-              <Text style={styles.countText}>{resultCountText}</Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={`当前排序：${selectedSortOption.label}`}
-                onPress={() => setSortSheetVisible(true)}
-                style={({ pressed }) => [
-                  styles.sortButton,
-                  pressed ? styles.moduleFilterChipPressed : null,
-                ]}>
-                <Text numberOfLines={1} style={styles.sortButtonText}>
-                  排序：{selectedSortOption.label}
-                </Text>
-                <MaterialIcons name="arrow-drop-down" size={20} color={colors.textPrimary} />
-              </Pressable>
-            </View>
-            {isRefreshing ? <Text style={styles.refreshText}>刷新中...</Text> : null}
           </View>
-        }
-        ListEmptyComponent={listEmpty}
-        ListFooterComponent={listFooter}
-      />
-      <LibraryModuleFilterSheet
-        visible={moduleFilterSheetVisible}
-        options={moduleFilterOptions}
-        selectedValue={selectedModuleFilter}
-        onClose={() => setModuleFilterSheetVisible(false)}
-        onSelectOption={(value) => {
-          setModuleFilterSheetVisible(false);
-          handleSelectModuleFilter(value);
-        }}
-      />
-      <LibraryTagFilterSheet
-        visible={tagFilterSheetVisible}
-        options={tagFilterOptions}
-        selectedValues={selectedTagFilters}
-        onClose={() => setTagFilterSheetVisible(false)}
-        onToggleOption={handleToggleTagFilter}
-      />
-      <SortSelectorSheet
-        visible={sortSheetVisible}
-        selectedSortKey={sortKey}
-        onClose={() => setSortSheetVisible(false)}
-        onSelect={handleSelectSort}
-      />
-    </ScreenContainer>
-    {shouldShowFloatingAnchorNav ? (
-      <View
-        pointerEvents="box-none"
-        style={[
-          styles.floatingAnchorWrap,
-          { top: floatingAnchorTop },
-        ]}>
-        <QuickAnchorNav
-          items={LIBRARY_ANCHOR_ITEMS}
-          activeAnchorId={activeAnchorId}
-          collapsed={isAnchorNavCollapsed}
-          floating
-          horizontalCompact
-          onToggleCollapsed={handleToggleAnchorNavCollapsed}
-          onAnchorPress={handleAnchorPress}
+        </LibraryBottomSheet>
+
+        <LibraryBottomSheet
+          onClose={() => setSortSheetVisible(false)}
+          title="排序方式"
+          visible={sortSheetVisible}>
+          <ScrollView contentContainerStyle={styles.sortList}>
+            {SORT_OPTIONS.map((option) => {
+              const selected = effectiveSortKey === option.key;
+              return (
+                <Pressable
+                  key={option.key}
+                  accessibilityLabel={`排序方式，${option.label}`}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: selected }}
+                  onPress={() => handleSelectSort(option.key)}
+                  style={({ pressed }) => [
+                    styles.sortOption,
+                    selected ? styles.sheetOptionSelected : null,
+                    pressed ? styles.sheetOptionPressed : null,
+                  ]}>
+                  <View style={styles.sortOptionTextWrap}>
+                    <Text style={[styles.sortOptionTitle, selected ? styles.sheetOptionLabelSelected : null]}>
+                      {option.label}
+                    </Text>
+                    <Text style={styles.sortOptionDescription}>{option.description}</Text>
+                  </View>
+                  {selected ? <MaterialIcons name="check" size={21} color={colors.success} /> : null}
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </LibraryBottomSheet>
+
+        <CustomModuleManagerModal
+          busy={customModuleBusy}
+          customModules={customModules}
+          message={customModuleMessage}
+          onClose={() => setCustomModuleModalVisible(false)}
+          onCreateModule={handleCreateCustomModule}
+          onDeleteModule={handleDeleteCustomModule}
+          onMoveModule={handleMoveCustomModule}
+          onSelectModule={(moduleName) => {
+            setFilters((current) => ({ ...current, module: moduleName, tag: null }));
+            scrollToTop();
+          }}
+          onUpdateModule={handleUpdateCustomModule}
+          onUseTemplate={handleCreateCustomModule}
+          selectedModule={filters.module}
+          visible={customModuleModalVisible}
         />
-      </View>
-    ) : null}
-    <AppToast
-      {...toastProps}
-      bottomOffset={toastBottomOffset}
-    />
+      </ScreenContainer>
+      <AppToast
+        {...toastProps}
+        bottomOffset={Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg)}
+      />
     </View>
   );
 }
@@ -2580,823 +1445,466 @@ export default function LibraryScreen() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
-  },
-  floatingAnchorWrap: {
-    position: 'absolute',
-    left: spacing.screenPadding,
-    right: spacing.screenPadding,
-    zIndex: 30,
-    elevation: 30,
-  },
-  anchorSectionHighlighted: {
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.success,
-    backgroundColor: '#FBFFFC',
-    padding: spacing.xs,
-    shadowColor: colors.success,
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 4,
-  },
-  screenContent: {
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.lg,
-    gap: spacing.md,
+    backgroundColor: colors.background,
   },
   listContent: {
-    paddingBottom: layout.bottomTabHeight,
-  },
-  quickViewBlock: {
-    gap: spacing.xs,
-  },
-  quickViewTitle: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '800',
-  },
-  quickViewContent: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingRight: spacing.xl,
-  },
-  quickViewChip: {
-    minHeight: 34,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  quickViewChipSelected: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-  },
-  quickViewChipDangerSelected: {
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
-  },
-  quickViewChipInfoSelected: {
-    borderColor: '#BFDBFE',
-    backgroundColor: '#EFF6FF',
-  },
-  quickViewChipWarningSelected: {
-    borderColor: '#FED7AA',
-    backgroundColor: '#FFF7ED',
-  },
-  quickViewChipPinnedSelected: {
-    borderColor: '#FDE68A',
-    backgroundColor: '#FFFBEB',
-  },
-  quickViewChipText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '800',
-  },
-  sortButton: {
-    minHeight: 32,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingLeft: spacing.md,
-    paddingRight: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    maxWidth: '64%',
-  },
-  sortButtonText: {
-    ...typography.caption,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  sortSheetList: {
-    gap: spacing.sm,
-  },
-  sortSheetOption: {
-    minHeight: 54,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  sortSheetOptionSelected: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-  },
-  sortSheetOptionTextWrap: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  sortSheetOptionTitle: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    fontWeight: '900',
-  },
-  sortSheetOptionTitleSelected: {
-    color: colors.success,
-  },
-  sortSheetOptionDescription: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  sectionHeaderOuter: {
-    backgroundColor: colors.background,
+    flexGrow: 1,
     paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xs,
+    paddingBottom: spacing.xxl,
   },
-  reviewSectionHeader: {
-    minHeight: 36,
-    borderRadius: radius.lg,
-    backgroundColor: colors.background,
+  headerContent: {
+    gap: spacing.lg,
+    paddingTop: layout.headerTopPadding,
+    paddingBottom: spacing.lg,
+  },
+  offlineBadge: {
+    paddingHorizontal: spacing.xs,
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+  },
+  searchBox: {
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     gap: spacing.sm,
-  },
-  reviewSectionTitleWrap: {
-    minWidth: 0,
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  reviewSectionTitle: {
-    ...typography.bodySmall,
-    fontWeight: '900',
-    flexShrink: 1,
-  },
-  reviewSectionToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 1,
-  },
-  reviewSectionToggleText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '800',
-  },
-  searchPanel: {
-    borderWidth: 1,
-    borderColor: colors.border,
+    paddingHorizontal: spacing.md,
     borderRadius: radius.lg,
     backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    gap: spacing.sm,
-  },
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    minHeight: 40,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
   searchInput: {
     flex: 1,
-    ...typography.body,
+    minWidth: 0,
+    paddingVertical: 0,
     color: colors.textPrimary,
-    paddingVertical: spacing.sm,
+    fontSize: 16,
+    lineHeight: 22,
   },
-  searchClearButton: {
-    width: 28,
-    height: 28,
-    borderRadius: radius.pill,
+  clearSearchButton: {
+    width: 32,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: radius.md,
+  },
+  iconButtonPressed: {
     backgroundColor: colors.surfaceMuted,
   },
-  activeFilterRow: {
+  filterRow: {
+    minHeight: 48,
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'center',
     gap: spacing.sm,
   },
-  activeFilterChip: {
-    maxWidth: '70%',
-    minHeight: 30,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
+  filterButton: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.border,
   },
-  activeFilterChipText: {
-    ...typography.bodySmall,
-    color: colors.success,
-    fontWeight: '800',
-    flexShrink: 1,
+  filterButtonPressed: {
+    opacity: 0.58,
+    backgroundColor: colors.surfaceMuted,
   },
-  activeFilterClearButton: {
-    minHeight: 30,
-    borderRadius: radius.pill,
+  filterPrefix: {
+    flexShrink: 0,
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  filterValue: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+  resetButton: {
+    minWidth: 48,
+    minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    marginLeft: 'auto',
+    borderRadius: radius.md,
   },
-  activeFilterClearText: {
-    ...typography.bodySmall,
+  resetText: {
     color: colors.success,
-    fontWeight: '800',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
   },
-  moduleFilterCard: {
-    borderRadius: radius.xl,
+  resetTextDisabled: {
+    color: colors.textMuted,
+    fontWeight: '500',
+  },
+  quickSection: {
     gap: spacing.sm,
   },
-  moduleFilterHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  moduleFilterTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    minWidth: 0,
-  },
-  moduleFilterTitle: {
+  sectionLabel: {
     ...typography.sectionTitle,
     fontSize: 18,
     lineHeight: 24,
-    color: '#1F2937',
-    fontWeight: '800',
   },
-  moduleFilterOptions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  moduleFilterChip: {
-    minWidth: 116,
-    height: 38,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-  },
-  moduleFilterChipSelected: {
-    borderColor: '#BBF7D0',
-    backgroundColor: '#DCFCE7',
-  },
-  moduleFilterChipPressed: {
-    opacity: 0.78,
-  },
-  moduleFilterChipText: {
-    ...typography.bodySmall,
-    color: '#64748B',
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  moduleFilterChipTextSelected: {
-    color: colors.success,
-    fontWeight: '800',
-  },
-  moduleFilterMoreButton: {
-    height: 38,
-    minWidth: 86,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    backgroundColor: '#F8FAFC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-  },
-  moduleFilterMoreText: {
-    ...typography.bodySmall,
-    color: '#334155',
-    fontWeight: '800',
-  },
-  moduleFilterHint: {
-    ...typography.caption,
-    color: '#64748B',
-    fontWeight: '600',
-  },
-  filterDivider: {
-    height: 1,
-    backgroundColor: '#EEF2F7',
-    marginVertical: spacing.xs,
-  },
-  tagFilterHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  tagFilterTitleWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    minWidth: 0,
-  },
-  tagFilterTitle: {
-    ...typography.body,
-    color: '#1F2937',
-    fontWeight: '800',
-  },
-  tagFilterOptions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  tagFilterChip: {
-    minHeight: 34,
-    maxWidth: '48%',
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: colors.surface,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  tagFilterChipSelected: {
-    borderColor: colors.success,
-    backgroundColor: colors.successBg,
-  },
-  tagFilterChipText: {
-    ...typography.bodySmall,
-    color: '#334155',
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  tagFilterChipTextSelected: {
-    color: colors.success,
-    fontWeight: '800',
-  },
-  tagFilterMoreButton: {
-    minHeight: 34,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    backgroundColor: '#F8FAFC',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexDirection: 'row',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  tagFilterMoreText: {
-    ...typography.bodySmall,
-    color: '#334155',
-    fontWeight: '800',
-  },
-  tagFilterEmptyText: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-  tagFilterErrorText: {
-    ...typography.caption,
-    color: colors.danger,
-    fontWeight: '600',
-  },
-  moduleFilterSheetScroll: {
-    maxHeight: 420,
-  },
-  moduleFilterSheetContent: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    paddingTop: spacing.xs,
-    paddingBottom: spacing.md,
-  },
-  moduleFilterSheetChip: {
-    minWidth: 118,
-    maxWidth: '48%',
-    height: 40,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
-  },
-  moduleFilterSheetChipSelected: {
-    borderColor: colors.success,
-    backgroundColor: '#DCFCE7',
-  },
-  tagFilterSheetChip: {
-    minWidth: 118,
-    maxWidth: '48%',
-    minHeight: 40,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: colors.surface,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-  },
-  moduleSheetOverlay: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  moduleSheetBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(15, 23, 42, 0.36)',
-  },
-  moduleSheet: {
-    maxHeight: '78%',
-    borderTopLeftRadius: radius.xl,
-    borderTopRightRadius: radius.xl,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.screenPadding,
-    paddingTop: spacing.sm,
-    paddingBottom: spacing.xl,
-  },
-  moduleSheetHandle: {
-    width: 42,
-    height: 4,
-    borderRadius: radius.pill,
-    backgroundColor: colors.border,
-    alignSelf: 'center',
-    marginBottom: spacing.md,
-  },
-  moduleSheetHeader: {
+  resultsHeader: {
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.md,
-    marginBottom: spacing.md,
+    paddingTop: spacing.xs,
   },
-  moduleSheetHeaderTextWrap: {
-    flex: 1,
+  resultCountWrap: {
     minWidth: 0,
-  },
-  moduleSheetTitle: {
-    ...typography.sectionTitle,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  moduleSheetSubtitle: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-  moduleSheetCloseButton: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceMuted,
-  },
-  moduleSheetCloseButtonPressed: {
-    opacity: 0.78,
-  },
-  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: spacing.sm,
   },
-  countText: {
-    ...typography.caption,
+  resultCount: {
     color: colors.textSecondary,
+    fontSize: 17,
+    lineHeight: 24,
     fontWeight: '600',
   },
-  refreshText: {
-    ...typography.caption,
-    color: colors.textMuted,
+  sortButton: {
+    maxWidth: '50%',
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingLeft: spacing.md,
+    borderRadius: radius.md,
   },
-  listItemSeparator: {
+  sortButtonText: {
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
+  },
+  itemSeparator: {
     height: spacing.md,
   },
-  listFooter: {
-    marginHorizontal: spacing.screenPadding,
-    marginTop: spacing.md,
-    gap: spacing.sm,
-    alignItems: 'center',
-  },
-  listFooterHint: {
-    ...typography.caption,
-    color: colors.textMuted,
-    textAlign: 'center',
-  },
-  showMoreButton: {
-    minHeight: 40,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-  },
-  showMoreButtonText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '800',
-  },
-  stateWrap: {
-    marginTop: spacing.md,
-    marginHorizontal: spacing.screenPadding,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    padding: spacing.lg,
-    gap: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 112,
-  },
-  stateText: {
-    ...typography.body,
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  stateErrorText: {
-    ...typography.body,
-    color: colors.danger,
-    textAlign: 'center',
-  },
-  retryButton: {
-    marginTop: spacing.xs,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  retryText: {
-    ...typography.caption,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  goAddButton: {
-    marginTop: spacing.xs,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  goAddButtonText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '700',
-  },
-  cardPressable: {
-    marginHorizontal: 14,
-    borderRadius: radius.xl,
-  },
-  cardPressableDisabled: {
-    opacity: 0.76,
-  },
   card: {
-    borderRadius: 26,
-    position: 'relative',
+    minHeight: 142,
     overflow: 'hidden',
+    padding: spacing.md,
+    borderRadius: 18,
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.035,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 1,
+  },
+  cardPressed: {
+    opacity: 0.72,
+  },
+  cardDisabled: {
+    opacity: 0.62,
   },
   cardRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    alignItems: 'stretch',
+    gap: spacing.md,
   },
-  cardMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: 6,
+  thumbnail: {
+    width: 88,
+    minHeight: 116,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceMuted,
   },
-  cardDeletingMask: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    flexDirection: 'row',
+  thumbnailPlaceholder: {
+    width: 88,
+    minHeight: 116,
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.xs,
-    backgroundColor: 'rgba(255, 255, 255, 0.86)',
-  },
-  cardDeletingText: {
-    ...typography.caption,
-    color: colors.danger,
-    fontWeight: '800',
-  },
-  cardTopLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    minWidth: 0,
-    gap: spacing.sm,
-  },
-  modulePill: {
-    flex: 1,
-    minWidth: 0,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#DBE7FF',
-    backgroundColor: '#EEF3FF',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    alignSelf: 'flex-start',
-  },
-  cardMeta: {
-    ...typography.caption,
-    color: '#4A5F9D',
-    fontWeight: '700',
-    flexShrink: 1,
-    minWidth: 0,
-    lineHeight: 16,
-  },
-  cardTopLineEnd: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    flexShrink: 0,
-  },
-  pinnedMark: {
-    width: 20,
-    height: 20,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#FDE68A',
-    backgroundColor: '#FFFBEB',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardMoreButton: {
-    width: 24,
-    height: 24,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cardMoreButtonPressed: {
+    borderRadius: radius.md,
     backgroundColor: colors.surfaceMuted,
   },
-  arrow: {
-    color: colors.textMuted,
-    flexShrink: 0,
+  thumbnailPlaceholderText: {
+    ...typography.caption,
+  },
+  cardBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  cardTopRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  moduleText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#4D678B',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  cardTopActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  moreButton: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
   },
   cardTitle: {
-    ...typography.body,
-    color: colors.success,
+    marginTop: 2,
+    color: colors.textPrimary,
     fontSize: 17,
-    lineHeight: 22,
+    lineHeight: 23,
     fontWeight: '700',
-    flexShrink: 1,
-    minWidth: 0,
   },
-  titleRow: {
-    minWidth: 0,
-    flexShrink: 1,
-  },
-  cardTagRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: spacing.xs,
-    minWidth: 0,
-  },
-  cardTagPill: {
-    maxWidth: '48%',
-    borderRadius: radius.pill,
-    backgroundColor: colors.successBg,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  cardTagText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '800',
-    lineHeight: 16,
-  },
-  difficultyPill: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#FFE2C4',
-    backgroundColor: '#FFF3E8',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-    flexShrink: 0,
-    alignSelf: 'flex-start',
-  },
-  difficultyText: {
-    ...typography.caption,
-    color: '#A75D17',
-    fontWeight: '700',
-    lineHeight: 16,
-    flexShrink: 0,
-  },
-  progressLabel: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
-    flexShrink: 0,
+  cardTags: {
+    marginTop: 3,
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
   },
   progressRow: {
+    minHeight: 24,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-start',
-    gap: 6,
-    minWidth: 0,
-    flexShrink: 1,
+    gap: spacing.sm,
+    marginTop: spacing.sm,
   },
-  progressDots: {
-    gap: 3,
-    flexShrink: 1,
-    minWidth: 0,
-  },
-  nextReviewWrap: {
-    gap: 1,
-    minWidth: 0,
-    flexShrink: 1,
-  },
-  nextReviewLabel: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '700',
-    fontSize: 12,
-    lineHeight: 16,
+  progressText: {
     flexShrink: 0,
-  },
-  nextReviewText: {
-    ...typography.bodySmall,
     color: colors.textSecondary,
-    fontWeight: '600',
     fontSize: 13,
     lineHeight: 18,
+    fontWeight: '600',
+  },
+  progressDots: {
     flexShrink: 1,
-    minWidth: 0,
   },
-  nextReviewTextSuccess: {
-    color: colors.success,
-  },
-  nextReviewTextMuted: {
-    color: colors.textMuted,
-  },
-  nextReviewTextDanger: {
-    color: colors.danger,
-  },
-  thumb: {
-    width: 84,
-    height: 84,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    overflow: 'hidden',
-    justifyContent: 'center',
+  cardFooterRow: {
+    minHeight: 24,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.xs,
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    marginTop: spacing.xs,
   },
-  thumbPlaceholderText: {
-    ...typography.caption,
-    color: colors.textMuted,
+  nextReviewText: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  difficultyText: {
+    flexShrink: 0,
+    color: '#C66A08',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '600',
+  },
+  deletingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+  },
+  deletingText: {
+    color: colors.danger,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  stateWrap: {
+    minHeight: 240,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxl,
+  },
+  stateTitle: {
+    ...typography.sectionTitle,
+    marginTop: spacing.xs,
+    textAlign: 'center',
+    fontSize: 18,
+    lineHeight: 24,
+  },
+  stateText: {
+    ...typography.body,
+    textAlign: 'center',
+  },
+  secondaryStateButton: {
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+  },
+  secondaryStateButtonText: {
+    color: colors.success,
+    fontSize: 15,
+    lineHeight: 21,
     fontWeight: '700',
   },
-  thumbImage: {
-    width: 84,
-    height: 84,
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: colors.border,
+  sheetList: {
+    flexShrink: 1,
+    maxHeight: 460,
+  },
+  sheetListContent: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  sheetOption: {
+    minHeight: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+  },
+  sheetOptionSelected: {
+    backgroundColor: colors.successBg,
+  },
+  sheetOptionPressed: {
+    opacity: 0.58,
     backgroundColor: colors.surfaceMuted,
+  },
+  sheetOptionLabel: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: 16,
+    lineHeight: 22,
+  },
+  sheetOptionLabelSelected: {
+    color: colors.success,
+    fontWeight: '700',
+  },
+  sheetOptionEnd: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  sheetOptionCount: {
+    minWidth: 32,
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'right',
+  },
+  sheetCheckSlot: {
+    width: 22,
+    alignItems: 'center',
+  },
+  manageModuleButton: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    borderRadius: radius.md,
+  },
+  manageModuleText: {
+    color: colors.success,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  tagSheetContent: {
+    flexShrink: 1,
+    maxHeight: 500,
+    paddingTop: spacing.md,
+  },
+  tagSearchBox: {
+    minHeight: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.surfaceMuted,
+  },
+  tagSearchInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 0,
+    color: colors.textPrimary,
+    fontSize: 15,
+    lineHeight: 21,
+  },
+  tagList: {
+    flexShrink: 1,
+    marginTop: spacing.sm,
+  },
+  tagListContent: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  noTagText: {
+    ...typography.body,
+    padding: spacing.xl,
+    textAlign: 'center',
+  },
+  primarySheetButton: {
+    minHeight: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    backgroundColor: colors.success,
+  },
+  primarySheetButtonPressed: {
+    opacity: 0.75,
+  },
+  primarySheetButtonText: {
+    color: colors.white,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  sortList: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  sortOption: {
+    minHeight: 64,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+  },
+  sortOptionTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sortOptionTitle: {
+    color: colors.textPrimary,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+  sortOptionDescription: {
+    marginTop: 2,
+    color: colors.textMuted,
+    fontSize: 12,
+    lineHeight: 17,
   },
 });

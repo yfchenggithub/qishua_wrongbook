@@ -18,6 +18,7 @@ export interface MistakeListItem {
   displayStatus: MistakeListStatus;
   statusLabel: string;
   nextReviewAt?: string | null;
+  lastReviewAt?: string | null;
   createdAt: string;
   updatedAt: string;
   isPinned: boolean;
