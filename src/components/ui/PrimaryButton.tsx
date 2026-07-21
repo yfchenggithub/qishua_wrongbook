@@ -6,6 +6,7 @@ export interface PrimaryButtonProps {
   title: string;
   onPress?: () => void;
   disabled?: boolean;
+  tone?: 'brand' | 'blue';
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
 }
@@ -14,18 +15,24 @@ export function PrimaryButton({
   title,
   onPress,
   disabled = false,
+  tone = 'brand',
   style,
   textStyle,
 }: PrimaryButtonProps) {
   return (
     <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
+        tone === 'blue' ? styles.buttonBlue : null,
         style,
-        disabled && styles.buttonDisabled,
-        pressed && !disabled && styles.buttonPressed,
+        disabled ? (tone === 'blue' ? styles.buttonBlueDisabled : styles.buttonDisabled) : null,
+        pressed && !disabled
+          ? (tone === 'blue' ? styles.buttonBluePressed : styles.buttonPressed)
+          : null,
       ]}>
       <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={[styles.text, textStyle]}>
         {title}
@@ -45,6 +52,15 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: {
     backgroundColor: colors.accentDisabled,
+  },
+  buttonBlue: {
+    backgroundColor: colors.action,
+  },
+  buttonBlueDisabled: {
+    backgroundColor: colors.actionDisabled,
+  },
+  buttonBluePressed: {
+    backgroundColor: colors.actionPressed,
   },
   buttonPressed: {
     backgroundColor: colors.accentPressed,

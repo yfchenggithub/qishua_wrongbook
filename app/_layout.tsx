@@ -129,6 +129,10 @@ export default function RootLayout() {
               <Stack.Screen name="review-sheet/scan" options={{ headerShown: false }} />
               <Stack.Screen name="review-sheet/[sheetId]" options={{ headerShown: false }} />
               <Stack.Screen name="pdf-preview" options={{ title: '今日练习卷 PDF' }} />
+              <Stack.Screen name="about-support" options={{ headerShown: false }} />
+              <Stack.Screen name="official-account" options={{ headerShown: false }} />
+              <Stack.Screen name="image-combiner" options={{ headerShown: false }} />
+              <Stack.Screen name="feedback" options={{ headerShown: false }} />
               <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
             </Stack>
             <StatusBar style="auto" />
