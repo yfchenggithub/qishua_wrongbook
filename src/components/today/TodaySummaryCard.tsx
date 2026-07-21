@@ -2,11 +2,10 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Svg, { Circle } from 'react-native-svg';
 
+import { PrimaryButton, SurfaceCard } from '@/src/components/ui';
 import type { TodayCompletedStats } from '@/src/services/MistakeListService';
+import { colors, layout, typography } from '@/src/styles/tokens';
 
-const GREEN = '#34C759';
-const ORANGE = '#FF9F0A';
-const RED = '#FF3B30';
 
 interface ProgressRingProps {
   completed: number;
@@ -42,7 +41,7 @@ function ProgressRing({ completed, total }: ProgressRingProps) {
             r={radius}
             rotation="-90"
             origin={`${size / 2}, ${size / 2}`}
-            stroke={GREEN}
+            stroke={colors.accent}
             strokeDasharray={`${circumference} ${circumference}`}
             strokeDashoffset={circumference * (1 - progress)}
             strokeLinecap="round"
@@ -95,7 +94,7 @@ export function TodaySummaryCard({
   exportProgress = 0,
 }: TodaySummaryCardProps) {
   return (
-    <View style={styles.card}>
+    <SurfaceCard style={styles.card}>
       <Text style={styles.title}>今日复做</Text>
 
       <View style={styles.summaryRow}>
@@ -136,18 +135,12 @@ export function TodaySummaryCard({
 
       <Text maxFontSizeMultiplier={1.2} style={styles.hint}>{hint}</Text>
 
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled: primaryDisabled }}
+      <PrimaryButton
         disabled={primaryDisabled}
         onPress={onPrimaryPress}
-        style={({ pressed }) => [
-          styles.primaryButton,
-          primaryDisabled ? styles.primaryButtonDisabled : null,
-          pressed && !primaryDisabled ? styles.primaryButtonPressed : null,
-        ]}>
-        <Text numberOfLines={1} style={styles.primaryButtonText}>{primaryLabel}</Text>
-      </Pressable>
+        style={styles.primaryButton}
+        title={primaryLabel}
+      />
 
       <Pressable
         accessibilityRole="button"
@@ -159,7 +152,11 @@ export function TodaySummaryCard({
           exportDisabled ? styles.exportButtonDisabled : null,
           pressed && !exportDisabled ? styles.exportButtonPressed : null,
         ]}>
-        <MaterialIcons name="description" size={20} color={exportDisabled ? '#AEAEB2' : GREEN} />
+        <MaterialIcons
+          name="description"
+          size={20}
+          color={exportDisabled ? colors.textTertiary : colors.accent}
+        />
         <Text numberOfLines={1} style={[styles.exportText, exportDisabled ? styles.exportTextDisabled : null]}>
           {exportLabel}
         </Text>
@@ -173,26 +170,16 @@ export function TodaySummaryCard({
           </View>
         </View>
       ) : null}
-    </View>
+    </SurfaceCard>
   );
 }
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 22,
-    backgroundColor: '#FFFFFF',
-    padding: 20,
-    shadowColor: '#000000',
-    shadowOpacity: 0.045,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 1,
+    gap: 0,
   },
   title: {
-    color: '#1D1D1F',
-    fontSize: 21,
-    lineHeight: 28,
-    fontWeight: '700',
+    ...typography.cardTitle,
   },
   summaryRow: {
     marginTop: 18,
@@ -220,7 +207,7 @@ const styles = StyleSheet.create({
   ringValue: {
     flex: 1,
     minWidth: 0,
-    color: GREEN,
+    color: colors.accent,
     fontSize: 34,
     lineHeight: 39,
     fontWeight: '800',
@@ -230,14 +217,14 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     marginLeft: 4,
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',
   },
   ringCaption: {
     marginTop: 1,
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '500',
@@ -254,7 +241,7 @@ const styles = StyleSheet.create({
   pendingCount: {
     flex: 1,
     minWidth: 0,
-    color: GREEN,
+    color: colors.accent,
     fontSize: 45,
     lineHeight: 52,
     fontWeight: '800',
@@ -262,7 +249,7 @@ const styles = StyleSheet.create({
   pendingLabel: {
     marginLeft: 6,
     flexShrink: 0,
-    color: '#1D1D1F',
+    color: colors.textPrimary,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: '700',
@@ -271,7 +258,7 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     marginTop: 10,
     marginBottom: 10,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: colors.separator,
   },
   resultRow: {
     flexDirection: 'row',
@@ -283,10 +270,10 @@ const styles = StyleSheet.create({
   },
   resultCellDivided: {
     borderLeftWidth: StyleSheet.hairlineWidth,
-    borderLeftColor: '#E5E5EA',
+    borderLeftColor: colors.separator,
   },
   resultLabel: {
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '500',
@@ -298,42 +285,24 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   mastered: {
-    color: GREEN,
+    color: colors.accent,
   },
   unsure: {
-    color: ORANGE,
+    color: colors.warning,
   },
   wrong: {
-    color: RED,
+    color: colors.danger,
   },
   hint: {
     marginTop: 18,
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '500',
   },
   primaryButton: {
-    minHeight: 56,
     marginTop: 18,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 18,
-    backgroundColor: GREEN,
-  },
-  primaryButtonPressed: {
-    opacity: 0.78,
-    transform: [{ scale: 0.99 }],
-  },
-  primaryButtonDisabled: {
-    backgroundColor: '#D1D1D6',
-  },
-  primaryButtonText: {
-    color: '#FFFFFF',
-    fontSize: 18,
-    lineHeight: 24,
-    fontWeight: '700',
+    height: layout.primaryButtonHeight,
   },
   exportButton: {
     minHeight: 48,
@@ -351,19 +320,19 @@ const styles = StyleSheet.create({
     opacity: 0.72,
   },
   exportText: {
-    color: '#3A3A3C',
+    color: colors.textPrimary,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: '600',
   },
   exportTextDisabled: {
-    color: '#AEAEB2',
+    color: colors.textTertiary,
   },
   exportProgressWrap: {
     gap: 6,
   },
   exportProgressText: {
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     textAlign: 'center',
@@ -377,6 +346,6 @@ const styles = StyleSheet.create({
   progressFill: {
     height: '100%',
     borderRadius: 99,
-    backgroundColor: GREEN,
+    backgroundColor: colors.accent,
   },
 });

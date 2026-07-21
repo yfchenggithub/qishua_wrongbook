@@ -17,6 +17,6 @@ export function SectionTitle({ title, style }: SectionTitleProps) {
 
 const styles = StyleSheet.create({
   title: {
-    ...typography.sectionTitle,
+    ...typography.sectionMajor,
   },
 });

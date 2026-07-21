@@ -1,6 +1,6 @@
 import { StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
-import { radius, spacing, typography } from '@/src/styles/tokens';
+import { colors } from '@/src/styles/tokens';
 
 export interface OfflineBadgeProps {
   label?: string;
@@ -23,21 +23,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    gap: spacing.xs,
-    borderRadius: radius.pill,
-    backgroundColor: '#EAF7ED',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    gap: 6,
+    minHeight: 20,
   },
   dot: {
-    width: 8,
-    height: 8,
-    borderRadius: radius.pill,
-    backgroundColor: '#34C759',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.accent,
   },
   text: {
-    ...typography.bodySmall,
-    color: '#34C759',
+    color: colors.accent,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '600',
   },
 });

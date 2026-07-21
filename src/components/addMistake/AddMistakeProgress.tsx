@@ -1,8 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 
-const GREEN = '#34C759';
-const MUTED = '#8E8E93';
-const BORDER = '#D1D1D6';
+import { colors, spacing } from '@/src/styles/tokens';
 
 export type AddMistakeStage = 'QUESTION' | 'SUPPLEMENT' | 'READY_TO_SAVE';
 
@@ -44,7 +42,7 @@ export function AddMistakeProgress({ stage }: { stage: AddMistakeStage }) {
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', marginVertical: 18 },
+  row: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xxl },
   fragment: { flex: 1, flexDirection: 'row', alignItems: 'center' },
   step: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   badge: {
@@ -54,15 +52,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: BORDER,
-    backgroundColor: '#FFFFFF',
+    borderColor: colors.separator,
+    backgroundColor: colors.surface,
   },
-  badgeActive: { borderColor: GREEN, backgroundColor: GREEN },
-  badgeReached: { borderColor: GREEN, backgroundColor: '#EAF8EE' },
-  number: { color: MUTED, fontSize: 15, fontWeight: '600' },
-  numberReached: { color: GREEN, fontWeight: '700' },
-  label: { color: MUTED, fontSize: 15, fontWeight: '600' },
-  labelActive: { color: GREEN, fontWeight: '700' },
-  line: { flex: 1, height: StyleSheet.hairlineWidth, marginHorizontal: 10, backgroundColor: BORDER },
-  lineReached: { backgroundColor: GREEN },
+  badgeActive: { borderColor: colors.accent, backgroundColor: colors.accent },
+  badgeReached: { borderColor: colors.accent, backgroundColor: colors.accentSoft },
+  number: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
+  numberReached: { color: colors.accent, fontWeight: '700' },
+  label: { color: colors.textSecondary, fontSize: 16, lineHeight: 22, fontWeight: '600' },
+  labelActive: { color: colors.accent, fontWeight: '700' },
+  line: { flex: 1, height: StyleSheet.hairlineWidth, marginHorizontal: spacing.sm, backgroundColor: colors.separator },
+  lineReached: { backgroundColor: colors.accent },
 });

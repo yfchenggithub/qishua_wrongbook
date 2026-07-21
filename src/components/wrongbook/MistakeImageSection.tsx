@@ -11,20 +11,20 @@ import {
 } from 'react-native';
 
 import { Logger } from '@/src/services/Logger';
-import { radius, spacing } from '@/src/styles/tokens';
+import { colors, radius, spacing } from '@/src/styles/tokens';
 
 const COMPONENT_SCOPE = 'MistakeImageSection';
 const TILE_WIDTH = 208;
 const PREVIEW_HEIGHT = 156;
 
 const palette = {
-  surface: '#FFFFFF',
-  surfaceMuted: '#F5F5F7',
-  text: '#1D1D1F',
-  secondaryText: '#6E6E73',
-  mutedText: '#8E8E93',
-  green: '#248A3D',
-  border: '#D9D9DE',
+  surface: colors.surface,
+  surfaceMuted: colors.pageBackground,
+  text: colors.textPrimary,
+  secondaryText: colors.textSecondary,
+  mutedText: colors.textTertiary,
+  green: colors.accent,
+  border: colors.separator,
   danger: '#C9342E',
 } as const;
 
@@ -372,7 +372,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: radius.pill,
-    backgroundColor: '#EAF8EE',
+    backgroundColor: colors.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },

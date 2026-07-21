@@ -1,17 +1,10 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
-  Pressable,
-  type ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  type LayoutChangeEvent,
-} from 'react-native';
+import { Pressable, type ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppToast, BrandHeader, ScreenContainer } from '@/src/components';
+import { AppToast, PageHeader, PageShell, SectionHeader } from '@/src/components';
 import {
   SmartFilter,
   type SmartFilterOption,
@@ -25,13 +18,12 @@ import * as BackupHistoryService from '@/src/services/backup/BackupHistoryServic
 import { Logger } from '@/src/services/Logger';
 import type { HomeStatus, HomeTaskSummary } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
-import { layout, spacing } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
 const TOAST_DURATION_DEFAULT = 2200;
 const TOAST_DURATION_LONG = 3200;
 const UPCOMING_DAYS = 3;
-const GREEN = '#34C759';
 
 type TodayQuickFilter = 'today' | 'overdue' | 'recentViewed' | 'recentAdded';
 
@@ -70,42 +62,17 @@ function buildSummaryHint(status: HomeStatus): string {
 
 function formatBackupStatus(lastBackupAt: string | null): string {
   if (!lastBackupAt) {
-    return '数据仅存本机 · 尚未备份';
+    return '数据仅保存在本机 · 尚未备份';
   }
 
   const date = new Date(lastBackupAt);
   if (Number.isNaN(date.getTime())) {
-    return '数据仅存本机 · 备份时间未知';
+    return '数据仅保存在本机 · 备份时间未知';
   }
 
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `数据仅存本机 · 已备份 ${date.getMonth() + 1}月${date.getDate()}日 ${hours}:${minutes}`;
-}
-
-function SectionHeader({
-  title,
-  actionLabel,
-  onActionPress,
-}: {
-  title: string;
-  actionLabel?: string;
-  onActionPress?: () => void;
-}) {
-  return (
-    <View style={styles.sectionHeader}>
-      <Text numberOfLines={1} style={styles.sectionTitle}>{title}</Text>
-      {actionLabel && onActionPress ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={onActionPress}
-          style={({ pressed }) => [styles.sectionAction, pressed ? styles.textButtonPressed : null]}>
-          <Text style={styles.sectionActionText}>{actionLabel}</Text>
-          <MaterialIcons name="chevron-right" size={20} color={GREEN} />
-        </Pressable>
-      ) : null}
-    </View>
-  );
+  return `数据仅保存在本机 · 已备份 ${date.getMonth() + 1} 月 ${date.getDate()} 日 ${hours}:${minutes}`;
 }
 
 export default function TodayScreen() {
@@ -301,17 +268,17 @@ export default function TodayScreen() {
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer
+      <PageShell
         scroll
+        hasBottomTab
         scrollRef={scrollRef}
         safeAreaEdges={['top']}
         style={styles.safeArea}
         contentStyle={styles.content}>
-        <BrandHeader
+        <PageHeader
           title="七刷错题本"
           subtitle="巩固薄弱，把错题变成分数"
-          titleStyle={styles.brandTitle}
-          subtitleStyle={styles.brandSubtitle}
+          showOffline
           rightAccessory={(
             <Pressable
               accessibilityLabel="扫描练习卷二维码"
@@ -319,7 +286,7 @@ export default function TodayScreen() {
               hitSlop={6}
               onPress={() => router.push('/review-sheet/scan' as never)}
               style={({ pressed }) => [styles.scanButton, pressed ? styles.iconButtonPressed : null]}>
-              <MaterialIcons name="qr-code-scanner" size={26} color={GREEN} />
+              <MaterialIcons name="qr-code-scanner" size={24} color={colors.accent} />
             </Pressable>
           )}
         />
@@ -327,6 +294,7 @@ export default function TodayScreen() {
         <SmartFilter
           onChange={handleQuickFilterChange}
           options={quickFilterOptions}
+          style={styles.smartFilter}
           value="today"
         />
 
@@ -336,7 +304,7 @@ export default function TodayScreen() {
           onPress={() => router.push('/settings' as never)}
           style={({ pressed }) => [styles.backupRow, pressed ? styles.backupRowPressed : null]}>
           <View style={styles.backupIcon}>
-            <MaterialIcons name="verified-user" size={23} color={GREEN} />
+            <MaterialIcons name="verified-user" size={23} color={colors.accent} />
           </View>
           <Text
             adjustsFontSizeToFit
@@ -345,7 +313,7 @@ export default function TodayScreen() {
             style={styles.backupText}>
             {backupStatus}
           </Text>
-          <MaterialIcons name="chevron-right" size={23} color="#8E8E93" />
+          <MaterialIcons name="chevron-right" size={layout.chevronSize} color={colors.textTertiary} />
         </Pressable>
 
         <TodaySummaryCard
@@ -393,7 +361,7 @@ export default function TodayScreen() {
             onOpenDay={handleOpenUpcomingDay}
           />
         </View>
-      </ScreenContainer>
+      </PageShell>
 
       <AppToast {...toastProps} bottomOffset={toastBottomOffset} />
     </View>
@@ -403,38 +371,27 @@ export default function TodayScreen() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
-    backgroundColor: '#F5F5F7',
+    backgroundColor: colors.pageBackground,
   },
   safeArea: {
-    backgroundColor: '#F5F5F7',
+    backgroundColor: colors.pageBackground,
   },
   content: {
-    paddingTop: 20,
-    paddingBottom: layout.bottomTabHeight + 32,
-    gap: 24,
-    backgroundColor: '#F5F5F7',
+    paddingTop: layout.headerTopPadding,
+    backgroundColor: colors.pageBackground,
   },
-  brandTitle: {
-    color: '#1D1D1F',
-    fontSize: 33,
-    lineHeight: 41,
-    fontWeight: '800',
-  },
-  brandSubtitle: {
-    color: '#6E6E73',
-    fontSize: 16,
-    lineHeight: 23,
-    fontWeight: '400',
+  smartFilter: {
+    marginBottom: spacing.card,
   },
   scanButton: {
     width: 44,
     height: 44,
-    borderRadius: 14,
+    borderRadius: radius.control,
     alignItems: 'center',
     justifyContent: 'center',
   },
   iconButtonPressed: {
-    backgroundColor: '#EAF7ED',
+    backgroundColor: colors.accentSoft,
   },
   backupRow: {
     minHeight: 58,
@@ -444,9 +401,10 @@ const styles = StyleSheet.create({
     marginHorizontal: -4,
     borderRadius: 16,
     paddingHorizontal: 4,
+    marginBottom: spacing.xl,
   },
   backupRowPressed: {
-    backgroundColor: '#ECECEF',
+    backgroundColor: colors.separator,
   },
   backupIcon: {
     width: 36,
@@ -454,46 +412,16 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EAF7ED',
+    backgroundColor: colors.accentSoft,
   },
   backupText: {
     flex: 1,
     minWidth: 0,
-    color: '#6E6E73',
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: '500',
+    ...typography.body,
   },
   section: {
-    gap: 12,
-  },
-  sectionHeader: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  sectionTitle: {
-    flex: 1,
-    minWidth: 0,
-    color: '#1D1D1F',
-    fontSize: 23,
-    lineHeight: 30,
-    fontWeight: '700',
-  },
-  sectionAction: {
-    minHeight: 44,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingLeft: 10,
-  },
-  sectionActionText: {
-    color: GREEN,
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: '600',
+    gap: spacing.md,
+    marginTop: spacing.xxl,
   },
   textButtonPressed: {
     opacity: 0.5,

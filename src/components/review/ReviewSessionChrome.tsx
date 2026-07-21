@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SurfaceCard } from '@/src/components/ui/CardContainer';
 import {
   reviewSessionColors as palette,
   reviewSessionLayout as layout,
@@ -116,7 +117,7 @@ export function ExplanationTabs({
   children: ReactNode;
 }) {
   return (
-    <View style={styles.explanationCard}>
+    <SurfaceCard padding={0} style={styles.explanationCard}>
       <View accessibilityRole="tablist" style={styles.tabRow}>
         {TAB_ITEMS.map((item) => {
           const selected = activeTab === item.id;
@@ -136,7 +137,7 @@ export function ExplanationTabs({
         })}
       </View>
       <View style={styles.explanationContent}>{children}</View>
-    </View>
+    </SurfaceCard>
   );
 }
 
@@ -361,7 +362,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.background,
   },
   header: {
-    minHeight: 64,
+    height: 56,
     paddingHorizontal: layout.horizontalPadding,
     flexDirection: 'row',
     alignItems: 'center',
@@ -396,11 +397,6 @@ const styles = StyleSheet.create({
     backgroundColor: palette.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.separator,
-    shadowColor: '#000000',
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
   },
   pressed: {
     opacity: 0.65,
@@ -468,14 +464,10 @@ const styles = StyleSheet.create({
     backgroundColor: palette.green,
   },
   explanationCard: {
-    borderRadius: layout.contentRadius,
-    backgroundColor: palette.surface,
-    borderWidth: 1,
-    borderColor: palette.separator,
     overflow: 'hidden',
   },
   tabRow: {
-    minHeight: 54,
+    height: 52,
     flexDirection: 'row',
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: palette.separator,
@@ -483,7 +475,7 @@ const styles = StyleSheet.create({
   },
   tabButton: {
     flex: 1,
-    minHeight: 54,
+    height: 52,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
@@ -511,7 +503,7 @@ const styles = StyleSheet.create({
     backgroundColor: palette.green,
   },
   explanationContent: {
-    padding: 16,
+    padding: 20,
   },
   resultOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -538,12 +530,12 @@ const styles = StyleSheet.create({
   },
   resultRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 12,
   },
   resultButton: {
     flex: 1,
-    minHeight: 52,
-    borderRadius: layout.controlRadius,
+    height: 56,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,

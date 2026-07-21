@@ -274,7 +274,7 @@ export function CustomModuleManagerModal({
                         <View style={styles.rowGrip}>
                           <MaterialIcons name="drag-indicator" size={22} color={colors.textMuted} />
                         </View>
-                        <View style={[styles.moduleIcon, { backgroundColor: moduleItem.color }]}>
+                        <View style={[styles.moduleIcon, { backgroundColor: colors.accent }]}>
                           <MaterialIcons name={moduleItem.icon as never} size={18} color={colors.white} />
                         </View>
                         <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.moduleName}>

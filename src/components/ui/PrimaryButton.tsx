@@ -1,6 +1,6 @@
 import { Pressable, StyleSheet, Text, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
 
-import { colors, radius, spacing, typography } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing } from '@/src/styles/tokens';
 
 export interface PrimaryButtonProps {
   title: string;
@@ -23,9 +23,9 @@ export function PrimaryButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
+        style,
         disabled && styles.buttonDisabled,
         pressed && !disabled && styles.buttonPressed,
-        style,
       ]}>
       <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={[styles.text, textStyle]}>
         {title}
@@ -36,26 +36,23 @@ export function PrimaryButton({
 
 const styles = StyleSheet.create({
   button: {
-    minHeight: 50,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
+    height: layout.primaryButtonHeight,
+    borderRadius: radius.lg,
+    backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.card,
   },
   buttonDisabled: {
-    opacity: 0.5,
+    backgroundColor: colors.accentDisabled,
   },
   buttonPressed: {
-    opacity: 0.9,
+    backgroundColor: colors.accentPressed,
   },
   text: {
-    ...typography.sectionTitle,
-    fontSize: 16,
+    fontSize: 17,
     lineHeight: 22,
-    color: colors.success,
+    fontWeight: '600',
+    color: colors.white,
   },
 });

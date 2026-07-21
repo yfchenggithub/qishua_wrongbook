@@ -5,11 +5,12 @@ import type {
   UpdateCustomModuleInput,
 } from '@/src/models/CustomModule';
 import { Logger } from '@/src/services/Logger';
+import { BRAND_ACCENT } from '@/src/styles/tokens';
 import { createRecordId } from '@/src/utils/id';
 
 const REPO_SCOPE = 'CustomModuleRepository';
 const DEFAULT_ICON = 'label';
-const DEFAULT_COLOR = '#2EBB61';
+const DEFAULT_COLOR = BRAND_ACCENT;
 
 type CountRow = {
   total: number | null;

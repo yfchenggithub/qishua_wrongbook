@@ -205,7 +205,7 @@ function buildStatusLabel(mistake: Mistake): string {
   }
 
   if (isDueTodayOrBefore(mistake.next_review_at)) {
-    return `待复做 第${buildReviewIndexLabel(mistake.review_count)}刷`;
+    return `待复做 · 第 ${buildReviewIndexLabel(mistake.review_count)} 刷`;
   }
   return '待安排';
 }
@@ -378,6 +378,7 @@ export async function getMistakeListItems(filter: MistakeListFilter): Promise<Mi
 export async function getMistakeListStats(): Promise<{
   total: number;
   collected: number;
+  active: number;
   due: number;
   mastered: number;
 }> {
@@ -387,6 +388,7 @@ export async function getMistakeListStats(): Promise<{
     const mappedStats = {
       total: stats.total,
       collected: stats.collected,
+      active: stats.active,
       due: stats.dueToday,
       mastered: stats.mastered,
     };

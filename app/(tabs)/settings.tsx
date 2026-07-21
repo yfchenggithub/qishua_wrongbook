@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AppToast, ScreenContainer } from '@/src/components';
+import { AppToast, PageHeader, PageShell, SectionHeader, SurfaceCard } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { APP_BUILD_DATE, APP_NAME } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
@@ -34,7 +34,7 @@ import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
 import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
-import { layout, spacing } from '@/src/styles/tokens';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
@@ -106,6 +106,7 @@ type EnhancePerformanceOption = {
 
 const DEFAULT_DATA_OVERVIEW_STATS: SettingsStats = {
   totalMistakes: 0,
+  pendingReview: 0,
   dueToday: 0,
   mastered: 0,
   totalReviews: 0,
@@ -275,11 +276,10 @@ function formatBackupCreatedAt(isoDateTime: string): string {
     return isoDateTime;
   }
 
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-    date.getDate(),
-  ).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(
-    date.getMinutes(),
-  ).padStart(2, '0')}:${String(date.getSeconds()).padStart(2, '0')}`;
+  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 ${String(date.getHours()).padStart(
+    2,
+    '0',
+  )}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 function toBackupFileShortInfo(name: string | null | undefined): string {
@@ -383,7 +383,7 @@ type SettingsIconName = ComponentProps<typeof MaterialIcons>['name'];
 function SettingsIcon({ name }: { name: SettingsIconName }) {
   return (
     <View style={styles.settingsIcon}>
-      <MaterialIcons color="#23A566" name={name} size={22} />
+      <MaterialIcons color={colors.accent} name={name} size={layout.iconSize} />
     </View>
   );
 }
@@ -397,8 +397,8 @@ function SettingsSection({
 }) {
   return (
     <View style={styles.section}>
-      {title ? <Text style={styles.sectionLabel}>{title}</Text> : null}
-      <View style={styles.settingsGroup}>{children}</View>
+      {title ? <SectionHeader title={title} variant="group" /> : null}
+      <SurfaceCard padding={0} style={styles.settingsGroup}>{children}</SurfaceCard>
     </View>
   );
 }
@@ -435,6 +435,7 @@ function SettingsRow({
       onPress={onPress}
       style={({ pressed }) => [
         styles.settingsRow,
+        subtitle ? styles.settingsRowMultiline : null,
         pressed && !disabled ? styles.settingsRowPressed : null,
         disabled ? styles.disabledButton : null,
       ]}>
@@ -444,7 +445,9 @@ function SettingsRow({
         {subtitle ? <Text numberOfLines={2} style={styles.settingsRowSubtitle}>{subtitle}</Text> : null}
       </View>
       {right ? <View style={styles.settingsRowRight}>{right}</View> : null}
-      {showChevron ? <MaterialIcons color="#A1A1A6" name="chevron-right" size={24} /> : null}
+      {showChevron ? (
+        <MaterialIcons color={colors.textTertiary} name="chevron-right" size={layout.chevronSize} />
+      ) : null}
     </Pressable>
   );
 }
@@ -1822,7 +1825,7 @@ export default function SettingsScreen() {
   const statsItems = useMemo(
     () => [
       { label: '已录入', value: displayNumber(dataOverview.totalMistakes) },
-      { label: '待复做', value: displayNumber(dataOverview.dueToday) },
+      { label: '待复做', value: displayNumber(dataOverview.pendingReview) },
       { label: '已掌握', value: displayNumber(dataOverview.mastered) },
       { label: '累计复做', value: displayNumber(dataOverview.totalReviews) },
     ],
@@ -1841,21 +1844,13 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer
+      <PageShell
         scroll
+        hasBottomTab
         safeAreaEdges={['top']}
         style={styles.screen}
         contentStyle={styles.screenContent}>
-        <View style={styles.pageHeader}>
-          <View style={styles.pageTitleRow}>
-            <Text accessibilityRole="header" style={styles.pageTitle}>设置</Text>
-            <View style={styles.offlineBadge}>
-              <View style={styles.offlineDot} />
-              <Text style={styles.offlineText}>离线</Text>
-            </View>
-          </View>
-          <Text style={styles.pageSubtitle}>所有数据仅保存在本机</Text>
-        </View>
+        <PageHeader showOffline subtitle="数据仅保存在本机" title="设置" />
 
         <SettingsSection>
           <View style={styles.backupPrimaryRow}>
@@ -1888,7 +1883,7 @@ export default function SettingsScreen() {
             disabled={isRestoreBusy}
             icon="restore"
             onPress={handleRestoreFromBackup}
-            right={isRestoreBusy ? <ActivityIndicator color="#23A566" size="small" /> : undefined}
+            right={isRestoreBusy ? <ActivityIndicator color={colors.accent} size="small" /> : undefined}
             showChevron={!isRestoreBusy}
             subtitle={isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : undefined}
             title="从备份文件恢复"
@@ -1919,7 +1914,7 @@ export default function SettingsScreen() {
                       pressed && canReSaveGeneratedBackup ? styles.settingsRowPressed : null,
                       !canReSaveGeneratedBackup ? styles.disabledButton : null,
                     ]}>
-                    <MaterialIcons color="#23A566" name="ios-share" size={18} />
+                    <MaterialIcons color={colors.accent} name="ios-share" size={18} />
                     <Text style={styles.inlineLinkText}>{reSaveBackupButtonText}</Text>
                   </Pressable>
                 </>
@@ -1946,7 +1941,7 @@ export default function SettingsScreen() {
                   void handleToggleReminder(nextValue);
                 }}
                 thumbColor="#FFFFFF"
-                trackColor={{ false: '#D1D1D6', true: '#23A566' }}
+                trackColor={{ false: '#D1D1D6', true: colors.accent }}
                 onTouchStart={(event) => event.stopPropagation()}
                 value={reminderSettings.enabled}
               />
@@ -1970,7 +1965,7 @@ export default function SettingsScreen() {
           />
           {shouldShowReminderPermissionNotice ? (
             <View style={styles.permissionNotice}>
-              <MaterialIcons color="#23A566" name="notifications-off" size={18} />
+              <MaterialIcons color={colors.accent} name="notifications-off" size={18} />
               <Text style={styles.permissionNoticeText}>通知权限未开启，暂时无法收到提醒</Text>
               <Pressable
                 accessibilityRole="button"
@@ -2000,7 +1995,7 @@ export default function SettingsScreen() {
               void handleCleanInvalidImages();
             }}
             right={isScanningOrphanImages || isCleaningOrphanImages
-              ? <ActivityIndicator color="#23A566" size="small" />
+              ? <ActivityIndicator color={colors.accent} size="small" />
               : undefined}
             showChevron={!isScanningOrphanImages && !isCleaningOrphanImages}
             title="清理无效图片"
@@ -2062,9 +2057,9 @@ export default function SettingsScreen() {
 
         <View style={styles.localDataNotice}>
           <MaterialIcons color="#8E8E93" name="lock-outline" size={17} />
-          <Text style={styles.localDataNoticeText}>数据只在本机，卸载 App 会删除本地数据</Text>
+          <Text style={styles.localDataNoticeText}>数据仅保存在本机，卸载 App 会删除本地数据</Text>
         </View>
-      </ScreenContainer>
+      </PageShell>
 
       <Modal
         animationType="slide"
@@ -2125,7 +2120,7 @@ export default function SettingsScreen() {
                               <Text style={styles.modeOptionDescription}>{option.description}</Text>
                             </View>
                             <MaterialIcons
-                              color={isSelected ? '#23A566' : '#C7C7CC'}
+                              color={isSelected ? colors.accent : '#C7C7CC'}
                               name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'}
                               size={22}
                             />
@@ -2259,7 +2254,7 @@ export default function SettingsScreen() {
                           实际待复做 {worksheetPendingCount} 题
                         </Text>
                       </View>
-                      <MaterialIcons color="#23A566" name="picture-as-pdf" size={26} />
+                      <MaterialIcons color={colors.accent} name="picture-as-pdf" size={26} />
                     </View>
                     <Pressable
                       accessibilityLabel={worksheetExportButtonText}
@@ -2349,8 +2344,8 @@ export default function SettingsScreen() {
                         isStorageBusy ? styles.disabledButton : null,
                       ]}>
                       {isClearingPrintEnhanceCache
-                        ? <ActivityIndicator color="#23A566" size="small" />
-                        : <MaterialIcons color="#23A566" name="cleaning-services" size={20} />}
+                        ? <ActivityIndicator color={colors.accent} size="small" />
+                        : <MaterialIcons color={colors.accent} name="cleaning-services" size={20} />}
                       <Text style={styles.secondarySheetButtonText}>
                         {isClearingPrintEnhanceCache ? '正在清理…' : '清理图片缓存'}
                       </Text>
@@ -2372,100 +2367,45 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
-    backgroundColor: '#F2F2F7',
+    backgroundColor: colors.pageBackground,
   },
   screen: {
-    backgroundColor: '#F2F2F7',
+    backgroundColor: colors.pageBackground,
   },
   screenContent: {
-    backgroundColor: '#F2F2F7',
-    paddingTop: 18,
-    paddingBottom: spacing.xl,
-    gap: 20,
-  },
-  pageHeader: {
-    gap: 4,
-    paddingHorizontal: 2,
-  },
-  pageTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  pageTitle: {
-    color: '#111111',
-    fontSize: 32,
-    lineHeight: 40,
-    fontWeight: '800',
-  },
-  pageSubtitle: {
-    color: '#6E6E73',
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
-  offlineBadge: {
-    minHeight: 30,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: '#B9DFC9',
-    backgroundColor: '#EAF7F0',
-    paddingHorizontal: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  offlineDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: '#23A566',
-  },
-  offlineText: {
-    color: '#23A566',
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '700',
+    backgroundColor: colors.pageBackground,
+    paddingTop: layout.headerTopPadding,
   },
   section: {
-    gap: 8,
-  },
-  sectionLabel: {
-    color: '#6E6E73',
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '600',
-    paddingHorizontal: 4,
+    gap: spacing.sm,
+    marginBottom: spacing.xxl,
   },
   settingsGroup: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E5E5EA',
-    backgroundColor: '#FFFFFF',
     overflow: 'hidden',
   },
   settingsIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#CBE8D8',
-    backgroundColor: '#EDF8F2',
+    width: layout.featureIconSize,
+    height: layout.featureIconSize,
+    borderRadius: radius.md,
+    backgroundColor: colors.accentSoft,
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
   settingsRow: {
-    minHeight: 62,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    minHeight: 64,
+    paddingHorizontal: spacing.card,
+    paddingVertical: spacing.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+  },
+  settingsRowMultiline: {
+    minHeight: 72,
   },
   settingsRowPressed: {
-    backgroundColor: '#F4F4F6',
+    backgroundColor: colors.surfaceMuted,
   },
   settingsRowText: {
     flex: 1,
@@ -2473,16 +2413,13 @@ const styles = StyleSheet.create({
     gap: 1,
   },
   settingsRowTitle: {
-    color: '#1C1C1E',
+    ...typography.cardTitle,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: '600',
   },
   settingsRowSubtitle: {
-    color: '#8E8E93',
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '500',
+    ...typography.meta,
+    color: colors.textSecondary,
   },
   settingsRowRight: {
     flexShrink: 1,
@@ -2491,11 +2428,11 @@ const styles = StyleSheet.create({
   },
   settingsDivider: {
     height: StyleSheet.hairlineWidth,
-    marginLeft: 66,
-    backgroundColor: '#E5E5EA',
+    marginLeft: 76,
+    backgroundColor: colors.separator,
   },
   rowValueText: {
-    color: '#8E8E93',
+    color: colors.textSecondary,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '500',
@@ -2503,11 +2440,11 @@ const styles = StyleSheet.create({
   },
   backupPrimaryRow: {
     minHeight: 88,
-    paddingHorizontal: 14,
+    paddingHorizontal: spacing.card,
     paddingVertical: 12,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: spacing.md,
   },
   backupPrimaryText: {
     flex: 1,
@@ -2515,21 +2452,20 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   backupPrimaryTitle: {
-    color: '#1C1C1E',
-    fontSize: 18,
-    lineHeight: 24,
+    ...typography.cardTitle,
     fontWeight: '700',
   },
   backupButton: {
     minWidth: 98,
     minHeight: 44,
-    borderRadius: 13,
+    height: layout.minimumTouchSize,
+    borderRadius: radius.md,
     paddingHorizontal: 13,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
-    backgroundColor: '#23A566',
+    backgroundColor: colors.accent,
     flexShrink: 0,
   },
   backupButtonText: {
@@ -2543,8 +2479,8 @@ const styles = StyleSheet.create({
   },
   inlineStatus: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
-    paddingHorizontal: 14,
+    borderTopColor: colors.separator,
+    paddingHorizontal: spacing.card,
     paddingVertical: 12,
     gap: 8,
     backgroundColor: '#FBFBFC',
@@ -2553,13 +2489,13 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   inlineStatusTitle: {
-    color: '#3A3A3C',
+    color: colors.textPrimary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',
   },
   inlineStatusMeta: {
-    color: '#8E8E93',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '500',
@@ -2567,12 +2503,12 @@ const styles = StyleSheet.create({
   progressTrack: {
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: colors.separator,
     overflow: 'hidden',
     flexDirection: 'row',
   },
   progressFill: {
-    backgroundColor: '#23A566',
+    backgroundColor: colors.accent,
   },
   inlineLinkButton: {
     alignSelf: 'flex-start',
@@ -2584,7 +2520,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   inlineLinkText: {
-    color: '#23A566',
+    color: colors.accent,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
@@ -2604,7 +2540,7 @@ const styles = StyleSheet.create({
   overviewDivider: {
     width: StyleSheet.hairlineWidth,
     marginVertical: 5,
-    backgroundColor: '#E5E5EA',
+    backgroundColor: colors.separator,
   },
   overviewStatContent: {
     flex: 1,
@@ -2615,14 +2551,14 @@ const styles = StyleSheet.create({
     gap: 5,
   },
   overviewLabel: {
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
     fontWeight: '500',
     textAlign: 'center',
   },
   overviewValue: {
-    color: '#23A566',
+    color: colors.accent,
     fontSize: 25,
     lineHeight: 30,
     fontWeight: '800',
@@ -2641,15 +2577,15 @@ const styles = StyleSheet.create({
   permissionNotice: {
     minHeight: 48,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5EA',
-    paddingHorizontal: 14,
+    borderTopColor: colors.separator,
+    paddingHorizontal: spacing.card,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
   permissionNoticeText: {
     flex: 1,
-    color: '#6E6E73',
+    color: colors.textSecondary,
     fontSize: 12,
     lineHeight: 17,
   },
@@ -2660,7 +2596,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   permissionActionText: {
-    color: '#23A566',
+    color: colors.accent,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
@@ -2680,7 +2616,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   localDataNoticeText: {
-    color: '#8E8E93',
+    color: colors.textSecondary,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '500',
@@ -2765,8 +2701,8 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   modeOptionSelected: {
-    borderColor: '#86CDA7',
-    backgroundColor: '#F2FAF5',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
   },
   modeOptionText: {
     flex: 1,
@@ -2780,7 +2716,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   modeOptionDescription: {
-    color: '#8E8E93',
+    color: colors.textTertiary,
     fontSize: 12,
     lineHeight: 17,
   },
@@ -2836,7 +2772,7 @@ const styles = StyleSheet.create({
   },
   segmentButtonSelected: {
     borderWidth: 1,
-    borderColor: '#B9DFC9',
+    borderColor: colors.accentBorder,
     backgroundColor: '#FFFFFF',
   },
   segmentButtonText: {
@@ -2847,7 +2783,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   segmentButtonTextSelected: {
-    color: '#23A566',
+    color: colors.accent,
   },
   controlDescription: {
     color: '#8E8E93',
@@ -2869,7 +2805,7 @@ const styles = StyleSheet.create({
   primarySheetButton: {
     minHeight: 48,
     borderRadius: 13,
-    backgroundColor: '#23A566',
+    backgroundColor: colors.accent,
     paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
@@ -2913,7 +2849,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   storageMetricValue: {
-    color: '#23A566',
+    color: colors.accent,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '700',
@@ -2928,8 +2864,8 @@ const styles = StyleSheet.create({
     minHeight: 48,
     borderRadius: 13,
     borderWidth: 1,
-    borderColor: '#B9DFC9',
-    backgroundColor: '#F2FAF5',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
     paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
@@ -2937,7 +2873,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   secondarySheetButtonText: {
-    color: '#23A566',
+    color: colors.accent,
     fontSize: 14,
     lineHeight: 20,
     fontWeight: '700',

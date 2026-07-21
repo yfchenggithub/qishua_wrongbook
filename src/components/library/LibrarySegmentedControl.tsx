@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { colors, radius, spacing } from '@/src/styles/tokens';
 
@@ -12,15 +12,17 @@ interface LibrarySegmentedControlProps<TValue extends string> {
   options: readonly LibrarySegmentOption<TValue>[];
   value: TValue | null;
   onChange: (value: TValue) => void;
+  style?: StyleProp<ViewStyle>;
 }
 
 export function LibrarySegmentedControl<TValue extends string>({
   options,
   value,
   onChange,
+  style,
 }: LibrarySegmentedControlProps<TValue>) {
   return (
-    <View accessibilityRole="tablist" style={styles.track}>
+    <View accessibilityRole="tablist" style={[styles.track, style]}>
       {options.map((option) => {
         const selected = option.value === value;
         return (
@@ -51,7 +53,7 @@ export function LibrarySegmentedControl<TValue extends string>({
 
 const styles = StyleSheet.create({
   track: {
-    minHeight: 52,
+    height: 44,
     flexDirection: 'row',
     padding: spacing.xs,
     borderRadius: radius.lg,
@@ -60,7 +62,7 @@ const styles = StyleSheet.create({
   item: {
     flex: 1,
     minWidth: 0,
-    minHeight: 44,
+    minHeight: 36,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.xs,

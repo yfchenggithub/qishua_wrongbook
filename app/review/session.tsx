@@ -24,7 +24,6 @@ import {
   AppToast,
   type AppToastType,
   calculateImagePreviewHeight,
-  CardContainer,
   ExplanationTabs,
   ImagePreviewModal,
   type ImagePreviewModalImageActionItem,
@@ -34,7 +33,8 @@ import {
   ReviewHeader,
   ReviewProgress,
   ReviewResultBar,
-  ScreenContainer,
+  PageShell,
+  SurfaceCard,
   TextNoteEditorModal,
   TextNotePreview,
   type ExplanationTab,
@@ -680,7 +680,7 @@ function QuestionImageCard({
   const loadFailed = hasUri && slot?.exists === true && imageFailed;
 
   return (
-    <CardContainer style={styles.questionCard} padding={0}>
+    <SurfaceCard style={styles.questionCard} padding={0}>
       <View style={styles.questionHeading}>
         <Text accessibilityRole="header" style={styles.questionMainTitle}>{title}</Text>
         <View style={styles.questionMetaRow}>
@@ -745,7 +745,7 @@ function QuestionImageCard({
         {fileMissing ? <Text style={styles.questionErrorText}>题目图片文件不存在</Text> : null}
         {loadFailed ? <Text style={styles.questionErrorText}>题目图片加载失败</Text> : null}
       </View>
-    </CardContainer>
+    </SurfaceCard>
   );
 }
 
@@ -3144,7 +3144,7 @@ export default function ReviewSessionPage() {
         onExit={handleRequestExit}
         onOpenFilter={() => setModuleFilterSheetVisible(true)}
       />
-      <ScreenContainer
+      <PageShell
         scroll
         scrollRef={sessionScrollRef}
         safeAreaEdges={['bottom']}
@@ -3157,14 +3157,14 @@ export default function ReviewSessionPage() {
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}>
         {sessionState === 'loading' ? (
-          <CardContainer style={styles.stateCard} padding={spacing.lg}>
+          <SurfaceCard style={styles.stateCard} padding={spacing.lg}>
             <ActivityIndicator size="small" color={colors.textPrimary} />
             <Text style={styles.stateText}>正在加载今日复做队列...</Text>
-          </CardContainer>
+          </SurfaceCard>
         ) : null}
 
         {sessionState === 'error' ? (
-          <CardContainer style={styles.stateCard} padding={spacing.lg}>
+          <SurfaceCard style={styles.stateCard} padding={spacing.lg}>
             <Text style={styles.stateTitle}>加载失败</Text>
             <Text style={styles.stateText}>{sessionErrorMessage ?? '读取今日复做队列失败。'}</Text>
             <View style={styles.stateActionRow}>
@@ -3176,19 +3176,19 @@ export default function ReviewSessionPage() {
                 textStyle={styles.stateActionButtonLightText}
               />
             </View>
-          </CardContainer>
+          </SurfaceCard>
         ) : null}
 
         {sessionState === 'empty' ? (
-          <CardContainer style={styles.stateCard} padding={spacing.lg}>
+          <SurfaceCard style={styles.stateCard} padding={spacing.lg}>
             <Text style={styles.stateTitle}>今天没有需要复做的错题</Text>
             <Text style={styles.stateText}>可以先去新增错题，系统会自动安排下一次复做。</Text>
             <PrimaryButton title="返回首页" onPress={navigateHome} />
-          </CardContainer>
+          </SurfaceCard>
         ) : null}
 
         {isCompleted ? (
-          <CardContainer style={styles.completeCard} padding={spacing.xl}>
+          <SurfaceCard style={styles.completeCard} padding={spacing.xl}>
             <Text style={styles.completeTitle}>今日复做完成</Text>
             <Text style={styles.completeSubtitle}>今天一共完成 {totalCount} 道题</Text>
             <View style={styles.completeStatsRow}>
@@ -3206,7 +3206,7 @@ export default function ReviewSessionPage() {
               </View>
             </View>
             <PrimaryButton title="返回首页" onPress={navigateHome} />
-          </CardContainer>
+          </SurfaceCard>
         ) : null}
 
         {sessionState === 'ready' && !isCompleted ? (
@@ -3220,14 +3220,14 @@ export default function ReviewSessionPage() {
               />
             ) : null}
             {canShowCurrentReviewContent && isLoadingCurrent ? (
-              <CardContainer style={styles.stateCard} padding={spacing.lg}>
+              <SurfaceCard style={styles.stateCard} padding={spacing.lg}>
                 <ActivityIndicator size="small" color={colors.textPrimary} />
                 <Text style={styles.stateText}>正在加载当前题目...</Text>
-              </CardContainer>
+              </SurfaceCard>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && currentErrorMessage ? (
-              <CardContainer style={styles.stateCard} padding={spacing.lg}>
+              <SurfaceCard style={styles.stateCard} padding={spacing.lg}>
                 <Text style={styles.stateTitle}>当前题加载失败</Text>
                 <Text style={styles.stateText}>{currentErrorMessage}</Text>
                 <View style={styles.stateActionRow}>
@@ -3246,7 +3246,7 @@ export default function ReviewSessionPage() {
                     textStyle={styles.stateActionButtonLightText}
                   />
                 </View>
-              </CardContainer>
+              </SurfaceCard>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
@@ -3446,7 +3446,7 @@ export default function ReviewSessionPage() {
 
           </>
         ) : null}
-      </ScreenContainer>
+      </PageShell>
 
       <TodayQuestionListSheet
         visible={questionListVisible}
@@ -3563,7 +3563,7 @@ const styles = StyleSheet.create({
   },
   screenContent: {
     paddingTop: 0,
-    gap: spacing.lg,
+    gap: spacing.md,
     backgroundColor: reviewPalette.background,
   },
   floatingAnchorWrap: {
@@ -3586,7 +3586,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.success,
-    backgroundColor: '#FBFFFC',
+    backgroundColor: colors.accentSoft,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
@@ -3634,7 +3634,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#DCFCE7',
+    backgroundColor: colors.accentSoft,
   },
   moduleFilterCard: {
     borderRadius: radius.xl,
@@ -3670,8 +3670,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   moduleFilterChipSelected: {
-    borderColor: '#BBF7D0',
-    backgroundColor: '#DCFCE7',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
   },
   moduleFilterChipPressed: {
     opacity: 0.78,
@@ -3727,8 +3727,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
   },
   moduleFilterSheetChipSelected: {
-    borderColor: '#22C55E',
-    backgroundColor: '#DCFCE7',
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
   },
   moduleFilterHint: {
     ...typography.caption,
@@ -3781,7 +3781,7 @@ const styles = StyleSheet.create({
     ...typography.titleLarge,
     fontSize: 48,
     lineHeight: 54,
-    color: '#059669',
+    color: colors.accent,
     fontWeight: '800',
   },
   progressNumberSlash: {
@@ -3789,26 +3789,26 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.xs,
     fontSize: 28,
     lineHeight: 34,
-    color: '#059669',
+    color: colors.accent,
     fontWeight: '700',
   },
   progressNumberTotal: {
     ...typography.titleLarge,
     fontSize: 40,
     lineHeight: 46,
-    color: '#059669',
+    color: colors.accent,
     fontWeight: '800',
   },
   reviewPill: {
     alignSelf: 'center',
     borderRadius: radius.pill,
-    backgroundColor: '#DCFCE7',
+    backgroundColor: colors.accentSoft,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
   },
   reviewPillText: {
     ...typography.bodySmall,
-    color: '#166534',
+    color: colors.accent,
     fontWeight: '700',
   },
   progressDivider: {
@@ -3860,7 +3860,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   questionCard: {
-    borderRadius: 22,
+    borderRadius: radius.card,
     borderColor: reviewPalette.separator,
     backgroundColor: reviewPalette.surface,
     overflow: 'hidden',
@@ -3868,7 +3868,7 @@ const styles = StyleSheet.create({
     elevation: 0,
   },
   questionHeading: {
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.card,
     paddingTop: 20,
     paddingBottom: spacing.md,
     gap: spacing.xs,
@@ -3918,8 +3918,8 @@ const styles = StyleSheet.create({
   },
   questionImageWrap: {
     alignSelf: 'stretch',
-    marginHorizontal: spacing.lg,
-    marginBottom: spacing.lg,
+    marginHorizontal: spacing.card,
+    marginBottom: spacing.card,
     borderRadius: 16,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: reviewPalette.separator,
@@ -4064,8 +4064,8 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
   },
   solutionActionButtonPrimary: {
-    borderColor: '#BBF7D0',
-    backgroundColor: '#F0FDF4',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
   },
   solutionActionButtonPressed: {
     opacity: 0.78,
@@ -4345,8 +4345,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   resultButtonKnown: {
-    backgroundColor: '#22C55E',
-    borderColor: '#16A34A',
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   resultButtonFuzzy: {
     backgroundColor: '#F59E0B',
@@ -4532,8 +4532,8 @@ const styles = StyleSheet.create({
   },
   questionListRowSelected: {
     borderWidth: 1,
-    borderColor: '#22C55E',
-    backgroundColor: '#DCFCE7',
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
   },
   questionListRowPressed: {
     opacity: 0.78,
@@ -4545,7 +4545,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   questionListCurrentMarkerActive: {
-    backgroundColor: '#16A34A',
+    backgroundColor: colors.accent,
   },
   questionListItemTitle: {
     ...typography.bodySmall,
@@ -4555,12 +4555,12 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   questionListItemTitleSelected: {
-    color: '#065F46',
+    color: colors.accent,
   },
   questionListCurrentBadge: {
     height: 24,
     borderRadius: radius.pill,
-    backgroundColor: '#16A34A',
+    backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.sm,
@@ -4578,7 +4578,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   questionListReviewTextSelected: {
-    color: '#065F46',
+    color: colors.accent,
     fontWeight: '800',
   },
   questionListStatusText: {
@@ -4598,7 +4598,7 @@ const styles = StyleSheet.create({
     color: '#F59E0B',
   },
   questionListStatusMastered: {
-    color: '#16A34A',
+    color: colors.accent,
   },
   disabledControl: {
     opacity: 0.6,

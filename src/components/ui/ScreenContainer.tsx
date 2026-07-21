@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, type Edge } from 'react-native-safe-area-context';
 
-import { colors, spacing } from '@/src/styles/tokens';
+import { colors, layout, spacing } from '@/src/styles/tokens';
 
 export interface ScreenContainerProps {
   children: ReactNode;
@@ -28,9 +28,10 @@ export interface ScreenContainerProps {
   onTouchEnd?: ScrollViewProps['onTouchEnd'];
   scrollRef?: Ref<ScrollView>;
   scrollEventThrottle?: number;
+  hasBottomTab?: boolean;
 }
 
-export function ScreenContainer({
+export function PageShell({
   children,
   scroll = false,
   withPadding = true,
@@ -47,6 +48,7 @@ export function ScreenContainer({
   onTouchEnd,
   scrollRef,
   scrollEventThrottle = 16,
+  hasBottomTab = false,
 }: ScreenContainerProps) {
   return (
     <SafeAreaView edges={safeAreaEdges} style={[styles.safeArea, style]}>
@@ -54,7 +56,12 @@ export function ScreenContainer({
         <ScrollView
           ref={scrollRef}
           style={styles.flex}
-          contentContainerStyle={[styles.contentBase, withPadding && styles.padded, contentStyle]}
+          contentContainerStyle={[
+            styles.contentBase,
+            withPadding && styles.padded,
+            withPadding && hasBottomTab && styles.withBottomTab,
+            contentStyle,
+          ]}
           showsVerticalScrollIndicator={showsVerticalScrollIndicator}
           onScroll={onScroll}
           onContentSizeChange={onContentSizeChange}
@@ -67,7 +74,14 @@ export function ScreenContainer({
           {children}
         </ScrollView>
       ) : (
-        <View style={[styles.flex, styles.contentBase, withPadding && styles.padded, contentStyle]}>
+        <View
+          style={[
+            styles.flex,
+            styles.contentBase,
+            withPadding && styles.padded,
+            withPadding && hasBottomTab && styles.withBottomTab,
+            contentStyle,
+          ]}>
           {children}
         </View>
       )}
@@ -75,19 +89,25 @@ export function ScreenContainer({
   );
 }
 
+/** @deprecated Prefer PageShell for new page-level layouts. */
+export const ScreenContainer = PageShell;
+
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: colors.pageBackground,
   },
   flex: {
     flex: 1,
   },
   contentBase: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.pageBackground,
   },
   padded: {
     paddingHorizontal: spacing.screenPadding,
     paddingBottom: spacing.xl,
+  },
+  withBottomTab: {
+    paddingBottom: layout.bottomTabHeight + spacing.xxl,
   },
 });

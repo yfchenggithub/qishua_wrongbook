@@ -6,16 +6,16 @@
 import { Platform } from 'react-native';
 import { colors } from '@/src/styles/tokens';
 
-const tintColorLight = colors.black;
+const tintColorLight = colors.accent;
 const tintColorDark = '#fff';
 
 export const Colors = {
   light: {
     text: colors.textPrimary,
-    background: colors.background,
+    background: colors.pageBackground,
     tint: tintColorLight,
     icon: colors.textSecondary,
-    tabIconDefault: colors.textMuted,
+    tabIconDefault: colors.textTertiary,
     tabIconSelected: tintColorLight,
   },
   dark: {

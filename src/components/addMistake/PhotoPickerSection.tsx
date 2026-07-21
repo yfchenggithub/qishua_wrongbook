@@ -2,11 +2,8 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import type { LocalImage } from '@/src/models/LocalImage';
-
-const GREEN = '#34C759';
-const TEXT = '#1C1C1E';
-const SECONDARY = '#8E8E93';
-const BORDER = '#E5E5EA';
+import { SurfaceCard } from '@/src/components/ui/CardContainer';
+import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 export interface PhotoPickerSectionProps {
   images: LocalImage[];
@@ -36,10 +33,10 @@ export function PhotoPickerSection({
   onPreview,
 }: PhotoPickerSectionProps) {
   return (
-    <View style={[styles.container, compact && styles.containerCompact]}>
+    <SurfaceCard padding={0} style={[styles.container, compact && styles.containerCompact]}>
       {images.length === 0 ? (
         <View style={[styles.empty, compact && styles.emptyCompact]}>
-          <MaterialIcons name={icon} size={compact ? 40 : 54} color={SECONDARY} />
+          <MaterialIcons name={icon} size={compact ? 40 : 54} color={colors.textTertiary} />
           <Text style={styles.emptyTitle}>{emptyTitle}</Text>
           <Text style={styles.emptySubtitle}>{emptySubtitle}</Text>
         </View>
@@ -74,7 +71,7 @@ export function PhotoPickerSection({
                     disabled={busy || index === 0}
                     onPress={() => onMove(index, index - 1)}
                     style={({ pressed }) => [styles.reorderButton, (pressed || index === 0) && styles.dimmed]}>
-                    <MaterialIcons name="chevron-left" size={20} color={TEXT} />
+                    <MaterialIcons name="chevron-left" size={20} color={colors.textPrimary} />
                   </Pressable>
                   <Pressable
                     accessibilityLabel={`将第 ${index + 1} 张后移`}
@@ -84,7 +81,7 @@ export function PhotoPickerSection({
                       styles.reorderButton,
                       (pressed || index === images.length - 1) && styles.dimmed,
                     ]}>
-                    <MaterialIcons name="chevron-right" size={20} color={TEXT} />
+                    <MaterialIcons name="chevron-right" size={20} color={colors.textPrimary} />
                   </Pressable>
                 </View>
               ) : null}
@@ -95,7 +92,7 @@ export function PhotoPickerSection({
             disabled={busy}
             onPress={onTakePhoto}
             style={({ pressed }) => [styles.addMore, pressed && styles.pressed, busy && styles.dimmed]}>
-            <MaterialIcons name="add-a-photo" size={28} color={GREEN} />
+            <MaterialIcons name="add-a-photo" size={28} color={colors.accent} />
             <Text style={styles.addMoreText}>继续添加</Text>
           </Pressable>
         </ScrollView>
@@ -107,7 +104,7 @@ export function PhotoPickerSection({
           disabled={busy}
           onPress={onTakePhoto}
           style={({ pressed }) => [styles.action, pressed && styles.pressed, busy && styles.dimmed]}>
-          <MaterialIcons name="photo-camera" size={21} color={GREEN} />
+          <MaterialIcons name="photo-camera" size={21} color={colors.accent} />
           <Text style={[styles.actionText, styles.greenText]}>拍照</Text>
         </Pressable>
         <View style={styles.divider} />
@@ -116,36 +113,36 @@ export function PhotoPickerSection({
           disabled={busy}
           onPress={onPickImages}
           style={({ pressed }) => [styles.action, pressed && styles.pressed, busy && styles.dimmed]}>
-          <MaterialIcons name="photo-library" size={21} color={SECONDARY} />
+          <MaterialIcons name="photo-library" size={21} color={colors.textSecondary} />
           <Text style={styles.actionText}>从相册选择</Text>
         </Pressable>
       </View>
-    </View>
+    </SurfaceCard>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { overflow: 'hidden', borderRadius: 18, borderWidth: 1, borderColor: BORDER, backgroundColor: '#FFFFFF' },
-  containerCompact: { borderRadius: 16 },
+  container: { overflow: 'hidden' },
+  containerCompact: { borderRadius: radius.lg },
   empty: { minHeight: 230, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
   emptyCompact: { minHeight: 170 },
-  emptyTitle: { marginTop: 4, color: TEXT, fontSize: 19, fontWeight: '700' },
-  emptySubtitle: { color: SECONDARY, fontSize: 14, textAlign: 'center' },
+  emptyTitle: { ...typography.cardTitle, marginTop: spacing.xs },
+  emptySubtitle: { ...typography.body, color: colors.textSecondary, textAlign: 'center' },
   thumbnails: { minHeight: 178, padding: 14, alignItems: 'flex-start', gap: 12 },
   thumbnailItem: { width: 126 },
-  thumbnail: { width: 126, height: 126, borderRadius: 12, backgroundColor: '#F2F2F7' },
+  thumbnail: { width: 126, height: 126, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
   orderBadge: { position: 'absolute', left: 7, bottom: 7, minWidth: 24, height: 24, borderRadius: 12, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,28,30,0.72)' },
   orderText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   deleteButton: { position: 'absolute', right: -7, top: -7, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,28,30,0.82)' },
   reorderRow: { marginTop: 7, flexDirection: 'row', justifyContent: 'center', gap: 8 },
-  reorderButton: { width: 44, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F2F2F7' },
-  addMore: { width: 112, height: 126, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1, borderStyle: 'dashed', borderColor: '#B7E7C6', backgroundColor: '#F7FCF8' },
-  addMoreText: { color: GREEN, fontSize: 13, fontWeight: '600' },
-  actions: { minHeight: 58, flexDirection: 'row', alignItems: 'stretch', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER },
+  reorderButton: { width: 44, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
+  addMore: { width: 112, height: 126, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.accentBorder, backgroundColor: colors.accentSoft },
+  addMoreText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  actions: { minHeight: 58, flexDirection: 'row', alignItems: 'stretch', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator },
   action: { flex: 1, minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
-  actionText: { color: TEXT, fontSize: 16, fontWeight: '600' },
-  greenText: { color: GREEN },
-  divider: { width: StyleSheet.hairlineWidth, marginVertical: 12, backgroundColor: BORDER },
+  actionText: { color: colors.textPrimary, fontSize: 16, fontWeight: '600' },
+  greenText: { color: colors.accent },
+  divider: { width: StyleSheet.hairlineWidth, marginVertical: 12, backgroundColor: colors.separator },
   pressed: { opacity: 0.55 },
   dimmed: { opacity: 0.35 },
 });

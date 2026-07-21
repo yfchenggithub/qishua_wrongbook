@@ -22,9 +22,10 @@ import {
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import { MAX_CUSTOM_ERROR_REASON_NAME_LENGTH } from '@/src/services/CustomErrorReasonService';
+import { colors } from '@/src/styles/tokens';
 import { PhotoPickerSection } from './PhotoPickerSection';
 
-const GREEN = '#34C759';
+const GREEN = colors.accent;
 const TEXT = '#1C1C1E';
 const SECONDARY = '#8E8E93';
 const BORDER = '#E5E5EA';
@@ -221,7 +222,7 @@ export function OptionalInfoSheet({
           ) : screen === 'answer' ? (
             <SupplementContentEditor
               title="答案／解析"
-              helpText="保存标准答案或讲解，复习时按需查看"
+              helpText="保存标准答案或讲解，复做时按需查看"
               imageSectionTitle="解析图片（可选）"
               emptyTitle="添加答案或解析图片"
               textSectionTitle="文字解析（可选）"
@@ -372,7 +373,7 @@ const DIFFICULTY_HELP: Record<number, string> = { 1: '看一眼就会', 2: '只�
 function DifficultyPicker({ value, onChange }: { value: number; onChange: (value: number) => void }) {
   return (
     <ScrollView style={styles.flex} contentContainerStyle={styles.editorContent}>
-      <Text style={styles.screenHelp}>用于安排后续复习强度</Text>
+      <Text style={styles.screenHelp}>用于安排后续复做强度</Text>
       <View style={styles.selectionList}>
         {DIFFICULTY_OPTIONS.map((option, index) => {
           const selected = value === option.value;
@@ -440,7 +441,7 @@ const styles = StyleSheet.create({
   selectionCount: { marginBottom: 9, marginLeft: 4, color: SECONDARY, fontSize: 14 },
   selectionList: { overflow: 'hidden', borderRadius: 16, backgroundColor: '#FFFFFF' },
   selectionRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10 },
-  selectedRow: { backgroundColor: '#EAF8EE' },
+  selectedRow: { backgroundColor: colors.accentSoft },
   selectionLabel: { flex: 1, color: TEXT, fontSize: 17, fontWeight: '600' },
   customMark: { color: SECONDARY, fontSize: 12 },
   checkCircle: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#C7C7CC' },

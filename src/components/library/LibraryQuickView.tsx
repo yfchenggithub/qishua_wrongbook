@@ -3,6 +3,7 @@ import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius, spacing } from '@/src/styles/tokens';
+import { SurfaceCard } from '@/src/components/ui/CardContainer';
 
 export interface LibraryQuickViewOption<TValue extends string> {
   value: TValue;
@@ -24,7 +25,7 @@ export function LibraryQuickView<TValue extends string>({
   onChange,
 }: LibraryQuickViewProps<TValue>) {
   return (
-    <View style={styles.container}>
+    <SurfaceCard padding={0} style={styles.container}>
       {options.map((option, index) => {
         const selected = option.value === value;
         const iconColor = option.tone === 'danger' && !selected
@@ -69,7 +70,7 @@ export function LibraryQuickView<TValue extends string>({
           </View>
         );
       })}
-    </View>
+    </SurfaceCard>
   );
 }
 
@@ -78,8 +79,6 @@ const styles = StyleSheet.create({
     minHeight: 84,
     flexDirection: 'row',
     overflow: 'hidden',
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
   },
   itemSlot: {
     flex: 1,

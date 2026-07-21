@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { SurfaceCard } from '@/src/components/ui/CardContainer';
 import { colors, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 import { reviewSessionColors as reviewPalette } from '@/src/styles/reviewSessionTokens';
 
@@ -438,11 +439,12 @@ export function MusicMiniPlayer({ onOpen }: { onOpen: () => void }) {
   } = useMusic();
 
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel="打开复做背景音乐"
-      onPress={onOpen}
-      style={({ pressed }) => [styles.miniPlayer, pressed && styles.modeRowPressed]}>
+    <SurfaceCard padding={0} style={styles.miniCard}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="打开复做背景音乐"
+        onPress={onOpen}
+        style={({ pressed }) => [styles.miniPlayer, pressed && styles.modeRowPressed]}>
       <View style={styles.miniCover}>
         <MaterialIcons name="music-note" size={22} color={reviewPalette.green} />
       </View>
@@ -492,7 +494,8 @@ export function MusicMiniPlayer({ onOpen }: { onOpen: () => void }) {
         style={styles.miniControl}>
         <MaterialIcons name="skip-next" size={23} color={reviewPalette.textPrimary} />
       </Pressable>
-    </Pressable>
+      </Pressable>
+    </SurfaceCard>
   );
 }
 
@@ -505,11 +508,11 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#DDF5E7',
+    borderColor: colors.accentBorder,
     ...shadows.card,
   },
   entryButtonPlaying: {
-    backgroundColor: '#ECFDF3',
+    backgroundColor: colors.accentSoft,
   },
   entryButtonPressed: {
     opacity: 0.72,
@@ -568,8 +571,8 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   modeRowSelected: {
-    borderColor: '#BBF7D0',
-    backgroundColor: '#F0FDF4',
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
   },
   modeRowPressed: {
     opacity: 0.72,
@@ -583,7 +586,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#F1F5F9',
   },
   modeIconSelected: {
-    backgroundColor: '#DCFCE7',
+    backgroundColor: colors.accentSoft,
   },
   modeTextWrap: {
     flex: 1,
@@ -631,7 +634,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EAFBF0',
+    backgroundColor: colors.accentSoft,
   },
   trackTextWrap: {
     flex: 1,
@@ -656,7 +659,7 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   loopButtonSelected: {
-    backgroundColor: '#ECFDF3',
+    backgroundColor: colors.accentSoft,
   },
   loopText: {
     fontSize: 12,
@@ -743,7 +746,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   playlistRowSelected: {
-    backgroundColor: '#F0FDF4',
+    backgroundColor: colors.accentSoft,
   },
   playlistTrackName: {
     flex: 1,
@@ -768,16 +771,15 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: '700',
   },
+  miniCard: {
+    overflow: 'hidden',
+  },
   miniPlayer: {
     minHeight: 60,
-    borderRadius: radius.lg,
-    backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing.md,
     gap: spacing.sm,
-    borderWidth: 1,
-    borderColor: reviewPalette.separator,
   },
   miniCover: {
     width: 40,

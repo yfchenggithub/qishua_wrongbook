@@ -7,6 +7,7 @@ const SERVICE_SCOPE = 'SettingsStatsService';
 
 export type SettingsStats = {
   totalMistakes: number;
+  pendingReview: number;
   dueToday: number;
   mastered: number;
   totalReviews: number;
@@ -54,6 +55,7 @@ export async function loadSettingsStats(): Promise<SettingsStats> {
 
     const stats: SettingsStats = {
       totalMistakes: mistakeStats.total,
+      pendingReview: mistakeStats.active,
       dueToday,
       mastered: mistakeStats.mastered,
       totalReviews,
@@ -65,6 +67,7 @@ export async function loadSettingsStats(): Promise<SettingsStats> {
     Logger.info(SERVICE_SCOPE, 'Loaded settings stats successfully.', {
       elapsedMs: Date.now() - startedAt,
       totalMistakes: stats.totalMistakes,
+      pendingReview: stats.pendingReview,
       dueToday: stats.dueToday,
       mastered: stats.mastered,
       totalReviews: stats.totalReviews,

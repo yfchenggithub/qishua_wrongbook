@@ -11,7 +11,6 @@ import {
   View,
 } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   AddMistakeProgress,
@@ -22,7 +21,12 @@ import {
   ModulePickerSheet,
   type ModulePickerOption,
   OptionalInfoSheet,
+  PageHeader,
+  PageShell,
   PhotoPickerSection,
+  PrimaryButton,
+  SectionHeader,
+  SurfaceCard,
 } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { ERROR_REASON_OPTIONS, MODULE_OPTIONS } from '@/src/constants/mistakeOptions';
@@ -43,13 +47,9 @@ import {
 } from '@/src/services/ImageService';
 import { setAddScreenHasUnsavedPhotos } from '@/src/services/LeaveGuardService';
 import { Logger } from '@/src/services/Logger';
+import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'AddScreen';
-const GREEN = '#34C759';
-const TEXT = '#1C1C1E';
-const SECONDARY = '#8E8E93';
-const BORDER = '#E5E5EA';
-const BACKGROUND = '#F2F2F7';
 const MAX_IMAGES_PER_TYPE = 20;
 
 type SharedImageSearchParams = {
@@ -94,7 +94,6 @@ function allOptionalImages(draft: AddMistakeDraft): LocalImage[] {
 }
 
 export default function AddScreen() {
-  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const params = useLocalSearchParams<SharedImageSearchParams>();
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
@@ -107,6 +106,9 @@ export default function AddScreen() {
   const [recentModuleNames, setRecentModuleNames] = useState<string[]>([]);
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [bottomBarHeight, setBottomBarHeight] = useState(
+    layout.primaryButtonHeight + layout.minimumTouchSize,
+  );
   const [preview, setPreview] = useState<{ image: LocalImage; title: string } | null>(null);
   const lastSharedKeyRef = useRef<string | null>(null);
   const lastSharedErrorKeyRef = useRef<string | null>(null);
@@ -124,7 +126,7 @@ export default function AddScreen() {
       ? '请选择所属模块'
       : imageBusy
         ? '图片处理中，请稍候'
-        : '仅保存在本机';
+        : '数据仅保存在本机';
 
   const moduleOptions = useMemo<ModulePickerOption[]>(() => [
     ...MODULE_OPTIONS.map((item) => ({ id: item.id, label: item.label })),
@@ -365,8 +367,8 @@ export default function AddScreen() {
       setPreview(null);
       showToast(
         count > 1
-          ? `已保存 ${count} 道${saveDraft.joinReviewPlan ? '并加入 7 刷' : '到题库'}`
-          : saveDraft.joinReviewPlan ? '保存成功，已加入 7 刷' : '保存成功，已加入题库',
+          ? `已保存 ${count} 道${saveDraft.joinReviewPlan ? '并加入七刷' : '到题库'}`
+          : saveDraft.joinReviewPlan ? '保存成功，已加入七刷' : '保存成功，已加入题库',
         'success',
         2400,
       );
@@ -413,19 +415,17 @@ export default function AddScreen() {
     });
   }, [busy, draft.draftId, draft.questionImages.length, runImageAction, sharedNonce, sharedUri, showToast]);
 
-  const bottomBarHeight = 116 + Math.max(insets.bottom, 8);
-
   return (
-    <View style={styles.root}>
+    <PageShell hasBottomTab safeAreaEdges={['top']} withPadding={false} style={styles.root}>
       <ScrollView
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 14), paddingBottom: bottomBarHeight + 22 }]}>
-        <Text style={styles.pageTitle}>新增错题</Text>
+        contentContainerStyle={[styles.content, { paddingBottom: bottomBarHeight + spacing.xl }]}>
+        <PageHeader title="新增错题" />
         <AddMistakeProgress stage={stage} />
 
         <View style={styles.sectionHeading}>
-          <Text style={styles.sectionTitle}>题目照片</Text>
+          <SectionHeader title="题目照片" />
           <Text style={styles.sectionHelp}>先添加题目照片，其他信息稍后再补</Text>
         </View>
         <PhotoPickerSection
@@ -444,7 +444,7 @@ export default function AddScreen() {
         />
         {draft.questionImages.length > 1 ? <Text style={styles.batchHint}>当前按原有批量规则保存为 {draft.questionImages.length} 道错题，顺序决定题号。</Text> : null}
 
-        <View style={styles.infoList}>
+        <SurfaceCard padding={0} style={styles.infoList}>
           <InfoRow
             icon="layers"
             title="所属模块"
@@ -461,33 +461,35 @@ export default function AddScreen() {
             onPress={openOptionalSheet}
           />
           <View style={[styles.infoRow, styles.infoBorder]}>
-            <View style={styles.infoIcon}><MaterialIcons name="event-available" size={24} color={draft.joinReviewPlan ? GREEN : SECONDARY} /></View>
+            <View style={styles.infoIcon}><MaterialIcons name="event-available" size={layout.iconSize} color={draft.joinReviewPlan ? colors.accent : colors.textSecondary} /></View>
             <View style={styles.infoCopy}>
-              <Text style={styles.infoTitle}>同时加入 7 刷</Text>
-              <Text style={styles.infoSubtitle}>按复习节奏加入今日计划</Text>
+              <Text style={styles.infoTitle}>同时加入七刷</Text>
+              <Text style={styles.infoSubtitle}>按复做节奏加入今日计划</Text>
             </View>
             <Switch
-              accessibilityLabel="同时加入 7 刷"
+              accessibilityLabel="同时加入七刷"
               disabled={busy}
               onValueChange={(joinReviewPlan) => setDraft((current) => ({ ...current, joinReviewPlan }))}
               thumbColor="#FFFFFF"
-              trackColor={{ false: '#D1D1D6', true: GREEN }}
+              trackColor={{ false: '#D1D1D6', true: colors.accent }}
               value={draft.joinReviewPlan}
             />
           </View>
-        </View>
+        </SurfaceCard>
       </ScrollView>
 
-      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+      <View
+        onLayout={(event) => {
+          const nextHeight = Math.ceil(event.nativeEvent.layout.height);
+          setBottomBarHeight((current) => (current === nextHeight ? current : nextHeight));
+        }}
+        style={styles.bottomBar}>
         <Text style={[styles.saveHint, !canProceed && styles.saveHintWarning]}>{validationHint}</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ disabled: !canProceed }}
+        <PrimaryButton
           disabled={!canProceed}
           onPress={() => stage === 'READY_TO_SAVE' ? void handleSave() : openOptionalSheet()}
-          style={({ pressed }) => [styles.primaryButton, !canProceed && styles.primaryDisabled, pressed && canProceed && styles.primaryPressed]}>
-          <Text style={styles.primaryText}>{saving ? '正在保存…' : stage === 'READY_TO_SAVE' ? '保存到题库' : '下一步'}</Text>
-        </Pressable>
+          title={saving ? '正在保存…' : stage === 'READY_TO_SAVE' ? '保存到题库' : '下一步'}
+        />
       </View>
 
       <ModulePickerSheet
@@ -523,44 +525,38 @@ export default function AddScreen() {
         onClose={() => setPreview(null)}
       />
       <AppToast {...toastProps} bottomOffset={bottomBarHeight + 12} />
-    </View>
+    </PageShell>
   );
 }
 
 function InfoRow({ icon, title, subtitle, value, active = false, border = false, onPress }: { icon: keyof typeof MaterialIcons.glyphMap; title: string; subtitle?: string; value: string; active?: boolean; border?: boolean; onPress: () => void }) {
   return (
     <Pressable onPress={onPress} style={({ pressed }) => [styles.infoRow, border && styles.infoBorder, pressed && styles.rowPressed]}>
-      <View style={styles.infoIcon}><MaterialIcons name={icon} size={24} color={active ? GREEN : SECONDARY} /></View>
+      <View style={styles.infoIcon}><MaterialIcons name={icon} size={layout.iconSize} color={active ? colors.accent : colors.textSecondary} /></View>
       <View style={styles.infoCopy}><Text style={styles.infoTitle}>{title}</Text>{subtitle ? <Text style={styles.infoSubtitle}>{subtitle}</Text> : null}</View>
       <Text numberOfLines={2} style={[styles.infoValue, active && styles.infoValueActive]}>{value}</Text>
-      <MaterialIcons name="chevron-right" size={24} color={SECONDARY} />
+      <MaterialIcons name="chevron-right" size={layout.chevronSize} color={colors.textTertiary} />
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: BACKGROUND },
-  content: { paddingHorizontal: 20 },
-  pageTitle: { color: TEXT, fontSize: 31, lineHeight: 38, fontWeight: '800' },
-  sectionHeading: { marginTop: 4, marginBottom: 13 },
-  sectionTitle: { color: TEXT, fontSize: 22, lineHeight: 29, fontWeight: '700' },
-  sectionHelp: { marginTop: 5, color: SECONDARY, fontSize: 15, lineHeight: 21 },
-  batchHint: { marginTop: 9, color: SECONDARY, fontSize: 13, lineHeight: 18 },
-  infoList: { overflow: 'hidden', marginTop: 22, borderRadius: 18, backgroundColor: '#FFFFFF' },
-  infoRow: { minHeight: 74, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 11 },
-  infoBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER },
-  infoIcon: { width: 38, alignItems: 'center', justifyContent: 'center' },
+  root: { flex: 1, backgroundColor: colors.pageBackground },
+  content: { paddingTop: layout.headerTopPadding, paddingHorizontal: spacing.screenPadding },
+  sectionHeading: { marginBottom: spacing.md, gap: spacing.xs },
+  sectionHelp: { ...typography.pageSubtitle },
+  batchHint: { ...typography.meta, marginTop: spacing.sm },
+  infoList: { overflow: 'hidden', marginTop: spacing.xl },
+  infoRow: { minHeight: 72, flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing.md, gap: spacing.md },
+  infoBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator },
+  infoIcon: { width: layout.featureIconSize, height: layout.featureIconSize, borderRadius: radius.md, backgroundColor: colors.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
   infoCopy: { flex: 1 },
-  infoTitle: { color: TEXT, fontSize: 17, fontWeight: '600' },
-  infoSubtitle: { marginTop: 3, color: SECONDARY, fontSize: 13, lineHeight: 18 },
-  infoValue: { maxWidth: 126, color: SECONDARY, fontSize: 14, lineHeight: 19, textAlign: 'right' },
-  infoValueActive: { color: GREEN, fontWeight: '600' },
+  infoTitle: { ...typography.cardTitle },
+  infoSubtitle: { ...typography.meta, marginTop: spacing.xs },
+  infoValue: { maxWidth: 112, color: colors.textSecondary, fontSize: 13, lineHeight: 18, textAlign: 'right' },
+  infoValueActive: { color: colors.accent, fontWeight: '600' },
   rowPressed: { opacity: 0.55 },
-  bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 8, paddingHorizontal: 20, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER, backgroundColor: 'rgba(242,242,247,0.98)' },
-  saveHint: { marginBottom: 7, color: SECONDARY, fontSize: 13, textAlign: 'center' },
+  bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: spacing.sm, paddingBottom: spacing.md, paddingHorizontal: spacing.screenPadding, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator, backgroundColor: colors.pageBackground },
+  saveHint: { ...typography.meta, marginBottom: spacing.sm, textAlign: 'center' },
   saveHintWarning: { color: '#C76D00' },
-  primaryButton: { minHeight: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: GREEN },
-  primaryDisabled: { backgroundColor: '#B9DCC3' },
-  primaryPressed: { opacity: 0.72 },
-  primaryText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
 });

@@ -88,7 +88,7 @@
 | id | string | 主键，必填 | 自定义模块 ID |
 | name | string | 必填，唯一 | 自定义模块名称 |
 | icon | string | 默认 `label` | 模块图标名 |
-| color | string | 默认 `#2EBB61` | 模块颜色 |
+| color | string | 默认使用统一品牌色 token（当前 `#34C759`） | 模块颜色 |
 | sort_order | number | 默认 `0` | 排序值 |
 | created_at | string | 必填 | 创建时间（ISO 8601 字符串） |
 | updated_at | string | 必填 | 更新时间（ISO 8601 字符串） |

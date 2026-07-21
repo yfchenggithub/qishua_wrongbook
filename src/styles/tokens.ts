@@ -1,25 +1,44 @@
 import type { TextStyle, ViewStyle } from 'react-native';
 
-type ShadowToken = Pick<
+type ShadowStyleToken = Pick<
   ViewStyle,
   'shadowColor' | 'shadowOpacity' | 'shadowRadius' | 'shadowOffset' | 'elevation'
 >;
 
+export const BRAND_ACCENT = '#34C759';
+
+/**
+ * Product-wide visual tokens. Brand green is defined once as `accent`; the
+ * legacy success aliases keep older screens compatible while they migrate.
+ */
 export const colors = {
-  background: '#F7F7F8',
+  pageBackground: '#F5F5F7',
   surface: '#FFFFFF',
-  surfaceMuted: '#F3F4F6',
-  textPrimary: '#111111',
-  textSecondary: '#5D6168',
-  textMuted: '#9AA0A6',
-  border: '#E6E8EB',
-  black: '#0A0A0A',
-  white: '#FFFFFF',
-  success: '#2EBB61',
-  successBg: '#EAF8EE',
-  successBorder: '#BFEACD',
-  danger: '#D84A4A',
+  surfaceMuted: '#F2F2F7',
+  textPrimary: '#1D1D1F',
+  textSecondary: '#6E6E73',
+  textTertiary: '#AEAEB2',
+  separator: '#E5E5EA',
+  accent: BRAND_ACCENT,
+  accentSoft: '#EBF8EF',
+  accentPressed: '#2FB350',
+  accentDisabled: 'rgba(52, 199, 89, 0.33)',
+  accentBorder: '#BFE8CA',
+  danger: '#FF3B30',
+  dangerSoft: '#FFF0F0',
+  warning: '#FF9F0A',
+  warningSoft: '#FFF6E7',
   shadow: '#000000',
+  black: '#000000',
+  white: '#FFFFFF',
+
+  // Compatibility aliases. Do not introduce new brand-green literals.
+  background: '#F5F5F7',
+  textMuted: '#AEAEB2',
+  border: '#E5E5EA',
+  success: BRAND_ACCENT,
+  successBg: '#EBF8EF',
+  successBorder: '#BFE8CA',
 } as const;
 
 export const spacing = {
@@ -27,6 +46,7 @@ export const spacing = {
   sm: 8,
   md: 12,
   lg: 16,
+  card: 20,
   xl: 24,
   xxl: 32,
   screenPadding: 20,
@@ -35,16 +55,73 @@ export const spacing = {
 export const radius = {
   sm: 8,
   md: 12,
+  control: 14,
   lg: 16,
-  xl: 24,
   card: 20,
+  xl: 24,
   pill: 999,
 } as const;
 
 export const typography: Record<
-  'titleLarge' | 'titleMedium' | 'sectionTitle' | 'body' | 'bodySmall' | 'caption' | 'numberHero',
+  | 'pageTitle'
+  | 'pageSubtitle'
+  | 'sectionMajor'
+  | 'sectionGroup'
+  | 'cardTitle'
+  | 'body'
+  | 'meta'
+  | 'titleLarge'
+  | 'titleMedium'
+  | 'sectionTitle'
+  | 'bodySmall'
+  | 'caption'
+  | 'numberHero',
   TextStyle
 > = {
+  pageTitle: {
+    fontSize: 32,
+    lineHeight: 40,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  pageSubtitle: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '400',
+    color: colors.textSecondary,
+  },
+  sectionMajor: {
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '700',
+    color: colors.textPrimary,
+  },
+  sectionGroup: {
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  cardTitle: {
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '600',
+    color: colors.textPrimary,
+  },
+  body: {
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: '400',
+    color: colors.textSecondary,
+  },
+  meta: {
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '400',
+    color: colors.textSecondary,
+  },
+
+  // Existing names kept for screens outside this visual-unification task.
   titleLarge: {
     fontSize: 42,
     lineHeight: 50,
@@ -58,16 +135,10 @@ export const typography: Record<
     color: colors.textPrimary,
   },
   sectionTitle: {
-    fontSize: 20,
+    fontSize: 22,
     lineHeight: 28,
     fontWeight: '700',
     color: colors.textPrimary,
-  },
-  body: {
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: '500',
-    color: colors.textSecondary,
   },
   bodySmall: {
     fontSize: 14,
@@ -76,10 +147,10 @@ export const typography: Record<
     color: colors.textSecondary,
   },
   caption: {
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 18,
     fontWeight: '500',
-    color: colors.textMuted,
+    color: colors.textTertiary,
   },
   numberHero: {
     fontSize: 58,
@@ -89,27 +160,35 @@ export const typography: Record<
   },
 };
 
-export const shadows: Record<'card' | 'floating', ShadowToken> = {
+export const shadows: Record<'card' | 'floating', ShadowStyleToken> = {
   card: {
     shadowColor: colors.shadow,
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 3,
+    shadowOpacity: 0,
+    shadowRadius: 0,
+    shadowOffset: { width: 0, height: 0 },
+    elevation: 0,
   },
   floating: {
     shadowColor: colors.shadow,
-    shadowOpacity: 0.14,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 12 },
-    elevation: 8,
+    shadowOpacity: 0.12,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
   },
 };
 
 export const layout = {
-  bottomTabHeight: 84,
-  cardMinHeight: 120,
-  headerTopPadding: 24,
+  pageHorizontalPadding: 20,
+  cardPadding: 20,
+  cardGap: 12,
+  sectionGap: 32,
+  bottomTabHeight: 64,
+  primaryButtonHeight: 56,
+  minimumTouchSize: 44,
+  iconSize: 24,
+  featureIconSize: 44,
+  chevronSize: 20,
+  headerTopPadding: 20,
 } as const;
 
 export const tokens = {

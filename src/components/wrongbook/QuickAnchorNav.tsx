@@ -240,7 +240,7 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: radius.xl,
     borderColor: colors.successBorder,
-    backgroundColor: '#FBFFFC',
+    backgroundColor: colors.accentSoft,
     gap: spacing.md,
   },
   compactCard: {

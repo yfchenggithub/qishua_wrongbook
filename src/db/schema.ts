@@ -1,4 +1,5 @@
 import { MAX_REVIEW_COUNT } from '@/src/constants/review';
+import { BRAND_ACCENT } from '@/src/styles/tokens';
 
 export const CREATE_MISTAKES_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS mistakes (
@@ -91,7 +92,7 @@ CREATE TABLE IF NOT EXISTS custom_modules (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
   icon TEXT NOT NULL DEFAULT 'label',
-  color TEXT NOT NULL DEFAULT '#2EBB61',
+  color TEXT NOT NULL DEFAULT '${BRAND_ACCENT}',
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL

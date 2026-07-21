@@ -14,8 +14,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { MAX_CUSTOM_MODULE_NAME_LENGTH } from '@/src/services/CustomModuleService';
+import { colors } from '@/src/styles/tokens';
 
-const GREEN = '#34C759';
+const GREEN = colors.accent;
 const TEXT = '#1C1C1E';
 const SECONDARY = '#8E8E93';
 const BORDER = '#E5E5EA';
@@ -266,7 +267,7 @@ const styles = StyleSheet.create({
   list: { overflow: 'hidden', borderRadius: 16, backgroundColor: '#FFFFFF' },
   optionRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10 },
   optionBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER },
-  selectedRow: { backgroundColor: '#EAF8EE' },
+  selectedRow: { backgroundColor: colors.accentSoft },
   optionLabel: { flex: 1, color: TEXT, fontSize: 17, fontWeight: '500' },
   customMark: { color: SECONDARY, fontSize: 12 },
   checkSpace: { width: 24 },

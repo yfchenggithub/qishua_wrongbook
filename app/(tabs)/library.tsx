@@ -18,13 +18,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   AppToast,
-  BrandHeader,
   CustomModuleManagerModal,
   LibraryBottomSheet,
   LibraryQuickView,
   LibrarySegmentedControl,
   ProgressDots,
-  ScreenContainer,
+  PageHeader,
+  PageShell,
+  SectionHeader,
+  SurfaceCard,
 } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import type { CustomModule } from '@/src/models/CustomModule';
@@ -438,26 +440,23 @@ function MistakeCard({
   const currentProgress = Math.min(item.maxReviewCount, item.reviewCount + 1);
 
   return (
-    <Pressable
-      accessibilityLabel={`${item.title}，复做进度${item.reviewCount}/${item.maxReviewCount}`}
-      disabled={isDeleting}
-      onLongPress={() => {
-        didLongPressRef.current = true;
-        onLongPress();
-      }}
-      onPress={() => {
-        if (didLongPressRef.current) {
-          didLongPressRef.current = false;
-          return;
-        }
-        onPress();
-      }}
-      style={({ pressed }) => [
-        styles.card,
-        pressed ? styles.cardPressed : null,
-        isDeleting ? styles.cardDisabled : null,
-      ]}>
-      <View style={styles.cardRow}>
+    <SurfaceCard padding={0} style={[styles.card, isDeleting ? styles.cardDisabled : null]}>
+      <Pressable
+        accessibilityLabel={`${item.title}，第 ${item.reviewCount} / ${item.maxReviewCount} 刷`}
+        disabled={isDeleting}
+        onLongPress={() => {
+          didLongPressRef.current = true;
+          onLongPress();
+        }}
+        onPress={() => {
+          if (didLongPressRef.current) {
+            didLongPressRef.current = false;
+            return;
+          }
+          onPress();
+        }}
+        style={({ pressed }) => [styles.cardPressable, pressed ? styles.cardPressed : null]}>
+        <View style={styles.cardRow}>
         {showImage ? (
           <Image
             onError={() => setImageFailed(true)}
@@ -502,7 +501,7 @@ function MistakeCard({
 
           <View style={styles.progressRow}>
             <Text numberOfLines={1} style={styles.progressText}>
-              {item.reviewCount}/{item.maxReviewCount}
+              第 {item.reviewCount} / {item.maxReviewCount} 刷
             </Text>
             <ProgressDots
               completed={item.reviewCount}
@@ -519,15 +518,16 @@ function MistakeCard({
             <Text style={styles.difficultyText}>难度 {item.difficulty}</Text>
           </View>
         </View>
-      </View>
-
-      {isDeleting ? (
-        <View style={styles.deletingOverlay}>
-          <ActivityIndicator color={colors.danger} size="small" />
-          <Text style={styles.deletingText}>删除中…</Text>
         </View>
-      ) : null}
-    </Pressable>
+
+        {isDeleting ? (
+          <View style={styles.deletingOverlay}>
+            <ActivityIndicator color={colors.danger} size="small" />
+            <Text style={styles.deletingText}>删除中…</Text>
+          </View>
+        ) : null}
+      </Pressable>
+    </SurfaceCard>
   );
 }
 
@@ -1243,8 +1243,8 @@ export default function LibraryScreen() {
 
   const listHeader = (
     <View style={styles.headerContent}>
-      <BrandHeader
-        offlineBadgeStyle={styles.offlineBadge}
+      <PageHeader
+        showOffline
         subtitle="只记录错题、做法、答案和 7 次复做"
         title="错题库"
       />
@@ -1309,11 +1309,12 @@ export default function LibraryScreen() {
       <LibrarySegmentedControl
         onChange={handleSelectStatus}
         options={statusOptions}
+        style={styles.statusSegment}
         value={isStatusMode(filters.viewMode) ? filters.viewMode : null}
       />
 
       <View style={styles.quickSection}>
-        <Text style={styles.sectionLabel}>快捷查看</Text>
+        <SectionHeader title="快捷查看" />
         <LibraryQuickView
           onChange={handleSelectQuick}
           options={quickOptions}
@@ -1342,7 +1343,7 @@ export default function LibraryScreen() {
 
   return (
     <View style={styles.pageRoot}>
-      <ScreenContainer safeAreaEdges={['top']} withPadding={false}>
+      <PageShell hasBottomTab safeAreaEdges={['top']} withPadding={false}>
         <FlatList
           ref={listRef}
           contentContainerStyle={styles.listContent}
@@ -1506,7 +1507,7 @@ export default function LibraryScreen() {
           selectedModule={filters.module}
           visible={customModuleModalVisible}
         />
-      </ScreenContainer>
+      </PageShell>
       <AppToast
         {...toastProps}
         bottomOffset={Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg)}
@@ -1523,17 +1524,11 @@ const styles = StyleSheet.create({
   listContent: {
     flexGrow: 1,
     paddingHorizontal: spacing.screenPadding,
-    paddingBottom: spacing.xxl,
+    paddingBottom: layout.bottomTabHeight + spacing.xxl,
   },
   headerContent: {
-    gap: spacing.lg,
     paddingTop: layout.headerTopPadding,
     paddingBottom: spacing.lg,
-  },
-  offlineBadge: {
-    paddingHorizontal: spacing.xs,
-    borderWidth: 0,
-    backgroundColor: 'transparent',
   },
   searchBox: {
     minHeight: 52,
@@ -1545,6 +1540,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
+    marginBottom: spacing.lg,
   },
   searchInput: {
     flex: 1,
@@ -1569,6 +1565,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    marginBottom: spacing.lg,
   },
   filterButton: {
     flex: 1,
@@ -1578,7 +1575,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.xs,
     paddingHorizontal: spacing.md,
-    borderRadius: radius.md,
+    borderRadius: radius.control,
     backgroundColor: colors.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.border,
@@ -1606,7 +1603,7 @@ const styles = StyleSheet.create({
     minHeight: 48,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: radius.md,
+    borderRadius: radius.control,
   },
   resetText: {
     color: colors.success,
@@ -1619,12 +1616,11 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   quickSection: {
-    gap: spacing.sm,
+    gap: spacing.md,
+    marginBottom: spacing.xl,
   },
-  sectionLabel: {
-    ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
+  statusSegment: {
+    marginBottom: spacing.xl,
   },
   resultsHeader: {
     minHeight: 48,
@@ -1666,16 +1662,11 @@ const styles = StyleSheet.create({
     height: spacing.md,
   },
   card: {
-    minHeight: 142,
     overflow: 'hidden',
+  },
+  cardPressable: {
+    minHeight: 142,
     padding: spacing.md,
-    borderRadius: 18,
-    backgroundColor: colors.surface,
-    shadowColor: colors.shadow,
-    shadowOpacity: 0.035,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 1,
   },
   cardPressed: {
     opacity: 0.72,

@@ -2,17 +2,17 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import type { MistakeStatus } from '@/src/models/Mistake';
-import { radius, spacing } from '@/src/styles/tokens';
+import { colors, radius, spacing } from '@/src/styles/tokens';
 
 const palette = {
-  background: '#F5F5F7',
-  surface: '#FFFFFF',
-  text: '#1D1D1F',
-  secondaryText: '#6E6E73',
-  green: '#248A3D',
-  greenFill: '#34C759',
-  greenSoft: '#EAF8EE',
-  border: '#D9D9DE',
+  background: colors.pageBackground,
+  surface: colors.surface,
+  text: colors.textPrimary,
+  secondaryText: colors.textSecondary,
+  green: colors.accent,
+  greenFill: colors.accent,
+  greenSoft: colors.accentSoft,
+  border: colors.separator,
   segment: '#E9E9ED',
   pending: '#D8D8DC',
 } as const;
@@ -472,7 +472,7 @@ const styles = StyleSheet.create({
   },
   primaryButtonMastered: {
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#A9DEB5',
+    borderColor: colors.accentBorder,
     backgroundColor: palette.greenSoft,
   },
   primaryButtonText: {

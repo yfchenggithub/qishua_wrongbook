@@ -1,4 +1,6 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+
+import { colors, radius } from '@/src/styles/tokens';
 
 export interface SmartFilterOption<TValue extends string> {
   value: TValue;
@@ -10,17 +12,17 @@ interface SmartFilterProps<TValue extends string> {
   options: readonly SmartFilterOption<TValue>[];
   value: TValue;
   onChange: (value: TValue) => void;
+  style?: StyleProp<ViewStyle>;
 }
-
-const GREEN = '#34C759';
 
 export function SmartFilter<TValue extends string>({
   options,
   value,
   onChange,
+  style,
 }: SmartFilterProps<TValue>) {
   return (
-    <View accessibilityRole="tablist" style={styles.track}>
+    <View accessibilityRole="tablist" style={[styles.track, style]}>
       {options.map((option) => {
         const selected = option.value === value;
         const label = option.count === undefined ? option.label : `${option.label} ${option.count}`;
@@ -56,38 +58,38 @@ export function SmartFilter<TValue extends string>({
 
 const styles = StyleSheet.create({
   track: {
-    minHeight: 52,
+    height: 44,
     flexDirection: 'row',
     padding: 4,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#D9D9DE',
-    borderRadius: 18,
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
+    borderColor: colors.separator,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
   },
   item: {
     flex: 1,
     minWidth: 0,
-    minHeight: 44,
+    minHeight: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 14,
+    borderRadius: radius.md,
     paddingHorizontal: 3,
   },
   itemSelected: {
-    backgroundColor: '#EDF8F0',
+    backgroundColor: colors.accentSoft,
   },
   itemPressed: {
     opacity: 0.58,
   },
   label: {
-    color: '#1D1D1F',
+    color: colors.textPrimary,
     fontSize: 12.5,
     lineHeight: 18,
     fontWeight: '600',
     textAlign: 'center',
   },
   labelSelected: {
-    color: GREEN,
+    color: colors.accent,
     fontWeight: '700',
   },
 });
