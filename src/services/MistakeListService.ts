@@ -67,6 +67,7 @@ export interface MistakeTagFilterCount {
 export interface HomeTaskSummary {
   hasAnyMistake: boolean;
   todayDueCount: number;
+  overdueCount: number;
   todayQueue: MistakeListItem[];
   todayCompletedStats: TodayCompletedStats;
   homeStatus: HomeStatus;
@@ -638,6 +639,11 @@ export async function getHomeTaskSummary(): Promise<HomeTaskSummary> {
 
     const hasAnyMistake = mistakeCount > 0;
     const todayDueCount = todayQueue.length;
+    const todayStartTime = getLocalDayRange(new Date(), 0).start.getTime();
+    const overdueCount = todayQueue.filter((item) => {
+      const nextReviewDate = parseLocalDateTime(item.nextReviewAt ?? null);
+      return nextReviewDate !== null && nextReviewDate.getTime() < todayStartTime;
+    }).length;
     let homeStatus: HomeStatus = 'noDueToday';
 
     if (!hasAnyMistake) {
@@ -653,6 +659,7 @@ export async function getHomeTaskSummary(): Promise<HomeTaskSummary> {
     return {
       hasAnyMistake,
       todayDueCount,
+      overdueCount,
       todayQueue,
       todayCompletedStats,
       homeStatus,

@@ -1,5 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -35,7 +35,7 @@ import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import { normalizeMistakeTagKey } from '@/src/services/MistakeTagService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
-import { addDays, parseLocalDateTime, startOfLocalDay } from '@/src/utils/date';
+import { addDays, parseLocalDateTime, startOfLocalDay, toDateOnlyString } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
 
 const PAGE_SCOPE = 'LibraryScreen';
@@ -152,9 +152,37 @@ function isTodayDueItem(item: MistakeListItem, bounds: DateBounds): boolean {
   const nextReviewTime = getTimeValue(item.nextReviewAt);
   return (
     nextReviewTime !== null
-    && nextReviewTime >= bounds.startOfToday.getTime()
     && nextReviewTime < bounds.startOfTomorrow.getTime()
   );
+}
+
+function isScheduledDateItem(item: MistakeListItem, scheduledDate: string): boolean {
+  if (item.status !== 'active') {
+    return false;
+  }
+  const nextReviewDate = parseLocalDateTime(item.nextReviewAt ?? null);
+  return nextReviewDate !== null && toDateOnlyString(nextReviewDate) === scheduledDate;
+}
+
+function normalizeRouteValue(value: string | string[] | undefined): string | null {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  const normalized = typeof candidate === 'string' ? candidate.trim() : '';
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isLibraryQuickMode(value: string | null): value is LibraryQuickMode {
+  return value === 'today'
+    || value === 'overdue'
+    || value === 'recentViewed'
+    || value === 'recentAdded';
+}
+
+function normalizeScheduledDate(value: string | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
+    return null;
+  }
+  const parsed = parseLocalDateTime(value);
+  return parsed && toDateOnlyString(parsed) === value ? value : null;
 }
 
 function isOverdueItem(item: MistakeListItem, bounds: DateBounds): boolean {
@@ -540,6 +568,10 @@ function OptionRow({
 
 export default function LibraryScreen() {
   const router = useRouter();
+  const searchParams = useLocalSearchParams<{
+    quickMode?: string | string[];
+    scheduledDate?: string | string[];
+  }>();
   const insets = useSafeAreaInsets();
   const listRef = useRef<FlatList<MistakeListItem>>(null);
   const mountedRef = useRef(true);
@@ -550,6 +582,7 @@ export default function LibraryScreen() {
 
   const [searchText, setSearchText] = useState('');
   const [filters, setFilters] = useState<LibraryFilterState>(DEFAULT_FILTER_STATE);
+  const [scheduledDate, setScheduledDate] = useState<string | null>(null);
   const [items, setItems] = useState<MistakeListItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFiltering, setIsFiltering] = useState(false);
@@ -578,6 +611,31 @@ export default function LibraryScreen() {
       requestIdRef.current += 1;
     };
   }, []);
+
+  const routeQuickMode = normalizeRouteValue(searchParams.quickMode);
+  const routeScheduledDate = normalizeScheduledDate(normalizeRouteValue(searchParams.scheduledDate));
+
+  useEffect(() => {
+    if (routeScheduledDate) {
+      setScheduledDate(routeScheduledDate);
+      setFilters((current) => ({
+        ...current,
+        viewMode: 'active',
+        sortKey: 'nextReview',
+      }));
+      listRef.current?.scrollToOffset({ animated: false, offset: 0 });
+      return;
+    }
+
+    if (isLibraryQuickMode(routeQuickMode)) {
+      setScheduledDate(null);
+      setFilters((current) => ({
+        ...current,
+        viewMode: routeQuickMode,
+      }));
+      listRef.current?.scrollToOffset({ animated: false, offset: 0 });
+    }
+  }, [routeQuickMode, routeScheduledDate]);
 
   const loadItems = useCallback(async (keyword: string, mode: ListLoadMode) => {
     const requestId = requestIdRef.current + 1;
@@ -667,10 +725,14 @@ export default function LibraryScreen() {
   const effectiveSortKey = getEffectiveSortKey(filters);
   const resultItems = useMemo(
     () => sortItems(
-      scopedItems.filter((item) => matchesViewMode(item, filters.viewMode, dateBounds)),
+      scopedItems.filter((item) => (
+        scheduledDate
+          ? isScheduledDateItem(item, scheduledDate)
+          : matchesViewMode(item, filters.viewMode, dateBounds)
+      )),
       effectiveSortKey,
     ),
-    [dateBounds, effectiveSortKey, filters.viewMode, scopedItems],
+    [dateBounds, effectiveSortKey, filters.viewMode, scheduledDate, scopedItems],
   );
   const selectedSortOption = SORT_OPTIONS.find((option) => option.key === effectiveSortKey)
     ?? SORT_OPTIONS[0];
@@ -722,8 +784,12 @@ export default function LibraryScreen() {
   }, [tagOptions, tagSearchText]);
   const tagPreviewCount = useMemo(() => {
     const previewItems = filterByModuleAndTag(items, filters.module, draftTag);
-    return previewItems.filter((item) => matchesViewMode(item, filters.viewMode, dateBounds)).length;
-  }, [dateBounds, draftTag, filters.module, filters.viewMode, items]);
+    return previewItems.filter((item) => (
+      scheduledDate
+        ? isScheduledDateItem(item, scheduledDate)
+        : matchesViewMode(item, filters.viewMode, dateBounds)
+    )).length;
+  }, [dateBounds, draftTag, filters.module, filters.viewMode, items, scheduledDate]);
 
   const hasResettableState = (
     searchText.trim().length > 0
@@ -732,12 +798,14 @@ export default function LibraryScreen() {
     || filters.tag !== null
     || filters.viewMode !== 'all'
     || filters.sortKey !== DEFAULT_FILTER_STATE.sortKey
+    || scheduledDate !== null
   );
   const hasFilteringConstraint = (
     filters.keyword.length > 0
     || filters.module !== null
     || filters.tag !== null
     || filters.viewMode !== 'all'
+    || scheduledDate !== null
   );
 
   const scrollToTop = useCallback((animated = true) => {
@@ -750,6 +818,7 @@ export default function LibraryScreen() {
     setDraftModule(null);
     setDraftTag(null);
     setTagSearchText('');
+    setScheduledDate(null);
     scrollToTop();
   }, [scrollToTop]);
 
@@ -784,11 +853,13 @@ export default function LibraryScreen() {
   }, [draftTag, scrollToTop]);
 
   const handleSelectStatus = useCallback((value: LibraryStatusMode) => {
+    setScheduledDate(null);
     setFilters((current) => ({ ...current, viewMode: value }));
     scrollToTop();
   }, [scrollToTop]);
 
   const handleSelectQuick = useCallback((value: LibraryQuickMode) => {
+    setScheduledDate(null);
     setFilters((current) => ({
       ...current,
       viewMode: current.viewMode === value ? 'all' : value,
@@ -1252,7 +1323,9 @@ export default function LibraryScreen() {
 
       <View style={styles.resultsHeader}>
         <View style={styles.resultCountWrap}>
-          <Text style={styles.resultCount}>{resultItems.length} 道错题</Text>
+          <Text style={styles.resultCount}>
+            {scheduledDate ? `${scheduledDate} · ` : ''}{resultItems.length} 道错题
+          </Text>
           {isFiltering ? <ActivityIndicator color={colors.textMuted} size="small" /> : null}
         </View>
         <Pressable

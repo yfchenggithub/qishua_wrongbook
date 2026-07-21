@@ -51,7 +51,7 @@ export default function TabLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: '#111111',
+        tabBarActiveTintColor: '#34C759',
         tabBarInactiveTintColor: '#8E8E93',
         headerShown: false,
         tabBarButton: HapticTab,
@@ -65,7 +65,10 @@ export default function TabLayout() {
           borderTopColor: '#E5E5EA',
           borderTopWidth: StyleSheet.hairlineWidth,
           elevation: 0,
-          shadowOpacity: 0,
+          shadowColor: '#000000',
+          shadowOpacity: 0.025,
+          shadowRadius: 3,
+          shadowOffset: { width: 0, height: -1 },
         },
       }}>
       <Tabs.Screen

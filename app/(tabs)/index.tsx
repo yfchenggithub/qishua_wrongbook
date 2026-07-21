@@ -1,55 +1,44 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect, useRouter } from 'expo-router';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
-  type LayoutChangeEvent,
-  LayoutAnimation,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
-  Platform,
   Pressable,
-  ScrollView,
+  type ScrollView,
   StyleSheet,
   Text,
-  UIManager,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AppToast, BrandHeader, ScreenContainer } from '@/src/components';
 import {
-  AppToast,
-  BrandHeader,
-  CardContainer,
-  QuickAnchorNav,
-  type QuickAnchorNavItem,
-  ScreenContainer,
-  SectionTitle,
-} from '@/src/components';
+  SmartFilter,
+  type SmartFilterOption,
+  TodayQueueList,
+  TodaySummaryCard,
+  UpcomingTaskList,
+} from '@/src/components/today';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
-import type { MistakeListItem } from '@/src/models/MistakeListItem';
-import { todayMock } from '@/src/mocks/today';
-import * as ExportImageModeService from '@/src/services/ExportImageModeService';
-import type { HomeStatus, HomeTaskSummary, UpcomingReviewPlanDay } from '@/src/services/MistakeListService';
-import * as MistakeListService from '@/src/services/MistakeListService';
-import { Logger } from '@/src/services/Logger';
 import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
-import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
-import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
-import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
+import { Logger } from '@/src/services/Logger';
+import type { HomeStatus, HomeTaskSummary } from '@/src/services/MistakeListService';
+import * as MistakeListService from '@/src/services/MistakeListService';
+import { layout, spacing } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'TodayScreen';
-const UPCOMING_DAYS = 3;
-const TODAY_QUEUE_PREVIEW_COUNT = 5;
 const TOAST_DURATION_DEFAULT = 2200;
 const TOAST_DURATION_LONG = 3200;
-const BACKUP_STALE_DAYS = 7;
+const UPCOMING_DAYS = 3;
+const GREEN = '#34C759';
 
-type TodayAnchorId = 'overview' | 'task' | 'queue' | 'upcoming';
+type TodayQuickFilter = 'today' | 'overdue' | 'recentViewed' | 'recentAdded';
 
 const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
   hasAnyMistake: false,
   todayDueCount: 0,
+  overdueCount: 0,
   todayQueue: [],
   todayCompletedStats: {
     total: 0,
@@ -61,273 +50,83 @@ const EMPTY_HOME_SUMMARY: HomeTaskSummary = {
   upcomingPlan: [],
 };
 
-const TODAY_ANCHOR_ACTIVE_OFFSET = 104;
-const TODAY_ANCHOR_SCROLL_OFFSET = spacing.sm;
-const TODAY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
-const TODAY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 142;
-const TODAY_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
-const TODAY_ANCHOR_LABELS: Record<TodayAnchorId, string> = {
-  overview: '概览',
-  task: '今日任务',
-  queue: '复做队列',
-  upcoming: '接下来',
-};
-const TODAY_ANCHOR_ITEMS: readonly QuickAnchorNavItem<TodayAnchorId>[] = [
-  { id: 'overview', label: TODAY_ANCHOR_LABELS.overview, shortLabel: '概览', icon: 'dashboard' },
-  { id: 'task', label: TODAY_ANCHOR_LABELS.task, shortLabel: '任务', icon: 'task-alt' },
-  { id: 'queue', label: TODAY_ANCHOR_LABELS.queue, shortLabel: '队列', icon: 'format-list-bulleted' },
-  { id: 'upcoming', label: TODAY_ANCHOR_LABELS.upcoming, shortLabel: '计划', icon: 'event-note' },
-];
-
 function normalizeMistakeId(id: string): string | null {
   const normalized = typeof id === 'string' ? id.trim() : '';
   return normalized.length > 0 ? normalized : null;
 }
 
-function buildExportModeHintText(mode: PrintEnhanceMode | null): string {
-  if (mode === null) {
-    return '当前导出模式：读取中...';
-  }
-  if (mode === 'clear_print') {
-    return '当前导出模式：清晰打印';
-  }
-  return '当前导出模式：快速导出';
-}
-
-function buildHomePrimaryMessage(summary: HomeTaskSummary): string {
-  if (summary.homeStatus === 'empty') {
-    return '还没有错题\n先拍一道错题，需要时再加入七刷';
-  }
-  if (summary.homeStatus === 'dueToday') {
-    return `今天该复做\n${summary.todayDueCount} 道`;
-  }
-  if (summary.homeStatus === 'completedToday') {
-    const { total, mastered, unsure, wrong } = summary.todayCompletedStats;
-    return `今天复做已完成\n今天完成 ${total} 道（会了 ${mastered} / 模糊 ${unsure} / 不会 ${wrong}）`;
-  }
-  return '今天没有到期复做';
-}
-
-function buildHomeHintText(status: HomeStatus): string {
+function buildSummaryHint(status: HomeStatus): string {
   if (status === 'empty') {
     return '新增错题后，系统会自动安排七刷节奏';
   }
   if (status === 'dueToday') {
-    return '优先完成今天到期题，不提前复做未来题';
+    return '优先完成今天到期题';
   }
   if (status === 'completedToday') {
-    return '今天任务已完成，保持节奏即可';
+    return '今天的复做已完成，保持节奏即可';
   }
-  return '今天无需复做，按计划等待下一次到期';
+  return '今天暂无到期题，未来题不会提前复做';
 }
 
-function formatBackupCreatedAt(isoDateTime: string): string {
-  const date = new Date(isoDateTime);
-  if (Number.isNaN(date.getTime())) {
-    return isoDateTime;
-  }
-
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-    date.getDate(),
-  ).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(
-    date.getMinutes(),
-  ).padStart(2, '0')}`;
-}
-
-function getBackupAgeDays(lastBackupAt: string | null): number | null {
+function formatBackupStatus(lastBackupAt: string | null): string {
   if (!lastBackupAt) {
-    return null;
+    return '数据仅存本机 · 尚未备份';
   }
 
-  const parsed = new Date(lastBackupAt);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
+  const date = new Date(lastBackupAt);
+  if (Number.isNaN(date.getTime())) {
+    return '数据仅存本机 · 备份时间未知';
   }
 
-  return Math.max(0, Math.floor((Date.now() - parsed.getTime()) / (24 * 60 * 60 * 1000)));
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  return `数据仅存本机 · 已备份 ${date.getMonth() + 1}月${date.getDate()}日 ${hours}:${minutes}`;
 }
 
-function buildBackupSafetyCopy(lastBackupAt: string | null): {
-  title: string;
-  description: string;
-  meta: string;
-  isWarning: boolean;
-} {
-  const backupAgeDays = getBackupAgeDays(lastBackupAt);
-  if (!lastBackupAt || backupAgeDays === null) {
-    return {
-      title: '本机数据还没有备份',
-      description: '错题、复做记录和图片只保存在本机，换手机或卸载前请先备份。',
-      meta: '上次备份：未备份',
-      isWarning: true,
-    };
-  }
-
-  const formattedBackupAt = formatBackupCreatedAt(lastBackupAt);
-  if (backupAgeDays >= BACKUP_STALE_DAYS) {
-    return {
-      title: '建议更新备份',
-      description: `离上次备份已 ${backupAgeDays} 天，新增错题后建议导出一份备份文件。`,
-      meta: `上次备份：${formattedBackupAt}`,
-      isWarning: true,
-    };
-  }
-
-  return {
-    title: '本机数据已备份',
-    description: '错题数据仍只保存在本机，重要内容建议定期备份到安全位置。',
-    meta: `上次备份：${formattedBackupAt}`,
-    isWarning: false,
-  };
-}
-
-function getNextReviewIndex(reviewCount: number, maxReviewCount: number): number {
-  return Math.max(1, Math.min(maxReviewCount, reviewCount + 1));
-}
-
-function SectionStateCard({
-  message,
+function SectionHeader({
+  title,
   actionLabel,
   onActionPress,
 }: {
-  message: string;
+  title: string;
   actionLabel?: string;
   onActionPress?: () => void;
 }) {
   return (
-    <CardContainer padding={spacing.md} style={styles.stateCard}>
-      <Text style={styles.stateText}>{message}</Text>
+    <View style={styles.sectionHeader}>
+      <Text numberOfLines={1} style={styles.sectionTitle}>{title}</Text>
       {actionLabel && onActionPress ? (
-        <Pressable onPress={onActionPress} style={styles.stateActionButton}>
-          <Text style={styles.stateActionText}>{actionLabel}</Text>
+        <Pressable
+          accessibilityRole="button"
+          onPress={onActionPress}
+          style={({ pressed }) => [styles.sectionAction, pressed ? styles.textButtonPressed : null]}>
+          <Text style={styles.sectionActionText}>{actionLabel}</Text>
+          <MaterialIcons name="chevron-right" size={20} color={GREEN} />
         </Pressable>
       ) : null}
-    </CardContainer>
-  );
-}
-
-function UpcomingPlanCard({
-  day,
-  onOpenDetail,
-}: {
-  day: UpcomingReviewPlanDay;
-  onOpenDetail: (id: string) => void;
-}) {
-  return (
-    <CardContainer padding={spacing.md} style={styles.upcomingCard}>
-      <Text style={styles.upcomingDayTitle}>
-        {day.dayLabel} · {day.totalCount} 道
-      </Text>
-      <View style={styles.upcomingItemList}>
-        {day.items.map((item) => (
-          <Pressable key={item.mistakeId} onPress={() => onOpenDetail(item.mistakeId)}>
-            <View style={styles.upcomingItemRow}>
-              <Text numberOfLines={1} style={styles.upcomingItemTitle}>
-                {item.title}
-              </Text>
-              <Text style={styles.upcomingItemMeta}>第 {item.nextReviewIndex} / 7 刷</Text>
-            </View>
-          </Pressable>
-        ))}
-      </View>
-      {day.remainingCount > 0 ? (
-        <Text style={styles.upcomingRemainText}>还有 {day.remainingCount} 道未展示</Text>
-      ) : null}
-    </CardContainer>
-  );
-}
-
-function TodayQueueListCard({
-  items,
-  onOpenDetail,
-}: {
-  items: MistakeListItem[];
-  onOpenDetail: (id: string) => void;
-}) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const canToggle = items.length > TODAY_QUEUE_PREVIEW_COUNT;
-  const visibleItems = isExpanded ? items : items.slice(0, TODAY_QUEUE_PREVIEW_COUNT);
-  const remainingCount = Math.max(0, items.length - visibleItems.length);
-  
-  useEffect(() => {
-    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
-  }, []);
-
-  const handleToggleExpanded = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setIsExpanded((prev) => !prev);
-  }, []);
-
-  return (
-    <CardContainer padding={spacing.md} style={styles.upcomingCard}>
-      <Text style={styles.upcomingDayTitle}>今天 · {items.length} 道</Text>
-      <View style={styles.upcomingItemList}>
-        {visibleItems.map((item) => (
-          <Pressable key={item.id} onPress={() => onOpenDetail(item.id)}>
-            <View style={styles.upcomingItemRow}>
-              <Text numberOfLines={1} style={styles.upcomingItemTitle}>
-                {item.title}
-              </Text>
-              <Text style={styles.upcomingItemMeta}>
-                第 {getNextReviewIndex(item.reviewCount, item.maxReviewCount)} / {item.maxReviewCount} 刷
-              </Text>
-            </View>
-          </Pressable>
-        ))}
-      </View>
-      {canToggle ? (
-        <View style={styles.todayQueueFooter}>
-          {remainingCount > 0 ? <Text style={styles.upcomingRemainText}>还有 {remainingCount} 道未展示</Text> : null}
-          <Pressable
-            onPress={handleToggleExpanded}
-            style={styles.todayQueueToggleButton}
-            accessibilityRole="button"
-            accessibilityLabel={isExpanded ? '收起今日复做队列' : '展开全部今日复做队列'}>
-            <Text style={styles.todayQueueToggleText}>{isExpanded ? '收起' : '展开全部'}</Text>
-          </Pressable>
-        </View>
-      ) : null}
-    </CardContainer>
+    </View>
   );
 }
 
 export default function TodayScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [summary, setSummary] = useState<HomeTaskSummary>(EMPTY_HOME_SUMMARY);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [exportMode, setExportMode] = useState<PrintEnhanceMode | null>(null);
-  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
-  const [isBackupSafetyExpanded, setIsBackupSafetyExpanded] = useState(false);
-  const [isStartingSession, setIsStartingSession] = useState(false);
-  const [activeAnchorId, setActiveAnchorId] = useState<TodayAnchorId>('overview');
-  const [highlightedAnchorId, setHighlightedAnchorId] = useState<TodayAnchorId | null>(null);
-  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
-  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
-
+  const scrollRef = useRef<ScrollView | null>(null);
+  const queueSectionYRef = useRef(0);
   const requestIdRef = useRef(0);
   const hasFocusedRef = useRef(false);
   const hasSuccessfulLoadRef = useRef(false);
-  const todayScrollRef = useRef<ScrollView | null>(null);
-  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
-  const anchorLayoutsRef = useRef<Partial<Record<TodayAnchorId, number>>>({});
-  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [summary, setSummary] = useState<HomeTaskSummary>(EMPTY_HOME_SUMMARY);
+  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isStartingSession, setIsStartingSession] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
-
-  useEffect(() => {
-    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
-  }, []);
 
   const loadHomeData = useCallback(async (mode: 'initial' | 'refresh') => {
     const requestId = requestIdRef.current + 1;
     requestIdRef.current = requestId;
-
     if (mode === 'initial') {
       setIsLoading(true);
     } else {
@@ -335,12 +134,11 @@ export default function TodayScreen() {
     }
 
     try {
-      const homeSummary = await MistakeListService.getHomeTaskSummary();
+      const nextSummary = await MistakeListService.getHomeTaskSummary();
       if (requestId !== requestIdRef.current) {
         return;
       }
-
-      setSummary(homeSummary);
+      setSummary(nextSummary);
       setErrorMessage(null);
       hasSuccessfulLoadRef.current = true;
     } catch (error) {
@@ -348,29 +146,15 @@ export default function TodayScreen() {
       if (requestId !== requestIdRef.current) {
         return;
       }
-
       if (!hasSuccessfulLoadRef.current) {
         setSummary(EMPTY_HOME_SUMMARY);
       }
-
-      setErrorMessage('首页数据读取失败，请稍后重试');
+      setErrorMessage('首页数据读取失败，点此重试');
     } finally {
-      if (requestId !== requestIdRef.current) {
-        return;
+      if (requestId === requestIdRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
       }
-
-      setIsLoading(false);
-      setIsRefreshing(false);
-    }
-  }, []);
-
-  const loadExportMode = useCallback(async () => {
-    try {
-      const settings = await ExportImageModeService.loadExportImageSettings();
-      setExportMode(settings.mode);
-    } catch (error) {
-      Logger.warn(PAGE_SCOPE, 'Failed to load export image mode on home screen.', { error });
-      setExportMode(null);
     }
   }, []);
 
@@ -384,212 +168,33 @@ export default function TodayScreen() {
     }
   }, []);
 
-  const handleRetry = useCallback(() => {
-    void loadHomeData('refresh');
-  }, [loadHomeData]);
-
   useFocusEffect(
     useCallback(() => {
       const mode: 'initial' | 'refresh' = hasFocusedRef.current ? 'refresh' : 'initial';
       hasFocusedRef.current = true;
       void loadHomeData(mode);
-      void loadExportMode();
       void loadBackupHistory();
       return undefined;
-    }, [loadBackupHistory, loadExportMode, loadHomeData]),
-  );
-
-  useEffect(
-    () => () => {
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-        anchorHighlightTimerRef.current = null;
-      }
-    },
-    [],
-  );
-
-  const handleAnchorLayout = useCallback((anchorId: TodayAnchorId, event: LayoutChangeEvent) => {
-    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
-    if (anchorLayoutsRef.current[anchorId] === nextY) {
-      return;
-    }
-
-    anchorLayoutsRef.current = {
-      ...anchorLayoutsRef.current,
-      [anchorId]: nextY,
-    };
-  }, []);
-
-  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    anchorNavLayoutRef.current = {
-      y: Math.max(0, Math.round(y)),
-      height: Math.max(0, Math.round(height)),
-    };
-  }, []);
-
-  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): TodayAnchorId => {
-    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
-      return 'upcoming';
-    }
-
-    const thresholdY = scrollY + TODAY_ANCHOR_ACTIVE_OFFSET;
-    let nextAnchorId: TodayAnchorId = 'overview';
-    for (const item of TODAY_ANCHOR_ITEMS) {
-      const anchorY = anchorLayoutsRef.current[item.id];
-      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
-        nextAnchorId = item.id;
-      }
-    }
-
-    return nextAnchorId;
-  }, []);
-
-  const handleTodayScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const y = contentOffset.y;
-      const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
-      const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
-      setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const nextFloatingAnchorVisible = anchorNavLayout
-        ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : false;
-      setIsFloatingAnchorVisible((current) =>
-        current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
-      if (!nextFloatingAnchorVisible) {
-        setIsAnchorNavCollapsed((current) => (current ? current : true));
-      }
-    },
-    [resolveActiveAnchorId],
-  );
-
-  const handleAnchorPress = useCallback(
-    (anchorId: TodayAnchorId) => {
-      const targetY = anchorLayoutsRef.current[anchorId];
-      const label = TODAY_ANCHOR_LABELS[anchorId];
-      if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试`, 'anchor');
-        return;
-      }
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const floatingTriggerY = anchorNavLayout
-        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : Number.POSITIVE_INFINITY;
-      const willShowFloatingAnchor =
-        Math.max(0, targetY - TODAY_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
-
-      let scrollOffset: number = TODAY_ANCHOR_SCROLL_OFFSET;
-      if (isFloatingAnchorVisible || willShowFloatingAnchor) {
-        scrollOffset = isAnchorNavCollapsed
-          ? TODAY_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
-          : TODAY_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
-      }
-
-      todayScrollRef.current?.scrollTo({
-        y: Math.max(0, targetY - scrollOffset),
-        animated: true,
-      });
-      setActiveAnchorId(anchorId);
-      setHighlightedAnchorId(anchorId);
-
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-      }
-      anchorHighlightTimerRef.current = setTimeout(() => {
-        setHighlightedAnchorId(null);
-        anchorHighlightTimerRef.current = null;
-      }, TODAY_ANCHOR_HIGHLIGHT_DURATION_MS);
-
-      showToast(`已跳转到 ${label}`, 'anchor');
-    },
-    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
-  );
-
-  const handleToggleAnchorNavCollapsed = useCallback(() => {
-    setIsAnchorNavCollapsed((current) => !current);
-  }, []);
-
-  const todayQueueList = useMemo(() => summary.todayQueue, [summary.todayQueue]);
-
-  const upcomingDays = useMemo(
-    () => summary.upcomingPlan.filter((day) => day.totalCount > 0).slice(0, UPCOMING_DAYS),
-    [summary.upcomingPlan],
-  );
-
-  const rightNowHint = useMemo(() => {
-    if (errorMessage) {
-      return errorMessage;
-    }
-    if (isLoading) {
-      return '正在读取首页任务...';
-    }
-    if (isRefreshing) {
-      return '正在刷新...';
-    }
-    return buildHomeHintText(summary.homeStatus);
-  }, [errorMessage, isLoading, isRefreshing, summary.homeStatus]);
-
-  const summaryStats = useMemo(
-    () => [
-      { label: '今日完成', value: String(summary.todayCompletedStats.total) },
-      { label: '会了', value: String(summary.todayCompletedStats.mastered) },
-      {
-        label: '模糊/不会',
-        value: String(summary.todayCompletedStats.unsure + summary.todayCompletedStats.wrong),
-      },
-    ],
-    [summary.todayCompletedStats.mastered, summary.todayCompletedStats.total, summary.todayCompletedStats.unsure, summary.todayCompletedStats.wrong],
-  );
-
-  const backupSafetyCopy = useMemo(() => buildBackupSafetyCopy(lastBackupAt), [lastBackupAt]);
-  const shouldShowBackupSafetyCard = summary.hasAnyMistake;
-
-  const handleOpenBackupSettings = useCallback(() => {
-    router.push('/settings' as never);
-  }, [router]);
-
-  const handleToggleBackupSafetyExpanded = useCallback(() => {
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setIsBackupSafetyExpanded((prev) => !prev);
-  }, []);
-
-  const handleOpenDetail = useCallback(
-    (id: string) => {
-      const routeId = normalizeMistakeId(id);
-      if (!routeId) {
-        Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
-        return;
-      }
-      router.push(`/mistake/${routeId}` as never);
-    },
-    [router],
+    }, [loadBackupHistory, loadHomeData]),
   );
 
   const dueTodayCount = Number.isFinite(summary.todayDueCount)
     ? Math.max(0, Math.floor(summary.todayDueCount))
     : 0;
+  const completedCount = Math.max(0, Math.floor(summary.todayCompletedStats.total));
+  const totalTaskCount = dueTodayCount + completedCount;
 
   const {
     isExporting: isExportingPdf,
-    exportStage,
     progress: exportPdfProgress,
     progressPercent: exportPdfProgressPercent,
-    exportTodayWorksheet: handleExportTodayWorksheet,
+    exportTodayWorksheet,
   } = useTodayWorksheetExport({
     scope: PAGE_SCOPE,
     dueToday: dueTodayCount,
     longToastDurationMs: TOAST_DURATION_LONG,
     showToast,
     onSuccess: (pdfUri: string, pdfUris: string[]) => {
-      Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
-        pdfUri,
-        pdfFileCount: pdfUris.length,
-      });
       router.push({
         pathname: '/pdf-preview',
         params: {
@@ -616,7 +221,6 @@ export default function TodayScreen() {
         void loadHomeData('refresh');
         return;
       }
-
       router.push('/review/session' as never);
     } catch (error) {
       Logger.error(PAGE_SCOPE, 'Failed to start today review session.', { error });
@@ -626,485 +230,172 @@ export default function TodayScreen() {
     }
   }, [isStartingSession, loadHomeData, router, showToast]);
 
-  const handleOpenReviewSheetScanner = useCallback(() => {
-    router.push('/review-sheet/scan' as never);
+  const handleOpenDetail = useCallback((id: string) => {
+    const routeId = normalizeMistakeId(id);
+    if (!routeId) {
+      Logger.warn(PAGE_SCOPE, 'Skip opening detail because mistake id is empty.', { id });
+      return;
+    }
+    router.push(`/mistake/${routeId}` as never);
   }, [router]);
 
-  /* const handleExportTodayWorksheet = useCallback(async () => {
-    if (Number.isFinite(summary.todayDueCount)) {
-      const dueToday = Math.max(0, Math.floor(summary.todayDueCount));
-      if (isExportingPdf) {
-        return;
-      }
+  const openLibraryQuickFilter = useCallback((quickMode: TodayQuickFilter) => {
+    router.push({
+      pathname: '/library',
+      params: { quickMode },
+    } as never);
+  }, [router]);
 
-      if (dueToday <= 0) {
-        Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
-          dueToday,
-        });
-        showToast('今天暂无需要复做的错题', 'info');
-        return;
-      }
-
-      const startedAt = Date.now();
-      Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_start', {
-        dueToday,
-      });
-
-      setIsExportingPdf(true);
-      setExportStage('preparing');
-      try {
-        const result = await TodayWorksheetExportService.exportTodayWorksheet({
-          expectedPendingCount: dueToday,
-          onProgress: (progress) => {
-            setExportStage(progress.stage);
-          },
-        });
-
-        if (result.outcome === 'success') {
-          const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
-          if (!pdfUri) {
-            Logger.warn(PAGE_SCOPE, 'Worksheet export succeeded but PDF URI is empty.', {
-              exportedCount: result.exportedCount,
-            });
-            showToast('导出成功但未找到 PDF 文件，请重试', 'error', TOAST_DURATION_LONG);
-            return;
-          }
-
-          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_success', {
-            pdfUri,
-            questionCount: result.exportedCount,
-            elapsedMs: Date.now() - startedAt,
-          });
-          Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
-            pdfUri,
-          });
-          router.push({
-            pathname: '/pdf-preview',
-            params: {
-              pdfUri,
-            },
-          } as never);
-          return;
-        }
-
-        if (result.outcome === 'empty') {
-          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
-            dueToday,
-          });
-          showToast('今天暂无需要复做的错题', 'info');
-          void loadHomeData('refresh');
-          return;
-        }
-
-        if (result.outcome === 'busy') {
-          showToast(result.message, 'info', TOAST_DURATION_LONG);
-          return;
-        }
-
-        showToast(result.message, 'error', TOAST_DURATION_LONG);
-      } catch (error) {
-        Logger.error(PAGE_SCOPE, 'Failed to export today worksheet.', { error });
-        showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
-      } finally {
-        setIsExportingPdf(false);
-        setExportStage(null);
-      }
+  const handleQuickFilterChange = useCallback((value: TodayQuickFilter) => {
+    if (value === 'today') {
+      scrollRef.current?.scrollTo({ y: Math.max(0, queueSectionYRef.current - 12), animated: true });
       return;
     }
+    openLibraryQuickFilter(value);
+  }, [openLibraryQuickFilter]);
 
-    if (isExportingPdf) {
-      return;
-    }
+  const handleQueueLayout = useCallback((event: LayoutChangeEvent) => {
+    queueSectionYRef.current = Math.max(0, event.nativeEvent.layout.y);
+  }, []);
 
-    if (summary.todayDueCount <= 0) {
-      showToast('今天没有待复做错题可导出', 'info');
-      return;
-    }
+  const handleOpenUpcomingDay = useCallback((date: string) => {
+    router.push({
+      pathname: '/library',
+      params: { scheduledDate: date },
+    } as never);
+  }, [router]);
 
-    setIsExportingPdf(true);
-    setExportStage('preparing');
-    try {
-      const result = await TodayWorksheetExportService.exportTodayWorksheet({
-        expectedPendingCount: summary.todayDueCount,
-        onProgress: (progress) => {
-          setExportStage(progress.stage);
-        },
-      });
-      if (result.outcome === 'success') {
-        showToast(result.message, 'success');
-        return;
-      }
+  const quickFilterOptions = useMemo<readonly SmartFilterOption<TodayQuickFilter>[]>(() => [
+    { value: 'today', label: '今日应做', count: dueTodayCount },
+    { value: 'overdue', label: '已逾期', count: Math.max(0, summary.overdueCount) },
+    { value: 'recentViewed', label: '最近访问' },
+    { value: 'recentAdded', label: '最近增加' },
+  ], [dueTodayCount, summary.overdueCount]);
 
-      if (result.outcome === 'empty') {
-        showToast(result.message, 'info');
-        void loadHomeData('refresh');
-        return;
-      }
-
-      if (result.outcome === 'share_unavailable') {
-        showToast(result.message, 'info', TOAST_DURATION_LONG);
-        return;
-      }
-
-      if (result.outcome === 'busy') {
-        showToast(result.message, 'info', TOAST_DURATION_LONG);
-        return;
-      }
-
-      showToast(result.message, 'error', TOAST_DURATION_LONG);
-    } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Failed to export today worksheet.', { error });
-      showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
-    } finally {
-      setIsExportingPdf(false);
-      setExportStage(null);
-    }
-  }, [isExportingPdf, loadHomeData, router, showToast, summary.todayDueCount]); */
-
-  const canExportTodayWorksheet = dueTodayCount > 0;
-  const exportButtonText = isExportingPdf
-    ? (exportStage === 'preparing' ? '正在生成练习卷 PDF...' : '正在生成练习卷 PDF...')
-    : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(dueTodayCount);
-  const exportHintText = isExportingPdf
-    ? exportButtonText
-    : canExportTodayWorksheet
-      ? `将导出今日待复做的 ${summary.todayDueCount} 题，便于打印练习。`
-      : '今日没有待复做错题，暂不可导出。';
-  const startTodayReviewButtonText = isStartingSession ? '正在进入今日复做…' : '开始今日复做';
-  const exportProgressHeadline = isExportingPdf
-    ? (exportPdfProgress.message || '正在生成练习卷 PDF...')
-    : exportHintText;
-  const exportProgressDetailText =
-    isExportingPdf && exportPdfProgress.total > 0
-      ? `已处理 ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · 用时 ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
-      : '';
-  const exportModeHintText = buildExportModeHintText(exportMode);
-  const canShowExportButton =
-    summary.homeStatus === 'dueToday' || summary.homeStatus === 'completedToday';
-  const canShowScanButton = summary.hasAnyMistake;
+  const upcomingDays = useMemo(
+    () => summary.upcomingPlan.slice(0, UPCOMING_DAYS),
+    [summary.upcomingPlan],
+  );
+  const backupStatus = useMemo(() => formatBackupStatus(lastBackupAt), [lastBackupAt]);
+  const summaryHint = errorMessage
+    ?? (isLoading ? '正在读取今日任务…' : isRefreshing ? '正在刷新…' : buildSummaryHint(summary.homeStatus));
+  const primaryDisabled = dueTodayCount <= 0 || isLoading || isStartingSession;
+  const primaryLabel = isStartingSession
+    ? '正在进入今日复做…'
+    : isLoading
+      ? '正在读取今日任务…'
+      : dueTodayCount > 0
+        ? '开始今日复做'
+        : completedCount > 0
+          ? '今日复做已完成'
+          : '今日暂无复做';
+  const exportDisabled = isExportingPdf || dueTodayCount <= 0;
+  const exportProgressLabel = isExportingPdf
+    ? `${exportPdfProgress.message || '正在生成练习卷…'}${
+        exportPdfProgress.total > 0
+          ? ` · ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
+          : ''
+      }`
+    : undefined;
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
-
-  const homePrimaryMessage = useMemo(() => buildHomePrimaryMessage(summary), [summary]);
-  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
-  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
 
   return (
     <View style={styles.pageRoot}>
       <ScreenContainer
         scroll
-        scrollRef={todayScrollRef}
+        scrollRef={scrollRef}
         safeAreaEdges={['top']}
-        contentStyle={styles.screenContent}
-        onScroll={handleTodayScroll}>
-      <View
-        style={highlightedAnchorId === 'overview' ? styles.anchorSectionHighlighted : null}
-        onLayout={(event) => handleAnchorLayout('overview', event)}>
-      <BrandHeader
-        title={todayMock.brand.title}
-        subtitle={todayMock.brand.subtitle}
-        rightAccessory={
-          canShowScanButton ? (
+        style={styles.safeArea}
+        contentStyle={styles.content}>
+        <BrandHeader
+          title="七刷错题本"
+          subtitle="巩固薄弱，把错题变成分数"
+          titleStyle={styles.brandTitle}
+          subtitleStyle={styles.brandSubtitle}
+          rightAccessory={(
             <Pressable
+              accessibilityLabel="扫描练习卷二维码"
               accessibilityRole="button"
-              accessibilityLabel="扫描练习卷"
-              hitSlop={8}
-              onPress={handleOpenReviewSheetScanner}
-              style={({ pressed }) => [
-                styles.headerScanButton,
-                pressed ? styles.headerScanButtonPressed : null,
-              ]}>
-              <MaterialIcons name="qr-code-scanner" size={24} color={colors.success} />
+              hitSlop={6}
+              onPress={() => router.push('/review-sheet/scan' as never)}
+              style={({ pressed }) => [styles.scanButton, pressed ? styles.iconButtonPressed : null]}>
+              <MaterialIcons name="qr-code-scanner" size={26} color={GREEN} />
             </Pressable>
-          ) : null
-        }
-      />
-      </View>
-
-      <View onLayout={handleAnchorNavLayout}>
-        <QuickAnchorNav
-          items={TODAY_ANCHOR_ITEMS}
-          activeAnchorId={activeAnchorId}
-          horizontalCompact
-          onAnchorPress={handleAnchorPress}
+          )}
         />
-      </View>
 
-      {shouldShowBackupSafetyCard ? (
-        <CardContainer
-          style={[
-            styles.backupSafetyCard,
-            backupSafetyCopy.isWarning ? styles.backupSafetyCardWarning : styles.backupSafetyCardOk,
-          ]}
-          padding={spacing.sm}>
+        <SmartFilter
+          onChange={handleQuickFilterChange}
+          options={quickFilterOptions}
+          value="today"
+        />
+
+        <Pressable
+          accessibilityLabel={`${backupStatus}，进入本地备份`}
+          accessibilityRole="button"
+          onPress={() => router.push('/settings' as never)}
+          style={({ pressed }) => [styles.backupRow, pressed ? styles.backupRowPressed : null]}>
+          <View style={styles.backupIcon}>
+            <MaterialIcons name="verified-user" size={23} color={GREEN} />
+          </View>
+          <Text
+            adjustsFontSizeToFit
+            minimumFontScale={0.78}
+            numberOfLines={1}
+            style={styles.backupText}>
+            {backupStatus}
+          </Text>
+          <MaterialIcons name="chevron-right" size={23} color="#8E8E93" />
+        </Pressable>
+
+        <TodaySummaryCard
+          completed={summary.todayCompletedStats}
+          exportDisabled={exportDisabled}
+          exportLabel={isExportingPdf ? '正在生成今日练习卷…' : '导出今日练习卷'}
+          exportProgress={exportPdfProgressPercent}
+          exportProgressLabel={exportProgressLabel}
+          hint={summaryHint}
+          onExportPress={() => void exportTodayWorksheet()}
+          onPrimaryPress={() => void handleStartTodayReview()}
+          pendingCount={dueTodayCount}
+          primaryDisabled={primaryDisabled}
+          primaryLabel={primaryLabel}
+          totalCount={totalTaskCount}
+        />
+
+        {errorMessage ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={`${isBackupSafetyExpanded ? '收起' : '展开'}本机数据安全，${backupSafetyCopy.meta}`}
-            onPress={handleToggleBackupSafetyExpanded}
-            style={({ pressed }) => [
-              styles.backupSafetyToggle,
-              pressed ? styles.backupSafetyPressablePressed : null,
-            ]}>
-              <View
-                style={[
-                  styles.backupSafetyCompactIcon,
-                  backupSafetyCopy.isWarning ? styles.backupSafetyIconWarning : styles.backupSafetyIconOk,
-                ]}>
-                <MaterialIcons
-                  name={backupSafetyCopy.isWarning ? 'security' : 'verified-user'}
-                  size={20}
-                  color={backupSafetyCopy.isWarning ? '#B7791F' : colors.success}
-                />
-              </View>
-              <View style={styles.backupSafetyCompactText}>
-                <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.backupSafetyEyebrow}>
-                  本机数据安全
-                </Text>
-                <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.backupSafetyMetaText}>
-                  {backupSafetyCopy.meta}
-                </Text>
-              </View>
-              <View style={styles.backupSafetyChevronButton}>
-                <MaterialIcons
-                  name={isBackupSafetyExpanded ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
-                  size={24}
-                  color={backupSafetyCopy.isWarning ? '#9A5B00' : colors.success}
-                />
-              </View>
+            onPress={() => void loadHomeData('refresh')}
+            style={({ pressed }) => [styles.retryButton, pressed ? styles.textButtonPressed : null]}>
+            <Text style={styles.retryText}>重新读取首页数据</Text>
           </Pressable>
-          {isBackupSafetyExpanded ? (
-            <View style={styles.backupSafetyExpandedBody}>
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.backupSafetyTitle}>
-                {backupSafetyCopy.title}
-              </Text>
-              <Text numberOfLines={2} maxFontSizeMultiplier={1.1} style={styles.backupSafetyDescription}>
-                {backupSafetyCopy.description}
-              </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="去设置页备份"
-                onPress={handleOpenBackupSettings}
-                style={({ pressed }) => [
-                  styles.backupSafetyActionPill,
-                  backupSafetyCopy.isWarning
-                    ? styles.backupSafetyActionPillWarning
-                    : styles.backupSafetyActionPillOk,
-                  pressed ? styles.backupSafetyPressablePressed : null,
-                ]}>
-                <Text
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={1.1}
-                  style={[
-                    styles.backupSafetyActionText,
-                    backupSafetyCopy.isWarning
-                      ? styles.backupSafetyActionTextWarning
-                      : styles.backupSafetyActionTextOk,
-                  ]}>
-                  去备份
-                </Text>
-                <MaterialIcons
-                  name="chevron-right"
-                  size={16}
-                  color={backupSafetyCopy.isWarning ? '#9A5B00' : colors.success}
-                />
-              </Pressable>
-            </View>
-          ) : null}
-        </CardContainer>
-      ) : null}
+        ) : null}
 
-      <View onLayout={(event) => handleAnchorLayout('task', event)}>
-      <CardContainer
-        style={[
-          styles.taskSummaryCard,
-          highlightedAnchorId === 'task' ? styles.anchorTargetHighlighted : null,
-        ]}
-        padding={spacing.lg}>
-        <Text style={styles.taskCaption}>今日任务</Text>
-        <View style={styles.taskDueRow}>
-          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskDueCount}>
-            {summary.todayDueCount}
-          </Text>
-          <Text style={styles.taskDueLabel}>道待复做</Text>
-        </View>
-
-        <View style={styles.taskStatsRow}>
-          {summaryStats.map((stat) => (
-            <View key={stat.label} style={styles.taskStatCell}>
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskStatLabel}>
-                {stat.label}
-              </Text>
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.taskStatValue}>
-                {stat.value}
-              </Text>
-            </View>
-          ))}
-        </View>
-
-        <Text
-          maxFontSizeMultiplier={1.1}
-          style={[styles.statsHint, errorMessage ? styles.statsHintError : null]}>
-          {rightNowHint}
-        </Text>
-      </CardContainer>
-      </View>
-
-      <View style={styles.sectionBlock}>
-        <View style={styles.sectionContent}>
-          {summary.homeStatus === 'dueToday' ? (
-            <View style={styles.todayEntryWrap}>
-              <Pressable
-                onPress={() => void handleStartTodayReview()}
-                disabled={isStartingSession}
-                style={[
-                  styles.primaryActionButton,
-                  isStartingSession ? styles.primaryActionButtonDisabled : null,
-                ]}>
-                <View style={styles.actionButtonContent}>
-                  <MaterialIcons name="task-alt" size={20} color={colors.success} />
-                  <Text style={styles.primaryActionButtonText}>{startTodayReviewButtonText}</Text>
-                </View>
-              </Pressable>
-              <Pressable
-                onPress={() => void handleExportTodayWorksheet()}
-                disabled={isExportingPdf || !canExportTodayWorksheet}
-                style={[
-                  styles.secondaryActionButton,
-                  isExportingPdf || !canExportTodayWorksheet ? styles.secondaryActionButtonDisabled : null,
-                ]}>
-                <View style={styles.actionButtonContent}>
-                  <MaterialIcons name="fact-check" size={20} color={colors.success} />
-                  <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
-                </View>
-              </Pressable>
-              <View style={styles.exportHintWrap}>
-                <Text style={styles.exportHintText}>{exportProgressHeadline}</Text>
-                {exportProgressDetailText ? (
-                  <Text style={styles.exportProgressMetaText}>{exportProgressDetailText}</Text>
-                ) : null}
-                <Text style={styles.exportModeHintText}>{exportModeHintText}</Text>
-                {isExportingPdf && exportPdfProgress.total > 0 ? (
-                  <View style={styles.exportProgressTrack}>
-                    <View
-                      style={[
-                        styles.exportProgressFill,
-                        { width: `${Math.round(exportPdfProgressPercent * 100)}%` },
-                      ]}
-                    />
-                  </View>
-                ) : null}
-              </View>
-            </View>
-          ) : errorMessage && !isLoading ? (
-            <SectionStateCard message={errorMessage} actionLabel="重试" onActionPress={handleRetry} />
-          ) : (
-            <View style={styles.todayEntryWrap}>
-              <SectionStateCard
-                message={homePrimaryMessage}
-                actionLabel={summary.homeStatus === 'empty' ? '新增错题' : undefined}
-                onActionPress={summary.homeStatus === 'empty' ? () => router.push('/add' as never) : undefined}
-              />
-              {canShowExportButton ? (
-                <>
-                  <Pressable
-                    onPress={() => void handleExportTodayWorksheet()}
-                    disabled={isExportingPdf || !canExportTodayWorksheet}
-                    style={[
-                      styles.secondaryActionButton,
-                      isExportingPdf || !canExportTodayWorksheet
-                        ? styles.secondaryActionButtonDisabled
-                        : null,
-                    ]}>
-                    <View style={styles.actionButtonContent}>
-                      <MaterialIcons name="fact-check" size={20} color={colors.success} />
-                      <Text style={styles.secondaryActionButtonText}>{exportButtonText}</Text>
-                    </View>
-                  </Pressable>
-                  <View style={styles.exportHintWrap}>
-                    <Text style={styles.exportHintText}>{exportProgressHeadline}</Text>
-                    {exportProgressDetailText ? (
-                      <Text style={styles.exportProgressMetaText}>{exportProgressDetailText}</Text>
-                    ) : null}
-                    <Text style={styles.exportModeHintText}>{exportModeHintText}</Text>
-                    {isExportingPdf && exportPdfProgress.total > 0 ? (
-                      <View style={styles.exportProgressTrack}>
-                        <View
-                          style={[
-                            styles.exportProgressFill,
-                            { width: `${Math.round(exportPdfProgressPercent * 100)}%` },
-                          ]}
-                        />
-                      </View>
-                    ) : null}
-                  </View>
-                </>
-              ) : null}
-            </View>
-          )}
-        </View>
-      </View>
-
-      <View
-        style={[
-          styles.sectionBlock,
-          highlightedAnchorId === 'queue' ? styles.anchorSectionHighlighted : null,
-        ]}
-        onLayout={(event) => handleAnchorLayout('queue', event)}>
-        <SectionTitle title="今日复做队列" />
-        <View style={styles.queueList}>
-          {summary.homeStatus === 'dueToday' && todayQueueList.length > 0 ? (
-            <TodayQueueListCard items={todayQueueList} onOpenDetail={handleOpenDetail} />
-          ) : isLoading ? (
-            <SectionStateCard message="正在加载今日复做队列..." />
-          ) : (
-            <SectionStateCard message="今天没有需要开始的复做题" />
-          )}
-        </View>
-      </View>
-
-      <View
-        style={[
-          styles.sectionBlock,
-          highlightedAnchorId === 'upcoming' ? styles.anchorSectionHighlighted : null,
-        ]}
-        onLayout={(event) => handleAnchorLayout('upcoming', event)}>
-        <SectionTitle title="接下来" />
-        <View style={styles.queueList}>
-          {upcomingDays.length > 0 ? (
-            upcomingDays.map((day) => (
-              <UpcomingPlanCard key={`${day.date}-${day.dayOffset}`} day={day} onOpenDetail={handleOpenDetail} />
-            ))
-          ) : isLoading ? (
-            <SectionStateCard message="正在加载未来计划..." />
-          ) : (
-            <SectionStateCard message="未来 3 天暂无复做安排" />
-          )}
-        </View>
-      </View>
-      </ScreenContainer>
-
-      {shouldShowFloatingAnchorNav ? (
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.floatingAnchorWrap,
-            { top: floatingAnchorTop },
-          ]}>
-          <QuickAnchorNav
-            items={TODAY_ANCHOR_ITEMS}
-            activeAnchorId={activeAnchorId}
-            collapsed={isAnchorNavCollapsed}
-            floating
-            horizontalCompact
-            onToggleCollapsed={handleToggleAnchorNavCollapsed}
-            onAnchorPress={handleAnchorPress}
+        <View onLayout={handleQueueLayout} style={styles.section}>
+          <SectionHeader
+            actionLabel="查看全部"
+            onActionPress={() => openLibraryQuickFilter('today')}
+            title="今日队列"
+          />
+          <TodayQueueList
+            isLoading={isLoading}
+            items={summary.todayQueue}
+            onOpenItem={handleOpenDetail}
           />
         </View>
-      ) : null}
 
-      <AppToast
-        {...toastProps}
-        bottomOffset={toastBottomOffset}
-      />
+        <View style={styles.section}>
+          <SectionHeader title="接下来" />
+          <UpcomingTaskList
+            days={upcomingDays}
+            isLoading={isLoading}
+            onOpenDay={handleOpenUpcomingDay}
+          />
+        </View>
+      </ScreenContainer>
+
+      <AppToast {...toastProps} bottomOffset={toastBottomOffset} />
     </View>
   );
 }
@@ -1112,379 +403,111 @@ export default function TodayScreen() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
+    backgroundColor: '#F5F5F7',
   },
-  screenContent: {
-    paddingTop: spacing.lg,
-    paddingBottom: layout.bottomTabHeight,
-    gap: spacing.lg,
+  safeArea: {
+    backgroundColor: '#F5F5F7',
   },
-  floatingAnchorWrap: {
-    position: 'absolute',
-    left: spacing.screenPadding,
-    right: spacing.screenPadding,
-    zIndex: 30,
-    elevation: 30,
+  content: {
+    paddingTop: 20,
+    paddingBottom: layout.bottomTabHeight + 32,
+    gap: 24,
+    backgroundColor: '#F5F5F7',
   },
-  anchorTargetHighlighted: {
-    borderColor: colors.success,
-    shadowColor: colors.success,
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 5,
+  brandTitle: {
+    color: '#1D1D1F',
+    fontSize: 33,
+    lineHeight: 41,
+    fontWeight: '800',
   },
-  anchorSectionHighlighted: {
-    marginHorizontal: -spacing.sm,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.success,
-    backgroundColor: '#FBFFFC',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+  brandSubtitle: {
+    color: '#6E6E73',
+    fontSize: 16,
+    lineHeight: 23,
+    fontWeight: '400',
   },
-  headerScanButton: {
+  scanButton: {
     width: 44,
     height: 44,
-    borderRadius: radius.md,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerScanButtonPressed: {
-    backgroundColor: colors.successBg,
+  iconButtonPressed: {
+    backgroundColor: '#EAF7ED',
   },
-  backupSafetyPressablePressed: {
-    opacity: 0.9,
+  backupRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: -4,
+    borderRadius: 16,
+    paddingHorizontal: 4,
   },
-  backupSafetyCard: {
-    borderRadius: radius.lg,
-    shadowOpacity: 0.03,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
+  backupRowPressed: {
+    backgroundColor: '#ECECEF',
   },
-  backupSafetyCardWarning: {
-    borderColor: '#F3DAA2',
-    backgroundColor: '#FFFDF8',
+  backupIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EAF7ED',
   },
-  backupSafetyCardOk: {
-    borderColor: colors.successBorder,
-    backgroundColor: '#FBFFFC',
+  backupText: {
+    flex: 1,
+    minWidth: 0,
+    color: '#6E6E73',
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '500',
   },
-  backupSafetyToggle: {
+  section: {
+    gap: 12,
+  },
+  sectionHeader: {
     minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  backupSafetyCompactIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  backupSafetyIconWarning: {
-    borderColor: '#E7C36A',
-    backgroundColor: '#FFF4D6',
-  },
-  backupSafetyIconOk: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-  },
-  backupSafetyCompactText: {
+  sectionTitle: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
-  },
-  backupSafetyChevronButton: {
-    width: 34,
-    height: 34,
-    borderRadius: radius.pill,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  backupSafetyExpandedBody: {
-    marginTop: spacing.sm,
-    borderTopWidth: 1,
-    borderTopColor: '#DDEFE2',
-    paddingTop: spacing.sm,
-    gap: spacing.xs,
-  },
-  backupSafetyEyebrow: {
-    ...typography.caption,
-    color: colors.textSecondary,
+    color: '#1D1D1F',
+    fontSize: 23,
+    lineHeight: 30,
     fontWeight: '700',
   },
-  backupSafetyTitle: {
-    ...typography.body,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  backupSafetyActionPill: {
-    alignSelf: 'flex-start',
-    marginTop: spacing.xs,
-    minHeight: 30,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    paddingHorizontal: spacing.sm,
+  sectionAction: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
-    flexShrink: 0,
+    paddingLeft: 10,
   },
-  backupSafetyActionPillWarning: {
-    borderColor: '#E7C36A',
-    backgroundColor: '#FFF4D6',
+  sectionActionText: {
+    color: GREEN,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
   },
-  backupSafetyActionPillOk: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
+  textButtonPressed: {
+    opacity: 0.5,
   },
-  backupSafetyActionText: {
-    ...typography.caption,
-    fontWeight: '800',
+  retryButton: {
+    alignSelf: 'center',
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
   },
-  backupSafetyActionTextWarning: {
-    color: '#9A5B00',
-  },
-  backupSafetyActionTextOk: {
-    color: colors.success,
-  },
-  backupSafetyDescription: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
+  retryText: {
+    color: '#FF3B30',
+    fontSize: 14,
     lineHeight: 20,
-  },
-  backupSafetyMetaText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '700',
-    flex: 1,
-    minWidth: 0,
-  },
-  taskSummaryCard: {
-    backgroundColor: colors.successBg,
-    borderColor: colors.successBorder,
-    borderRadius: radius.xl,
-    ...shadows.card,
-  },
-  taskCaption: {
-    ...typography.bodySmall,
-    color: colors.success,
     fontWeight: '600',
-  },
-  taskDueRow: {
-    marginTop: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: spacing.sm,
-  },
-  taskDueCount: {
-    ...typography.numberHero,
-    color: colors.success,
-    lineHeight: 58,
-  },
-  taskDueLabel: {
-    ...typography.sectionTitle,
-    color: colors.success,
-    marginBottom: spacing.xs,
-    fontSize: 18,
-    lineHeight: 24,
-  },
-  taskStatsRow: {
-    marginTop: spacing.md,
-    flexDirection: 'row',
-    gap: spacing.xs,
-  },
-  taskStatCell: {
-    flex: 1,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#D7ECDF',
-    backgroundColor: '#FEFFFE',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    minHeight: 84,
-    justifyContent: 'space-between',
-  },
-  taskStatLabel: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '600',
-  },
-  taskStatValue: {
-    ...typography.sectionTitle,
-    color: colors.success,
-    fontSize: 26,
-    lineHeight: 32,
-    flexShrink: 1,
-    includeFontPadding: false,
-  },
-  statsHint: {
-    marginTop: spacing.md,
-    ...typography.caption,
-    color: colors.success,
-  },
-  statsHintError: {
-    color: '#F8B4B4',
-  },
-  sectionBlock: {
-    gap: spacing.md,
-  },
-  sectionContent: {
-    marginTop: spacing.xs,
-  },
-  queueList: {
-    gap: spacing.md,
-  },
-  todayEntryWrap: {
-    gap: spacing.md,
-  },
-  stateCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
-  },
-  stateText: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  stateActionButton: {
-    alignSelf: 'flex-start',
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  stateActionText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '700',
-  },
-  actionButtonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm,
-  },
-  primaryActionButton: {
-    width: '100%',
-    minHeight: 56,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    ...shadows.card,
-  },
-  primaryActionButtonDisabled: {
-    opacity: 0.6,
-  },
-  primaryActionButtonText: {
-    ...typography.sectionTitle,
-    color: colors.success,
-    fontWeight: '700',
-  },
-  secondaryActionButton: {
-    width: '100%',
-    minHeight: 56,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D7E6DC',
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    ...shadows.card,
-  },
-  secondaryActionButtonDisabled: {
-    opacity: 0.6,
-  },
-  secondaryActionButtonText: {
-    ...typography.sectionTitle,
-    color: colors.success,
-    fontWeight: '700',
-  },
-  exportHintText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  exportHintWrap: {
-    marginTop: -spacing.xs,
-    gap: spacing.xs,
-  },
-  exportProgressMetaText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  exportModeHintText: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  exportProgressTrack: {
-    height: 5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surfaceMuted,
-    overflow: 'hidden',
-  },
-  exportProgressFill: {
-    height: '100%',
-    borderRadius: radius.pill,
-    backgroundColor: colors.success,
-  },
-  upcomingCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
-  },
-  upcomingDayTitle: {
-    ...typography.body,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  upcomingItemList: {
-    gap: spacing.xs,
-  },
-  upcomingItemRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  upcomingItemTitle: {
-    ...typography.body,
-    color: colors.textPrimary,
-    flex: 1,
-    minWidth: 0,
-  },
-  upcomingItemMeta: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  upcomingRemainText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  todayQueueFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  todayQueueToggleButton: {
-    marginLeft: 'auto',
-    paddingHorizontal: spacing.xs,
-    paddingVertical: spacing.xs,
-  },
-  todayQueueToggleText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '700',
   },
 });
