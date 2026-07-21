@@ -1042,6 +1042,7 @@ export default function ReviewSessionPage() {
   const submitLockRef = useRef(false);
   const allowNextLeaveRef = useRef(false);
   const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
+  const refreshQueueDisplayFromStorageRef = useRef<(() => Promise<void>) | null>(null);
   const currentIndexRef = useRef(0);
   const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
 
@@ -2649,10 +2650,14 @@ export default function ReviewSessionPage() {
     submittedReviewEntries,
   ]);
 
+  useEffect(() => {
+    refreshQueueDisplayFromStorageRef.current = refreshQueueDisplayFromStorage;
+  }, [refreshQueueDisplayFromStorage]);
+
   useFocusEffect(
     useCallback(() => {
-      void refreshQueueDisplayFromStorage();
-    }, [refreshQueueDisplayFromStorage]),
+      void refreshQueueDisplayFromStorageRef.current?.();
+    }, []),
   );
 
   useEffect(
