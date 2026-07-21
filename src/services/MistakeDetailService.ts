@@ -147,6 +147,12 @@ export type DeleteMistakeResult = {
   errorMessage?: string;
 };
 
+export type ArchiveMistakeResult = {
+  ok: boolean;
+  detail?: MistakeDetailViewModel;
+  errorMessage?: string;
+};
+
 export type JoinMistakeReviewPlanResult = {
   ok: boolean;
   detail?: MistakeDetailViewModel;
@@ -792,6 +798,66 @@ export async function deleteMistake(mistakeIdInput: string): Promise<DeleteMista
     return {
       ok: false,
       errorMessage: toErrorMessage(error, DELETE_MISTAKE_ERROR_MESSAGE),
+    };
+  }
+}
+
+export async function archiveMistake(mistakeIdInput: string): Promise<ArchiveMistakeResult> {
+  const mistakeId = normalizeMistakeId(mistakeIdInput);
+  if (!mistakeId) {
+    return {
+      ok: false,
+      errorMessage: '错题 id 不能为空。',
+    };
+  }
+
+  try {
+    const current = await MistakeRepository.getMistakeById(mistakeId);
+    if (!current) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应错题。',
+      };
+    }
+
+    if (current.status !== REVIEW_STATUS.ARCHIVED) {
+      const updated = await MistakeRepository.updateMistake(mistakeId, {
+        status: REVIEW_STATUS.ARCHIVED,
+        next_review_at: null,
+      });
+      if (!updated) {
+        return {
+          ok: false,
+          errorMessage: '归档错题失败，请刷新后重试。',
+        };
+      }
+
+      void ReviewReminderService.refreshReminderSchedule({ reason: 'archive_mistake' }).catch((error) => {
+        Logger.warn(SERVICE_SCOPE, 'Reminder schedule refresh failed after archiving mistake.', {
+          mistakeId,
+          error,
+        });
+      });
+    }
+
+    const detailResult = await getMistakeDetail(mistakeId);
+    if (!detailResult.ok || !detailResult.detail) {
+      return {
+        ok: false,
+        errorMessage: detailResult.errorMessage ?? '错题已归档，但刷新详情失败。',
+      };
+    }
+
+    Logger.info(SERVICE_SCOPE, 'Archived mistake successfully.', { mistakeId });
+    return {
+      ok: true,
+      detail: detailResult.detail,
+    };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'archiveMistake failed.', { mistakeId, error });
+    return {
+      ok: false,
+      errorMessage: toErrorMessage(error, '归档错题失败，请稍后重试。'),
     };
   }
 }

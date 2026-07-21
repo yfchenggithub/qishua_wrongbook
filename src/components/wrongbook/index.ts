@@ -3,6 +3,7 @@ export * from './CustomModuleManagerModal';
 export * from './DetailImageCard';
 export * from './ImagePreviewModal';
 export * from './MistakeImageBrowser';
+export * from './MistakeDetailChrome';
 export * from './MistakeImageSection';
 export * from './OfflineBadge';
 export * from './ProgressDots';

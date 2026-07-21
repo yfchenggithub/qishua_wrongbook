@@ -174,6 +174,8 @@ export type TextNotePreviewProps = {
   highlights?: TextHighlightRange[];
   disabled?: boolean;
   hintText?: string;
+  openOnSinglePress?: boolean;
+  showFooter?: boolean;
   numberOfLines?: number;
   style?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
@@ -190,6 +192,8 @@ export function TextNotePreview({
   highlights,
   disabled = false,
   hintText = '双击查看和编辑',
+  openOnSinglePress = false,
+  showFooter = true,
   numberOfLines = 2,
   style,
   textStyle,
@@ -200,9 +204,13 @@ export function TextNotePreview({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`${accessibilityLabel}，双击查看和编辑`}
+      accessibilityLabel={`${accessibilityLabel}，${openOnSinglePress ? '点击' : '双击'}查看和编辑`}
       disabled={disabled}
       onPress={() => {
+        if (openOnSinglePress) {
+          onOpen();
+          return;
+        }
         const now = Date.now();
         if (now - lastTapAtRef.current <= DOUBLE_TAP_WINDOW_MS) {
           lastTapAtRef.current = 0;
@@ -231,10 +239,12 @@ export function TextNotePreview({
           emptyTextStyle,
         ]}
       />
-      <View style={[styles.previewFooter, footerStyle]}>
-        <Text style={styles.previewHint}>{hintText}</Text>
-        <Text style={styles.previewCounter}>{value.length}/{maxLength}</Text>
-      </View>
+      {showFooter ? (
+        <View style={[styles.previewFooter, footerStyle]}>
+          <Text style={styles.previewHint}>{hintText}</Text>
+          <Text style={styles.previewCounter}>{value.length}/{maxLength}</Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
