@@ -156,7 +156,23 @@ export async function cleanupOrphanImageFiles(orphanFiles: string[]): Promise<Or
   let releasedBytes = 0;
 
   try {
+    // Re-check references immediately before deletion. A file may have become
+    // referenced after the scan result was shown in the confirmation dialog.
+    const currentReferencedUris = await MistakeImageRepository.listAllImageUris();
+    const currentReferencedSet = new Set(
+      currentReferencedUris
+        .map((uri) => normalizeUri(uri))
+        .filter((uri): uri is string => typeof uri === 'string'),
+    );
+
     for (const targetUri of normalizedTargets) {
+      if (currentReferencedSet.has(targetUri)) {
+        Logger.info(SERVICE_SCOPE, 'Skip image that is now referenced by a mistake.', {
+          uriPreview: toUriPreview(targetUri),
+        });
+        continue;
+      }
+
       const info = await getImageInfo(targetUri);
       if (!info.exists) {
         deletedCount += 1;

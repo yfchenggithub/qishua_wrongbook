@@ -1,11 +1,9 @@
 import { Tabs } from 'expo-router';
 import React from 'react';
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Alert } from 'react-native';
+import { Alert, StyleSheet } from 'react-native';
 
 import { HapticTab } from '@/components/haptic-tab';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
 import { getAddScreenHasUnsavedPhotos } from '@/src/services/LeaveGuardService';
 
 type TabPressEvent = {
@@ -50,18 +48,24 @@ function createTabLeaveGuardListener(targetTabName: string) {
 }
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        tabBarInactiveTintColor: '#8f8f8f',
+        tabBarActiveTintColor: '#111111',
+        tabBarInactiveTintColor: '#8E8E93',
         headerShown: false,
         tabBarButton: HapticTab,
+        tabBarHideOnKeyboard: true,
         tabBarLabelStyle: {
           fontSize: 13,
           fontWeight: '600',
+        },
+        tabBarStyle: {
+          backgroundColor: '#FFFFFF',
+          borderTopColor: '#E5E5EA',
+          borderTopWidth: StyleSheet.hairlineWidth,
+          elevation: 0,
+          shadowOpacity: 0,
         },
       }}>
       <Tabs.Screen

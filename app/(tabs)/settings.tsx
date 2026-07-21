@@ -2,13 +2,11 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as DocumentPicker from 'expo-document-picker';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type ComponentProps, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  type LayoutChangeEvent,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -19,16 +17,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import {
-  AppToast,
-  BrandHeader,
-  CardContainer,
-  QuickAnchorNav,
-  type QuickAnchorNavItem,
-  ScreenContainer,
-} from '@/src/components';
+import { AppToast, ScreenContainer } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
-import { APP_BUILD_DATE, APP_NAME, DATA_MODE_LABEL } from '@/src/constants/app';
+import { APP_BUILD_DATE, APP_NAME } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
@@ -43,7 +34,7 @@ import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
 import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
-import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
+import { layout, spacing } from '@/src/styles/tokens';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
   DEFAULT_PRINT_ENHANCE_PERFORMANCE_PROFILE,
@@ -70,30 +61,6 @@ const EMPTY_BACKUP_COUNTS: BackupManifest['counts'] = {
   reviewRecords: 0,
   imageFiles: 0,
 };
-
-type SettingsAnchorId = 'backup' | 'stats' | 'export' | 'reminder' | 'storage';
-
-const SETTINGS_ANCHOR_ACTIVE_OFFSET = 104;
-const SETTINGS_ANCHOR_SCROLL_OFFSET = spacing.sm;
-const SETTINGS_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
-const SETTINGS_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
-const SETTINGS_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
-
-const SETTINGS_ANCHOR_LABELS: Record<SettingsAnchorId, string> = {
-  backup: '数据备份',
-  stats: '学习数据',
-  export: '打印导出',
-  reminder: '复做提醒',
-  storage: '本机存储',
-};
-
-const SETTINGS_ANCHOR_ITEMS: readonly QuickAnchorNavItem<SettingsAnchorId>[] = [
-  { id: 'backup', label: SETTINGS_ANCHOR_LABELS.backup, shortLabel: '备份', icon: 'security' },
-  { id: 'stats', label: SETTINGS_ANCHOR_LABELS.stats, shortLabel: '数据', icon: 'bar-chart' },
-  { id: 'export', label: SETTINGS_ANCHOR_LABELS.export, shortLabel: '导出', icon: 'print' },
-  { id: 'reminder', label: SETTINGS_ANCHOR_LABELS.reminder, shortLabel: '提醒', icon: 'notifications-active' },
-  { id: 'storage', label: SETTINGS_ANCHOR_LABELS.storage, shortLabel: '存储', icon: 'storage' },
-];
 
 type DevRoute = '/dev/db' | '/dev/images' | '/dev/logs';
 
@@ -268,15 +235,6 @@ const DEV_ENTRIES: DevEntry[] = [
   },
 ];
 
-function formatClock(date: Date | null): string {
-  if (!date) {
-    return '--:--';
-  }
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `${hours}:${minutes}`;
-}
-
 function formatStorageSize(bytes?: number | null): string {
   if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
     return '暂未统计';
@@ -303,42 +261,6 @@ function formatReminderTime(hour: number, minute: number): string {
   const safeHour = Number.isFinite(hour) ? Math.max(0, Math.min(23, Math.floor(hour))) : 20;
   const safeMinute = Number.isFinite(minute) ? Math.max(0, Math.min(59, Math.floor(minute))) : 0;
   return `${String(safeHour).padStart(2, '0')}:${String(safeMinute).padStart(2, '0')}`;
-}
-
-function formatReminderScheduleDateLabel(isoDateTime: string | null | undefined): string | null {
-  if (typeof isoDateTime !== 'string' || !isoDateTime.trim()) {
-    return null;
-  }
-
-  const scheduledDate = new Date(isoDateTime);
-  if (Number.isNaN(scheduledDate.getTime())) {
-    return null;
-  }
-
-  const timeText = formatReminderTime(scheduledDate.getHours(), scheduledDate.getMinutes());
-  const now = new Date();
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const startScheduled = new Date(
-    scheduledDate.getFullYear(),
-    scheduledDate.getMonth(),
-    scheduledDate.getDate(),
-    0,
-    0,
-    0,
-    0,
-  );
-  const dayDiff = Math.floor((startScheduled.getTime() - startToday.getTime()) / (24 * 60 * 60 * 1000));
-
-  if (dayDiff === 0) {
-    return `今天 ${timeText}`;
-  }
-  if (dayDiff === 1) {
-    return `明天 ${timeText}`;
-  }
-
-  const yearPrefix =
-    scheduledDate.getFullYear() !== now.getFullYear() ? `${scheduledDate.getFullYear()}年` : '';
-  return `${yearPrefix}${scheduledDate.getMonth() + 1}月${scheduledDate.getDate()}日 ${timeText}`;
 }
 
 function buildOperationSessionId(prefix: string): string {
@@ -456,6 +378,99 @@ function buildRestorePreviewMessage(manifest: BackupManifest, warnings: string[]
   return lines.join('\n');
 }
 
+type SettingsIconName = ComponentProps<typeof MaterialIcons>['name'];
+
+function SettingsIcon({ name }: { name: SettingsIconName }) {
+  return (
+    <View style={styles.settingsIcon}>
+      <MaterialIcons color="#23A566" name={name} size={22} />
+    </View>
+  );
+}
+
+function SettingsSection({
+  title,
+  children,
+}: {
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <View style={styles.section}>
+      {title ? <Text style={styles.sectionLabel}>{title}</Text> : null}
+      <View style={styles.settingsGroup}>{children}</View>
+    </View>
+  );
+}
+
+function SettingsDivider() {
+  return <View style={styles.settingsDivider} />;
+}
+
+function SettingsRow({
+  accessibilityLabel,
+  disabled = false,
+  icon,
+  onPress,
+  right,
+  showChevron = false,
+  subtitle,
+  title,
+}: {
+  accessibilityLabel?: string;
+  disabled?: boolean;
+  icon: SettingsIconName;
+  onPress: () => void;
+  right?: ReactNode;
+  showChevron?: boolean;
+  subtitle?: string;
+  title: string;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.settingsRow,
+        pressed && !disabled ? styles.settingsRowPressed : null,
+        disabled ? styles.disabledButton : null,
+      ]}>
+      <SettingsIcon name={icon} />
+      <View style={styles.settingsRowText}>
+        <Text numberOfLines={1} style={styles.settingsRowTitle}>{title}</Text>
+        {subtitle ? <Text numberOfLines={2} style={styles.settingsRowSubtitle}>{subtitle}</Text> : null}
+      </View>
+      {right ? <View style={styles.settingsRowRight}>{right}</View> : null}
+      {showChevron ? <MaterialIcons color="#A1A1A6" name="chevron-right" size={24} /> : null}
+    </Pressable>
+  );
+}
+
+function OverviewStats({ items }: { items: readonly { label: string; value: string }[] }) {
+  return (
+    <View style={styles.overviewStats}>
+      {items.map((item, index) => (
+        <View key={item.label} style={styles.overviewStatSlot}>
+          {index > 0 ? <View style={styles.overviewDivider} /> : null}
+          <View style={styles.overviewStatContent}>
+            <Text numberOfLines={1} style={styles.overviewLabel}>{item.label}</Text>
+            <Text
+              adjustsFontSizeToFit
+              minimumFontScale={0.68}
+              numberOfLines={1}
+              style={styles.overviewValue}>
+              {item.value}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -463,7 +478,7 @@ export default function SettingsScreen() {
   const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(false);
   const [dataOverview, setDataOverview] = useState<SettingsStats>(DEFAULT_DATA_OVERVIEW_STATS);
   const [isOverviewLoading, setIsOverviewLoading] = useState(true);
-  const [isOverviewRefreshing, setIsOverviewRefreshing] = useState(false);
+  const [, setIsOverviewRefreshing] = useState(false);
   const [overviewErrorMessage, setOverviewErrorMessage] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [exportImageMode, setExportImageMode] = useState<PrintEnhanceMode>(DEFAULT_EXPORT_IMAGE_MODE);
@@ -493,130 +508,18 @@ export default function SettingsScreen() {
   const [isReminderTimeBusy, setIsReminderTimeBusy] = useState(false);
   const [isReminderPermissionGranted, setIsReminderPermissionGranted] = useState(false);
   const [showReminderPermissionHint, setShowReminderPermissionHint] = useState(false);
-  const [activeAnchorId, setActiveAnchorId] = useState<SettingsAnchorId>('backup');
-  const [highlightedAnchorId, setHighlightedAnchorId] = useState<SettingsAnchorId | null>(null);
-  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
-  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
+  const [activeSheet, setActiveSheet] = useState<'print' | 'storage' | null>(null);
 
   const hasFocusedRef = useRef(false);
   const lastTapAtRef = useRef<number | null>(null);
   const tapCountRef = useRef(0);
   const skipNextVersionPressRef = useRef(false);
-  const settingsScrollRef = useRef<ScrollView | null>(null);
-  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
-  const anchorLayoutsRef = useRef<Partial<Record<SettingsAnchorId, number>>>({});
-  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { props: toastProps, showToast } = useAppToast({
     defaultDuration: TOAST_DURATION_DEFAULT,
     enterDuration: 160,
     exitDuration: 140,
   });
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
-
-  const handleAnchorLayout = useCallback((anchorId: SettingsAnchorId, event: LayoutChangeEvent) => {
-    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
-    if (anchorLayoutsRef.current[anchorId] === nextY) {
-      return;
-    }
-
-    anchorLayoutsRef.current = {
-      ...anchorLayoutsRef.current,
-      [anchorId]: nextY,
-    };
-  }, []);
-
-  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    anchorNavLayoutRef.current = {
-      y: Math.max(0, Math.round(y)),
-      height: Math.max(0, Math.round(height)),
-    };
-  }, []);
-
-  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): SettingsAnchorId => {
-    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
-      return 'storage';
-    }
-
-    const thresholdY = scrollY + SETTINGS_ANCHOR_ACTIVE_OFFSET;
-    let nextAnchorId: SettingsAnchorId = 'backup';
-    for (const item of SETTINGS_ANCHOR_ITEMS) {
-      const anchorY = anchorLayoutsRef.current[item.id];
-      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
-        nextAnchorId = item.id;
-      }
-    }
-
-    return nextAnchorId;
-  }, []);
-
-  const handleSettingsScroll = useCallback(
-    (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const y = contentOffset.y;
-      const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
-      const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
-      setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const nextFloatingAnchorVisible = anchorNavLayout
-        ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : false;
-      setIsFloatingAnchorVisible((current) =>
-        current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
-      if (!nextFloatingAnchorVisible) {
-        setIsAnchorNavCollapsed((current) => (current ? current : true));
-      }
-    },
-    [resolveActiveAnchorId],
-  );
-
-  const handleAnchorPress = useCallback(
-    (anchorId: SettingsAnchorId) => {
-      const targetY = anchorLayoutsRef.current[anchorId];
-      const label = SETTINGS_ANCHOR_LABELS[anchorId];
-      if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试。`, 'anchor');
-        return;
-      }
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const floatingTriggerY = anchorNavLayout
-        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : Number.POSITIVE_INFINITY;
-      const willShowFloatingAnchor =
-        Math.max(0, targetY - SETTINGS_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
-
-      let scrollOffset: number = SETTINGS_ANCHOR_SCROLL_OFFSET;
-      if (isFloatingAnchorVisible || willShowFloatingAnchor) {
-        scrollOffset = isAnchorNavCollapsed
-          ? SETTINGS_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
-          : SETTINGS_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
-      }
-
-      settingsScrollRef.current?.scrollTo({
-        y: Math.max(0, targetY - scrollOffset),
-        animated: true,
-      });
-      setActiveAnchorId(anchorId);
-      setHighlightedAnchorId(anchorId);
-
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-      }
-      anchorHighlightTimerRef.current = setTimeout(() => {
-        setHighlightedAnchorId(null);
-        anchorHighlightTimerRef.current = null;
-      }, SETTINGS_ANCHOR_HIGHLIGHT_DURATION_MS);
-
-      showToast(`已跳转到 ${label}`, 'anchor');
-    },
-    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
-  );
-
-  const handleToggleAnchorNavCollapsed = useCallback(() => {
-    setIsAnchorNavCollapsed((current) => !current);
-  }, []);
 
   const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
   const {
@@ -648,15 +551,6 @@ export default function SettingsScreen() {
       } as never);
     },
   });
-
-  useEffect(() => {
-    return () => {
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-        anchorHighlightTimerRef.current = null;
-      }
-    };
-  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -1547,166 +1441,6 @@ export default function SettingsScreen() {
     ],
   );
 
-  /* const handleExportTodayWorksheet = useCallback(async () => {
-    if (isExportingWorksheet) {
-      return;
-    }
-
-    if (Number.isFinite(dataOverview.dueToday)) {
-      const dueToday = Math.max(0, Math.floor(dataOverview.dueToday));
-      if (dueToday <= 0) {
-        Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
-          dueToday,
-        });
-        showToast('今天暂无需要复做的错题', 'info');
-        return;
-      }
-
-      const startedAt = Date.now();
-      setIsExportingWorksheet(true);
-      setWorksheetExportStage('preparing');
-      Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_start', {
-        dueToday,
-        printEnhanceMode: exportImageMode,
-        printEnhanceClearPrintStrength: exportClearPrintStrength,
-      });
-
-      try {
-        const result = await TodayWorksheetExportService.exportTodayWorksheet({
-          expectedPendingCount: dueToday,
-          printEnhanceMode: exportImageMode,
-          printEnhanceClearPrintStrength: exportClearPrintStrength,
-          onProgress: (progress) => {
-            setWorksheetExportStage(progress.stage);
-          },
-        });
-
-        if (result.outcome === 'success') {
-          const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
-          if (!pdfUri) {
-            Logger.warn(PAGE_SCOPE, 'Worksheet export succeeded but PDF URI is empty.', {
-              exportedCount: result.exportedCount,
-            });
-            showToast('导出成功但未找到 PDF 文件，请重试', 'error', TOAST_DURATION_LONG);
-            return;
-          }
-
-          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_success', {
-            pdfUri,
-            questionCount: result.exportedCount,
-            elapsedMs: Date.now() - startedAt,
-          });
-          Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
-            pdfUri,
-          });
-          router.push({
-            pathname: '/pdf-preview',
-            params: {
-              pdfUri,
-            },
-          } as never);
-          return;
-        }
-
-        if (result.outcome === 'empty') {
-          Logger.info(PAGE_SCOPE, 'export_today_practice_pdf_empty', {
-            dueToday,
-          });
-          showToast('今天暂无需要复做的错题', 'info');
-          return;
-        }
-
-        if (result.outcome === 'busy') {
-          Logger.info(PAGE_SCOPE, 'Export skipped because another export flow is still in progress.', {
-            dueToday,
-          });
-          showToast(result.message, 'info', TOAST_DURATION_LONG);
-          return;
-        }
-
-        Logger.warn(PAGE_SCOPE, 'Today worksheet export failed from settings.', {
-          outcome: result.outcome,
-          dueToday,
-        });
-        showToast(result.message, 'error', TOAST_DURATION_LONG);
-      } catch (error) {
-        Logger.error(PAGE_SCOPE, 'Failed to export worksheet from settings.', { error });
-        showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
-      } finally {
-        setIsExportingWorksheet(false);
-        setWorksheetExportStage(null);
-      }
-      return;
-    }
-
-    if (dataOverview.dueToday <= 0) {
-      showToast('今天没有待复做错题可导出', 'info');
-      return;
-    }
-
-    setIsExportingWorksheet(true);
-    setWorksheetExportStage('preparing');
-    Logger.info(PAGE_SCOPE, 'Start exporting today worksheet from settings.', {
-      dueToday: dataOverview.dueToday,
-      printEnhanceMode: exportImageMode,
-      printEnhanceClearPrintStrength: exportClearPrintStrength,
-    });
-    try {
-      const result = await TodayWorksheetExportService.exportTodayWorksheet({
-        expectedPendingCount: dataOverview.dueToday,
-        printEnhanceMode: exportImageMode,
-        printEnhanceClearPrintStrength: exportClearPrintStrength,
-        onProgress: (progress) => {
-          setWorksheetExportStage(progress.stage);
-        },
-      });
-      if (result.outcome === 'success') {
-        Logger.info(PAGE_SCOPE, 'Exported today worksheet successfully from settings.', {
-          outcome: result.outcome,
-          exportedCount: result.exportedCount,
-        });
-        showToast(result.message, 'success');
-        return;
-      }
-
-      if (result.outcome === 'empty') {
-        Logger.info(PAGE_SCOPE, 'Export skipped because no due mistakes for today.', {
-          outcome: result.outcome,
-        });
-        showToast(result.message, 'info');
-        return;
-      }
-
-      if (result.outcome === 'share_unavailable') {
-        Logger.warn(PAGE_SCOPE, 'Export finished but share capability is unavailable.', {
-          outcome: result.outcome,
-          exportedCount: result.exportedCount,
-          hasFileUri: Boolean(result.fileUri),
-        });
-        showToast(result.message, 'info', TOAST_DURATION_LONG);
-        return;
-      }
-
-      if (result.outcome === 'busy') {
-        Logger.info(PAGE_SCOPE, 'Export skipped because another export/share flow is still in progress.', {
-          outcome: result.outcome,
-        });
-        showToast(result.message, 'info', TOAST_DURATION_LONG);
-        return;
-      }
-
-      Logger.warn(PAGE_SCOPE, 'Today worksheet export failed from settings.', {
-        outcome: result.outcome,
-      });
-      showToast(result.message, 'error', TOAST_DURATION_LONG);
-    } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Failed to export worksheet from settings.', { error });
-      showToast('导出失败，请稍后重试', 'error', TOAST_DURATION_LONG);
-    } finally {
-      setIsExportingWorksheet(false);
-      setWorksheetExportStage(null);
-    }
-  }, [dataOverview.dueToday, exportClearPrintStrength, exportImageMode, isExportingWorksheet, router, showToast]); */
 
   const handleExportTodayWorksheet = useCallback(async () => {
     await exportTodayWorksheetShared();
@@ -1864,9 +1598,7 @@ export default function SettingsScreen() {
     });
   }, [showToast]);
 
-  const isStatsBusy = isOverviewLoading || isOverviewRefreshing;
   const shouldMaskStats = isOverviewLoading && lastUpdatedAt === null;
-  const statsUpdatedText = isStatsBusy ? '更新中...' : `更新于 ${formatClock(lastUpdatedAt)}`;
   const displayNumber = useCallback(
     (value: number) => (shouldMaskStats ? STATS_PLACEHOLDER : String(value)),
     [shouldMaskStats],
@@ -1895,10 +1627,10 @@ export default function SettingsScreen() {
       : '';
   const backupProgressMessage = backupProgress?.message.trim() ?? '';
   const backupButtonText = isBackingUp
-    ? (backupProgressMessage || '正在整理备份文件…')
+    ? '备份中…'
     : (isRestoring || isInspectingBackup)
-      ? '正在恢复数据…'
-      : '备份到文件';
+      ? '恢复中…'
+      : '立即备份';
   const backupProgressPercent = backupProgress
     ? backupProgress.stage === 'success'
       ? 1
@@ -1951,31 +1683,8 @@ export default function SettingsScreen() {
       ?? ENHANCE_PERFORMANCE_OPTIONS[0],
     [exportEnhancePerformanceProfile],
   );
-  const exportImageModeStatusText = isExportImageModeLoading
-    ? '正在读取导出图片模式...'
-    : isExportImageModeSaving
-      ? '正在保存导出图片模式...'
-      : `当前模式：${selectedExportImageModeOption.title}`;
-
-  const exportImageModeStatusWithStrengthText = exportImageMode === 'clear_print'
-    ? `${exportImageModeStatusText} | 强度: ${selectedClearPrintStrengthOption.title}`
-    : exportImageModeStatusText;
-  const exportImageModeStatusWithEnhanceSettingsText = exportImageMode === 'clear_print'
-    ? `${exportImageModeStatusWithStrengthText} | 策略: ${selectedEnhancePerformanceOption.title} | 并发: ${selectedEnhanceConcurrencyOption.title}`
-    : exportImageModeStatusText;
   const shouldShowPrintEnhanceAdvancedSettings =
     exportImageMode === 'clear_print' && isPrintEnhanceAdvancedVisible;
-  const exportImageModeStatusDisplayText = shouldShowPrintEnhanceAdvancedSettings
-    ? exportImageModeStatusWithEnhanceSettingsText
-    : exportImageModeStatusText;
-
-  const handleShowStorageDetails = useCallback(() => {
-    Alert.alert(
-      '本机存储详情',
-      `错题数量：${displayNumber(dataOverview.totalMistakes)}\n图片记录数：${displayNumber(dataOverview.imageCount)}\n复做记录数：${displayNumber(dataOverview.totalReviews)}\n占用空间：${displayStorageText}`,
-      [{ text: '知道了' }],
-    );
-  }, [dataOverview.imageCount, dataOverview.totalMistakes, dataOverview.totalReviews, displayNumber, displayStorageText]);
 
   const cleanupStorageOrphans = useCallback(
     async (orphanFiles: string[]) => {
@@ -2119,15 +1828,6 @@ export default function SettingsScreen() {
     ],
     [dataOverview, displayNumber],
   );
-  const statIconNames = [
-    'library-books',
-    'event-note',
-    'check-circle-outline',
-    'whatshot',
-    'donut-large',
-    'history',
-  ] as const;
-
   const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages || isClearingPrintEnhanceCache;
   const isRestoreBusy = isInspectingBackup || isRestoring;
   const isBackupBusy = isBackingUp || isRestoreBusy || isResavingBackup;
@@ -2138,755 +1838,533 @@ export default function SettingsScreen() {
   const canEditReminderTime = !isReminderLoading && !isReminderTimeBusy && !isReminderSwitchBusy;
   const shouldShowReminderPermissionNotice =
     !isReminderPermissionGranted && (showReminderPermissionHint || reminderSettings.enabled);
-  const nextReminderText = useMemo(() => {
-    if (isReminderLoading) {
-      return '下次预计提醒：读取中...';
-    }
-
-    if (!reminderSettings.enabled) {
-      return '下次预计提醒：未开启';
-    }
-
-    if (!isReminderPermissionGranted) {
-      return '下次预计提醒：通知权限未开启';
-    }
-
-    const scheduledLabel = formatReminderScheduleDateLabel(reminderSettings.scheduledDate);
-    if (scheduledLabel) {
-      return `下次预计提醒：${scheduledLabel}`;
-    }
-
-    return '下次预计提醒：今天暂无待复做题，不会提醒';
-  }, [
-    isReminderLoading,
-    isReminderPermissionGranted,
-    reminderSettings.enabled,
-    reminderSettings.scheduledDate,
-  ]);
-  const nextReminderTextParts = useMemo(() => {
-    const separatorIndex = nextReminderText.indexOf('：');
-    if (separatorIndex < 0) {
-      return { prefix: nextReminderText, value: '' };
-    }
-    return {
-      prefix: nextReminderText.slice(0, separatorIndex + 1),
-      value: nextReminderText.slice(separatorIndex + 1).trimStart(),
-    };
-  }, [nextReminderText]);
-  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
-  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
 
   return (
     <View style={styles.pageRoot}>
       <ScreenContainer
         scroll
-        scrollRef={settingsScrollRef}
         safeAreaEdges={['top']}
-        contentStyle={styles.screenContent}
-        onScroll={handleSettingsScroll}>
-        <BrandHeader
-          title="设置"
-          subtitle="离线运行，所有数据仅保存在本机"
-          offlineLabel="离线"
-        />
+        style={styles.screen}
+        contentStyle={styles.screenContent}>
+        <View style={styles.pageHeader}>
+          <View style={styles.pageTitleRow}>
+            <Text accessibilityRole="header" style={styles.pageTitle}>设置</Text>
+            <View style={styles.offlineBadge}>
+              <View style={styles.offlineDot} />
+              <Text style={styles.offlineText}>离线</Text>
+            </View>
+          </View>
+          <Text style={styles.pageSubtitle}>所有数据仅保存在本机</Text>
+        </View>
 
-        <View onLayout={handleAnchorNavLayout}>
-          <QuickAnchorNav
-            items={SETTINGS_ANCHOR_ITEMS}
-            activeAnchorId={activeAnchorId}
-            horizontalCompact
-            onAnchorPress={handleAnchorPress}
+        <SettingsSection>
+          <View style={styles.backupPrimaryRow}>
+            <SettingsIcon name="verified-user" />
+            <View style={styles.backupPrimaryText}>
+              <Text numberOfLines={1} style={styles.backupPrimaryTitle}>
+                {lastBackupAt ? '已安全备份' : '尚未备份'}
+              </Text>
+              <Text numberOfLines={2} style={styles.settingsRowSubtitle}>
+                上次备份：{lastBackupAt ? formatBackupCreatedAt(lastBackupAt) : '暂无记录'}
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel={backupButtonText}
+              accessibilityRole="button"
+              accessibilityState={{ busy: isBackingUp, disabled: isBackupBusy }}
+              disabled={isBackupBusy}
+              onPress={handleStartBackup}
+              style={({ pressed }) => [
+                styles.backupButton,
+                pressed && !isBackupBusy ? styles.primaryButtonPressed : null,
+                isBackupBusy ? styles.disabledButton : null,
+              ]}>
+              {isBackingUp ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
+              <Text numberOfLines={1} style={styles.backupButtonText}>{backupButtonText}</Text>
+            </Pressable>
+          </View>
+          <SettingsDivider />
+          <SettingsRow
+            disabled={isRestoreBusy}
+            icon="restore"
+            onPress={handleRestoreFromBackup}
+            right={isRestoreBusy ? <ActivityIndicator color="#23A566" size="small" /> : undefined}
+            showChevron={!isRestoreBusy}
+            subtitle={isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : undefined}
+            title="从备份文件恢复"
           />
-        </View>
-
-        <View onLayout={(event) => handleAnchorLayout('backup', event)}>
-          <CardContainer
-            style={[
-              styles.card,
-              styles.backupCard,
-              highlightedAnchorId === 'backup' ? styles.anchorTargetHighlighted : null,
-            ]}
-            padding={spacing.md}>
-          <View style={styles.backupCardRow}>
-            <View style={[styles.iconBadge, styles.iconGreen, styles.backupIconBadge]}>
-              <MaterialIcons color="#2A9D50" name="security" size={38} />
-            </View>
-            <View style={styles.backupMain}>
-              <View style={styles.backupHeaderRow}>
-                <View style={styles.backupTitleWrap}>
-                  <Text style={[styles.cardTitle, styles.backupTitle]}>数据备份与恢复</Text>
-                  <View style={styles.recommendBadge}>
-                    <Text style={styles.recommendText}>推荐</Text>
-                  </View>
-                </View>
-                <MaterialIcons color="#A0A7B2" name="chevron-right" size={22} style={styles.backupChevron} />
-              </View>
-              <Text style={[styles.cardDescription, styles.backupDescription]}>
-                保护错题、复做记录和图片，换手机或重装 App 后可恢复数据。
-              </Text>
-              <View style={styles.backupMetaRow}>
-                <MaterialIcons color="#2A9D50" name="schedule" size={18} />
-                <Text style={[styles.metaText, styles.backupMetaText]}>
-                  上次备份：
-                  <Text style={[styles.metaStrong, styles.backupMetaStrong]}>
-                    {lastBackupAt ? formatBackupCreatedAt(lastBackupAt) : '未备份'}
-                  </Text>
-                </Text>
-              </View>
-              <View style={styles.backupActionRow}>
-                <Pressable
-                  accessibilityLabel={
-                    isBackingUp ? backupButtonText : isRestoreBusy ? '正在恢复数据…' : '备份到文件'
-                  }
-                  accessibilityRole="button"
-                  disabled={isBackupBusy}
-                  onPress={handleStartBackup}
-                  style={[
-                    styles.actionButton,
-                    styles.actionButtonGreen,
-                    styles.backupActionButton,
-                    isBackupBusy ? styles.disabledButton : null,
-                  ]}>
-                  <View style={styles.backupActionContent}>
-                    <MaterialIcons color="#238B49" name="backup" size={18} />
-                    <Text
-                      numberOfLines={2}
-                      style={[styles.actionButtonText, styles.actionButtonTextGreen, styles.backupActionText]}>
-                      {backupButtonText}
-                    </Text>
-                  </View>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={
-                    isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'
-                  }
-                  accessibilityRole="button"
-                  disabled={isRestoreBusy}
-                  onPress={handleRestoreFromBackup}
-                  style={[
-                    styles.actionButton,
-                    styles.actionButtonGreen,
-                    styles.backupActionButton,
-                    isRestoreBusy ? styles.disabledButton : null,
-                  ]}>
-                  <View style={styles.backupActionContent}>
-                    <MaterialIcons color="#238B49" name="restore" size={18} />
-                    <Text
-                      numberOfLines={2}
-                      style={[styles.actionButtonText, styles.actionButtonTextGreen, styles.backupActionText]}>
-                      {isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : '从备份文件恢复'}
-                    </Text>
-                  </View>
-                </Pressable>
-              </View>
-              {shouldShowBackupProgress ? (
-                <View style={styles.backupProgressWrap}>
-                  <Text style={styles.backupProgressHeadline}>{backupProgressHeadline}</Text>
-                  {backupProgressDetailText ? (
-                    <Text style={styles.exportProgressMetaText}>{backupProgressDetailText}</Text>
-                  ) : null}
-                  {generatedBackupInfo ? (
-                    <View style={styles.backupGeneratedRow}>
-                      <MaterialIcons color="#238B49" name="insert-drive-file" size={16} />
-                      <Text numberOfLines={2} style={styles.backupGeneratedText}>
-                        {generatedBackupMetaText}
-                      </Text>
-                    </View>
-                  ) : null}
-                  <View style={styles.exportProgressTrack}>
-                    <View
-                      style={[
-                        styles.exportProgressFill,
-                        { width: `${Math.round(backupProgressPercent * 100)}%` },
-                      ]}
-                    />
-                  </View>
-                  {generatedBackupInfo ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="重新保存备份文件"
-                      disabled={!canReSaveGeneratedBackup}
-                      onPress={() => {
-                        void handleReSaveBackupFile();
-                      }}
-                      style={({ pressed }) => [
-                        styles.backupReSaveButton,
-                        pressed && canReSaveGeneratedBackup ? styles.backupReSaveButtonPressed : null,
-                        !canReSaveGeneratedBackup ? styles.disabledButton : null,
-                      ]}>
-                      <MaterialIcons color="#238B49" name="ios-share" size={17} />
-                      <Text numberOfLines={1} style={styles.backupReSaveButtonText}>
-                        {reSaveBackupButtonText}
-                      </Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              ) : null}
-              <View style={styles.backupHintRow}>
-                <MaterialIcons color="#2A9D50" name="verified-user" size={16} />
-                <Text style={styles.backupHintText}>选择之前导出的七刷备份文件，恢复到当前设备。</Text>
-              </View>
-            </View>
-          </View>
-        </CardContainer>
-        </View>
-
-        <View onLayout={(event) => handleAnchorLayout('stats', event)}>
-        <CardContainer
-          style={[
-            styles.card,
-            styles.statsCard,
-            highlightedAnchorId === 'stats' ? styles.anchorTargetHighlighted : null,
-          ]}
-          padding={spacing.md}>
-          <View style={styles.statsCardRow}>
-            <View style={styles.statsHeaderIconWrap}>
-              <MaterialIcons color="#2D74D6" name="bar-chart" size={24} />
-            </View>
-            <View style={styles.statsMain}>
-              <View style={styles.statsHeader}>
-                <View style={styles.statsHeaderText}>
-                  <Text style={[styles.cardTitle, styles.statsTitle]}>学习数据</Text>
-                  <Text style={styles.statsUpdatedText}>{statsUpdatedText}</Text>
-                </View>
-                <Pressable
-                  accessibilityLabel="刷新学习数据"
-                  accessibilityRole="button"
-                  disabled={isStatsBusy}
-                  onPress={() => {
-                    void loadDataOverview('refresh');
-                  }}
-                  style={[styles.statsRefreshButton, isStatsBusy ? styles.disabledButton : null]}>
-                  {isStatsBusy ? (
-                    <ActivityIndicator color="#2D74D6" size="small" />
-                  ) : (
-                    <MaterialIcons color="#2D74D6" name="refresh" size={18} />
-                  )}
-                </Pressable>
-              </View>
-              <View style={styles.statsGrid}>
-                {statsItems.map((item, index) => {
-                  const statIconName = statIconNames[index % statIconNames.length];
-                  return (
-                    <View key={item.label} style={styles.statItemCard}>
-                      <View style={styles.statItemBody}>
-                        <View style={styles.statItemIconWrap}>
-                          <MaterialIcons color="#2D74D6" name={statIconName} size={17} />
-                        </View>
-                        <View style={styles.statTextWrap}>
-                          <Text numberOfLines={2} style={styles.statLabel}>
-                            {item.label}
-                          </Text>
-                          <Text
-                            adjustsFontSizeToFit
-                            minimumFontScale={0.86}
-                            numberOfLines={1}
-                            style={styles.statValue}>
-                            {item.value}
-                          </Text>
-                        </View>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-              {overviewErrorMessage ? <Text style={styles.errorText}>{overviewErrorMessage}</Text> : null}
-            </View>
-          </View>
-        </CardContainer>
-        </View>
-
-        <View onLayout={(event) => handleAnchorLayout('export', event)}>
-        <CardContainer
-          style={[
-            styles.card,
-            highlightedAnchorId === 'export' ? styles.anchorTargetHighlighted : null,
-          ]}
-          padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconOrange]}>
-              <MaterialIcons color="#ED8A09" name="print" size={30} />
-            </View>
-            <View style={styles.cardMain}>
-              <Text style={styles.cardTitle}>打印与导出</Text>
-              <Text style={styles.cardDescription}>
-                导出今日到期错题，方便打印给学生做练习。
-              </Text>
-              <View style={styles.exportModeSection}>
-                <Text style={styles.metaText}>导出图片模式</Text>
-                <View style={styles.exportModeList}>
-                  {EXPORT_IMAGE_MODE_OPTIONS.map((option) => {
-                    const isSelected = option.mode === exportImageMode;
-                    return (
-                      <Pressable
-                        key={option.mode}
-                        accessibilityRole="button"
-                        disabled={isExportImageModeBusy}
-                        onLongPress={
-                          option.mode === 'clear_print'
-                            ? handleTogglePrintEnhanceAdvancedSettings
-                            : undefined
-                        }
-                        onPress={() => {
-                          void handleSelectExportImageMode(option.mode);
-                        }}
-                        style={[
-                          styles.exportModeOption,
-                          isSelected ? styles.exportModeOptionSelected : null,
-                          isExportImageModeBusy ? styles.disabledButton : null,
-                        ]}>
-                        <View style={styles.exportModeOptionHeader}>
-                          <View style={styles.exportModeTitleRow}>
-                            <Text
-                              style={[
-                                styles.exportModeTitle,
-                                isSelected ? styles.exportModeTitleSelected : null,
-                              ]}>
-                              {option.title}
-                            </Text>
-                            {option.recommended ? (
-                              <View style={styles.recommendBadge}>
-                                <Text style={styles.recommendText}>推荐</Text>
-                              </View>
-                            ) : null}
-                          </View>
-                          <MaterialIcons
-                            color={isSelected ? '#A86A12' : '#A8AFB9'}
-                            name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'}
-                            size={18}
-                          />
-                        </View>
-                        <Text
-                          style={[
-                            styles.exportModeDescription,
-                            isSelected ? styles.exportModeDescriptionSelected : null,
-                          ]}>
-                          {option.description}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                {shouldShowPrintEnhanceAdvancedSettings ? (
-                  <>
-                    <View style={styles.clearPrintStrengthSection}>
-                      <Text style={styles.metaText}>清晰打印强度</Text>
-                      <View style={[styles.clearPrintStrengthTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                        {CLEAR_PRINT_STRENGTH_OPTIONS.map((option) => {
-                          const isSelected = option.value === exportClearPrintStrength;
-                          return (
-                            <Pressable
-                              key={option.value}
-                              accessibilityRole="button"
-                              disabled={isExportImageModeBusy}
-                              onPress={() => {
-                                void handleSelectClearPrintStrength(option.value);
-                              }}
-                              style={[
-                                styles.clearPrintStrengthStop,
-                                isSelected ? styles.clearPrintStrengthStopSelected : null,
-                              ]}>
-                              <Text
-                                style={[
-                                  styles.clearPrintStrengthStopText,
-                                  isSelected ? styles.clearPrintStrengthStopTextSelected : null,
-                                ]}>
-                                {option.title}
-                              </Text>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                      <Text style={styles.clearPrintStrengthDescription}>
-                        {selectedClearPrintStrengthOption.description}
-                      </Text>
-                    </View>
-                    <View style={styles.enhanceConcurrencySection}>
-                      <Text style={styles.metaText}>增强策略（仅影响清晰打印）</Text>
-                      <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                        {ENHANCE_PERFORMANCE_OPTIONS.map((option) => {
-                          const isSelected = option.value === exportEnhancePerformanceProfile;
-                          const isDisabled = isExportImageModeBusy || exportImageMode !== 'clear_print';
-                          return (
-                            <Pressable
-                              key={option.value}
-                              accessibilityRole="button"
-                              disabled={isDisabled}
-                              onPress={() => {
-                                void handleSelectEnhancePerformanceProfile(option.value);
-                              }}
-                              style={[
-                                styles.enhanceConcurrencyStop,
-                                isSelected ? styles.enhanceConcurrencyStopSelected : null,
-                                isDisabled ? styles.disabledButton : null,
-                              ]}>
-                              <View style={styles.enhanceConcurrencyStopInner}>
-                                <Text
-                                  style={[
-                                    styles.enhanceConcurrencyStopText,
-                                    isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
-                                  ]}>
-                                  {option.title}
-                                </Text>
-                                {option.recommended ? (
-                                  <Text
-                                    style={[
-                                      styles.enhanceConcurrencyStopHint,
-                                      isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
-                                    ]}>
-                                    推荐
-                                  </Text>
-                                ) : null}
-                              </View>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                      <Text style={styles.enhanceConcurrencyDescription}>
-                        {selectedEnhancePerformanceOption.description}
-                      </Text>
-                      <Text style={styles.enhanceConcurrencyHint}>
-                        “速度优先”会降低增强参数，通常可显著缩短 clear_print 导出耗时。
-                      </Text>
-                    </View>
-                    <View style={styles.enhanceConcurrencySection}>
-                      <Text style={styles.metaText}>并发数量（仅影响清晰打印）</Text>
-                      <View style={[styles.enhanceConcurrencyTrack, isExportImageModeBusy ? styles.disabledButton : null]}>
-                        {ENHANCE_CONCURRENCY_OPTIONS.map((option) => {
-                          const isSelected = option.value === exportEnhanceConcurrency;
-                          return (
-                            <Pressable
-                              key={option.value}
-                              accessibilityRole="button"
-                              disabled={isExportImageModeBusy}
-                              onPress={() => {
-                                void handleSelectEnhanceConcurrency(option.value);
-                              }}
-                              style={[
-                                styles.enhanceConcurrencyStop,
-                                isSelected ? styles.enhanceConcurrencyStopSelected : null,
-                              ]}>
-                              <View style={styles.enhanceConcurrencyStopInner}>
-                                <Text
-                                  style={[
-                                    styles.enhanceConcurrencyStopText,
-                                    isSelected ? styles.enhanceConcurrencyStopTextSelected : null,
-                                  ]}>
-                                  {option.title}
-                                </Text>
-                                {option.recommended ? (
-                                  <Text
-                                    style={[
-                                      styles.enhanceConcurrencyStopHint,
-                                      isSelected ? styles.enhanceConcurrencyStopHintSelected : null,
-                                    ]}>
-                                    推荐
-                                  </Text>
-                                ) : null}
-                              </View>
-                            </Pressable>
-                          );
-                        })}
-                      </View>
-                      <Text style={styles.enhanceConcurrencyDescription}>
-                        {selectedEnhanceConcurrencyOption.description}
-                      </Text>
-                      <Text style={styles.enhanceConcurrencyHint}>
-                        并发越高通常越快，但会增加内存与发热；导出异常时建议先切回 1。
-                      </Text>
-                    </View>
-                  </>
-                ) : null}
-                <Text style={styles.metaText}>{exportImageModeStatusDisplayText}</Text>
-              </View>
-              <Pressable
-                disabled={isExportingWorksheet || !canExportTodayWorksheet}
-                onPress={() => {
-                  void handleExportTodayWorksheet();
-                }}
-                style={[
-                  styles.actionButton,
-                  styles.actionButtonOrange,
-                  isExportingWorksheet || !canExportTodayWorksheet ? styles.disabledButton : null,
-                ]}>
-                <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextOrange]}>
-                  {worksheetExportButtonText}
-                </Text>
-              </Pressable>
-              <View style={styles.exportHintWrap}>
-                <Text style={styles.metaText}>{worksheetExportProgressHeadline}</Text>
-                {worksheetExportProgressDetailText ? (
-                  <Text style={styles.exportProgressMetaText}>{worksheetExportProgressDetailText}</Text>
-                ) : null}
-                {isExportingWorksheet && worksheetExportProgress.total > 0 ? (
-                  <View style={styles.exportProgressTrack}>
-                    <View
-                      style={[
-                        styles.exportProgressFill,
-                        { width: `${Math.round(worksheetExportProgressPercent * 100)}%` },
-                      ]}
-                    />
-                  </View>
+          {shouldShowBackupProgress ? (
+            <View style={styles.inlineStatus}>
+              <View style={styles.inlineStatusHeader}>
+                <Text numberOfLines={2} style={styles.inlineStatusTitle}>{backupProgressHeadline}</Text>
+                {backupProgressDetailText ? (
+                  <Text style={styles.inlineStatusMeta}>{backupProgressDetailText}</Text>
                 ) : null}
               </View>
-            </View>
-          </View>
-        </CardContainer>
-        </View>
-
-        <View onLayout={(event) => handleAnchorLayout('reminder', event)}>
-        <CardContainer
-          style={[
-            styles.card,
-            highlightedAnchorId === 'reminder' ? styles.anchorTargetHighlighted : null,
-          ]}
-          padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconPurple]}>
-              <MaterialIcons color="#7B53CC" name="notifications-active" size={30} />
-            </View>
-            <View style={styles.cardMain}>
-              <View style={styles.titleRow}>
-                <Text style={styles.cardTitle}>复做提醒</Text>
-                <Switch
-                  disabled={isReminderBusy}
-                  onValueChange={(nextValue) => {
-                    void handleToggleReminder(nextValue);
-                  }}
-                  thumbColor={colors.white}
-                  trackColor={{ false: '#D5D8DE', true: '#9ED9B3' }}
-                  value={reminderSettings.enabled}
-                />
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { flex: backupProgressPercent }]} />
+                <View style={{ flex: Math.max(0, 1 - backupProgressPercent) }} />
               </View>
-              <Text style={styles.cardDescription}>
-                有待复做错题时提醒我完成今日复做，避免遗漏。
-              </Text>
-              <View style={styles.reminderTimeWrap}>
-                <View style={styles.reminderTimeRow}>
-                  <Text style={styles.metaText}>
-                    提醒时间：<Text style={styles.reminderValueText}>{reminderTimeText}</Text>
-                  </Text>
+              {generatedBackupInfo ? (
+                <>
+                  <Text numberOfLines={2} style={styles.inlineStatusMeta}>{generatedBackupMetaText}</Text>
                   <Pressable
                     accessibilityRole="button"
-                    disabled={!canEditReminderTime}
-                    onPress={handleOpenReminderTimePicker}
-                    style={[
-                      styles.reminderTimeButton,
-                      !canEditReminderTime ? styles.disabledButton : null,
+                    disabled={!canReSaveGeneratedBackup}
+                    onPress={() => {
+                      void handleReSaveBackupFile();
+                    }}
+                    style={({ pressed }) => [
+                      styles.inlineLinkButton,
+                      pressed && canReSaveGeneratedBackup ? styles.settingsRowPressed : null,
+                      !canReSaveGeneratedBackup ? styles.disabledButton : null,
                     ]}>
-                    {isReminderTimeBusy ? (
-                      <ActivityIndicator color="#505863" size="small" />
-                    ) : (
-                      <>
-                        <MaterialIcons color="#505863" name="schedule" size={16} />
-                        <Text numberOfLines={1} style={styles.reminderTimeButtonText}>
-                          选择时间
-                        </Text>
-                      </>
-                    )}
+                    <MaterialIcons color="#23A566" name="ios-share" size={18} />
+                    <Text style={styles.inlineLinkText}>{reSaveBackupButtonText}</Text>
                   </Pressable>
-                </View>
-                <Text style={styles.reminderScheduleText}>
-                  {nextReminderTextParts.prefix}
-                  {nextReminderTextParts.value ? (
-                    <Text style={styles.reminderValueText}>{nextReminderTextParts.value}</Text>
-                  ) : null}
-                </Text>
-              </View>
-              {shouldShowReminderPermissionNotice ? (
-                <View style={styles.reminderPermissionNotice}>
-                  <Text style={styles.reminderPermissionText}>
-                    通知权限未开启，无法收到复做提醒
-                  </Text>
-                  <Pressable onPress={handleOpenNotificationSettings} style={styles.reminderSettingLink}>
-                    <Text style={styles.reminderSettingLinkText}>去设置</Text>
-                  </Pressable>
-                </View>
+                </>
               ) : null}
             </View>
-          </View>
-        </CardContainer>
-        </View>
+          ) : null}
+        </SettingsSection>
 
-        <View onLayout={(event) => handleAnchorLayout('storage', event)}>
-        <CardContainer
-          style={[
-            styles.card,
-            highlightedAnchorId === 'storage' ? styles.anchorTargetHighlighted : null,
-          ]}
-          padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconGreen]}>
-              <MaterialIcons color="#2A9D50" name="storage" size={30} />
-            </View>
-            <View style={styles.cardMain}>
-              <Text style={styles.cardTitle}>本机存储</Text>
-              <Text style={styles.cardDescription}>错题图片和复做记录都保存在本机。</Text>
-              <Text style={styles.metaText}>
-                图片数量：<Text style={styles.storageValueText}>{displayNumber(dataOverview.imageCount)} 张</Text>
-              </Text>
-              <Text style={styles.metaText}>
-                占用空间：<Text style={styles.storageValueText}>{displayStorageText}</Text>
-              </Text>
-              <View style={styles.actionRow}>
-                <Pressable
-                  disabled={isStorageBusy}
-                  onPress={() => {
-                    void handleCleanInvalidImages();
-                  }}
-                  style={[
-                    styles.actionButton,
-                    styles.actionButtonGreen,
-                    isStorageBusy ? styles.disabledButton : null,
-                  ]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    {isCleaningOrphanImages ? '清理中...' : isScanningOrphanImages ? '扫描中...' : '清理无效图片'}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  disabled={isStorageBusy}
-                  onPress={() => {
-                    void handleClearPrintEnhanceCache();
-                  }}
-                  style={[
-                    styles.actionButton,
-                    styles.actionButtonGreen,
-                    isStorageBusy ? styles.disabledButton : null,
-                  ]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    {isClearingPrintEnhanceCache ? '清理中...' : '清理图片缓存'}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleShowStorageDetails}
-                  style={[styles.actionButton, styles.actionButtonGreen]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextGreen]}>
-                    存储详情
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
-          </View>
-        </CardContainer>
-        </View>
+        <SettingsSection title="学习概览">
+          <OverviewStats items={statsItems} />
+          {overviewErrorMessage ? <Text style={styles.compactErrorText}>{overviewErrorMessage}</Text> : null}
+        </SettingsSection>
 
-        <CardContainer style={styles.card} padding={spacing.md}>
-          <View style={styles.cardRow}>
-            <View style={[styles.iconBadge, styles.iconBlue]}>
-              <MaterialIcons color="#2D74D6" name="menu-book" size={30} />
-            </View>
-            <View style={styles.cardMain}>
-              <Text style={styles.cardTitle}>使用说明</Text>
-              <Text style={styles.cardDescription}>
-                了解七刷错题本的使用方法、备份恢复、打印练习卷等内容。
-              </Text>
+        <SettingsSection title="学习与复做">
+          <SettingsRow
+            disabled={!canEditReminderTime}
+            icon="notifications-none"
+            onPress={handleOpenReminderTimePicker}
+            right={
+              <Switch
+                accessibilityLabel="复做提醒开关"
+                disabled={isReminderBusy}
+                onValueChange={(nextValue) => {
+                  void handleToggleReminder(nextValue);
+                }}
+                thumbColor="#FFFFFF"
+                trackColor={{ false: '#D1D1D6', true: '#23A566' }}
+                onTouchStart={(event) => event.stopPropagation()}
+                value={reminderSettings.enabled}
+              />
+            }
+            subtitle={'每天 ' + reminderTimeText}
+            title="复做提醒"
+          />
+          <SettingsDivider />
+          <SettingsRow
+            icon="print"
+            onPress={() => setActiveSheet('print')}
+            right={<Text numberOfLines={1} style={styles.rowValueText}>
+              {isExportImageModeLoading
+                ? '读取中…'
+                : exportImageMode === 'original'
+                  ? '原图'
+                  : '清晰打印'}
+            </Text>}
+            showChevron
+            title="打印与导出"
+          />
+          {shouldShowReminderPermissionNotice ? (
+            <View style={styles.permissionNotice}>
+              <MaterialIcons color="#23A566" name="notifications-off" size={18} />
+              <Text style={styles.permissionNoticeText}>通知权限未开启，暂时无法收到提醒</Text>
               <Pressable
-                onPress={() =>
-                  showToast('拍照录入错题 → 每天复做 → 做会后进入下一刷 → 七刷后标记掌握', 'info', 3400)
-                }
-                style={[styles.actionButton, styles.actionButtonBlue]}>
-                <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextBlue]}>
-                  查看使用说明
-                </Text>
+                accessibilityRole="button"
+                onPress={handleOpenNotificationSettings}
+                style={styles.permissionAction}>
+                <Text style={styles.permissionActionText}>去设置</Text>
               </Pressable>
             </View>
-          </View>
-        </CardContainer>
+          ) : null}
+        </SettingsSection>
 
-        <Pressable
-          accessibilityLabel="关于与支持"
-          accessibilityRole="button"
-          onPress={handleOpenAboutSupport}
-          style={({ pressed }) => [
-            styles.aboutSupportCardPressable,
-            pressed ? styles.aboutSupportCardPressed : null,
-          ]}>
-          <CardContainer style={styles.card} padding={spacing.md}>
-            <View style={styles.cardRow}>
-              <View style={[styles.iconBadge, styles.iconGray]}>
-                <MaterialIcons color="#717982" name="info-outline" size={30} />
-              </View>
-              <View style={styles.cardMain}>
-                <View style={styles.titleRow}>
-                  <Text style={styles.cardTitle}>关于与支持</Text>
-                  <MaterialIcons color="#808791" name="chevron-right" size={22} />
-                </View>
-                <Pressable
-                  accessibilityLabel="版本信息"
-                  accessibilityRole="button"
-                  delayLongPress={650}
-                  hitSlop={10}
-                  onLongPress={handleVersionLongPress}
-                  onPress={handleVersionTap}
-                  style={styles.versionPressable}>
-                  <Text style={[styles.metaText, styles.aboutSupportPrimaryMeta]}>
-                    {APP_NAME} · {APP_BUILD_DATE}
-                  </Text>
-                </Pressable>
-                <Text style={styles.metaText}>{DATA_MODE_LABEL} · 数据仅保存在本机</Text>
-              </View>
-            </View>
-          </CardContainer>
-        </Pressable>
+        <SettingsSection title="存储">
+          <SettingsRow
+            icon="storage"
+            onPress={() => setActiveSheet('storage')}
+            right={<Text numberOfLines={1} style={styles.rowValueText}>
+              {displayNumber(dataOverview.imageCount)} 张 · {displayStorageText}
+            </Text>}
+            showChevron
+            title="本机存储"
+          />
+          <SettingsDivider />
+          <SettingsRow
+            disabled={isStorageBusy}
+            icon="delete-outline"
+            onPress={() => {
+              void handleCleanInvalidImages();
+            }}
+            right={isScanningOrphanImages || isCleaningOrphanImages
+              ? <ActivityIndicator color="#23A566" size="small" />
+              : undefined}
+            showChevron={!isScanningOrphanImages && !isCleaningOrphanImages}
+            title="清理无效图片"
+          />
+        </SettingsSection>
+
+        <SettingsSection title="支持">
+          <SettingsRow
+            icon="menu-book"
+            onPress={() =>
+              showToast('拍照录入错题 → 每天复做 → 做会后进入下一刷 → 七刷后标记掌握', 'info', 3400)
+            }
+            showChevron
+            title="使用说明"
+          />
+          <SettingsDivider />
+          <SettingsRow
+            icon="info-outline"
+            onPress={handleOpenAboutSupport}
+            right={
+              <Pressable
+                accessibilityLabel="版本信息"
+                accessibilityRole="button"
+                delayLongPress={650}
+                hitSlop={10}
+                onLongPress={handleVersionLongPress}
+                onPress={handleVersionTap}
+                style={styles.versionTapTarget}>
+                <Text style={styles.rowValueText}>{APP_BUILD_DATE}</Text>
+              </Pressable>
+            }
+            showChevron
+            title={'关于' + APP_NAME}
+          />
+        </SettingsSection>
 
         {isDevModeUnlocked ? (
-          <CardContainer style={styles.devCard} padding={spacing.md}>
-            <Text style={styles.devTitle}>开发调试入口</Text>
-            <Text style={styles.devNoticeText}>调试入口默认隐藏，仅用于排查问题，请谨慎使用。</Text>
-            {DEV_ENTRIES.map((entry) => (
-              <View key={entry.href} style={styles.devEntry}>
-                <Text style={styles.devEntryTitle}>{entry.title}</Text>
-                <Text style={styles.devEntryDesc}>{entry.description}</Text>
-                <Pressable
+          <SettingsSection title="开发者工具">
+            {DEV_ENTRIES.map((entry, index) => (
+              <View key={entry.href}>
+                {index > 0 ? <SettingsDivider /> : null}
+                <SettingsRow
+                  icon={index === 0 ? 'storage' : index === 1 ? 'image-search' : 'description'}
                   onPress={() => router.push(entry.href as never)}
-                  style={[styles.actionButton, styles.actionButtonOrange]}>
-                  <Text numberOfLines={1} style={[styles.actionButtonText, styles.actionButtonTextOrange]}>
-                    进入{entry.title}
-                  </Text>
-                </Pressable>
+                  subtitle={entry.description}
+                  showChevron
+                  title={entry.title}
+                />
               </View>
             ))}
-            <Pressable
-              accessibilityRole="button"
+            <SettingsDivider />
+            <SettingsRow
+              icon="visibility-off"
               onPress={handleDisableDeveloperMode}
-              style={styles.devCloseButton}>
-              <Text numberOfLines={1} style={styles.devCloseButtonText}>
-                关闭开发者模式
-              </Text>
-            </Pressable>
-          </CardContainer>
+              title="关闭开发者模式"
+            />
+          </SettingsSection>
         ) : null}
 
-        <View style={styles.safetyNotice}>
-          <MaterialIcons color="#2A9D50" name="lock" size={18} />
-          <Text style={styles.safetyText}>所有数据仅保存在本机，卸载 App 可能会删除本地数据</Text>
-          <MaterialIcons color="#95A19A" name="help-outline" size={18} />
+        <View style={styles.localDataNotice}>
+          <MaterialIcons color="#8E8E93" name="lock-outline" size={17} />
+          <Text style={styles.localDataNoticeText}>数据只在本机，卸载 App 会删除本地数据</Text>
         </View>
       </ScreenContainer>
 
-      {shouldShowFloatingAnchorNav ? (
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.floatingAnchorWrap,
-            { top: floatingAnchorTop },
-          ]}>
-          <QuickAnchorNav
-            items={SETTINGS_ANCHOR_ITEMS}
-            activeAnchorId={activeAnchorId}
-            collapsed={isAnchorNavCollapsed}
-            floating
-            horizontalCompact
-            onToggleCollapsed={handleToggleAnchorNavCollapsed}
-            onAnchorPress={handleAnchorPress}
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setActiveSheet(null)}
+        transparent
+        visible={activeSheet !== null}>
+        <View style={styles.modalRoot}>
+          <Pressable
+            accessibilityLabel="关闭设置面板"
+            accessibilityRole="button"
+            onPress={() => setActiveSheet(null)}
+            style={styles.modalBackdrop}
           />
-        </View>
-      ) : null}
+          <View style={[styles.bottomSheet, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+            <View style={styles.sheetHeader}>
+              <Text accessibilityRole="header" style={styles.sheetTitle}>
+                {activeSheet === 'print' ? '打印与导出' : '存储详情'}
+              </Text>
+              <Pressable
+                accessibilityLabel="关闭"
+                accessibilityRole="button"
+                onPress={() => setActiveSheet(null)}
+                style={({ pressed }) => [
+                  styles.sheetCloseButton,
+                  pressed ? styles.settingsRowPressed : null,
+                ]}>
+                <MaterialIcons color="#3A3A3C" name="close" size={22} />
+              </Pressable>
+            </View>
 
-      <AppToast
-        {...toastProps}
-        bottomOffset={toastBottomOffset}
-      />
+            <ScrollView
+              contentContainerStyle={styles.sheetContent}
+              showsVerticalScrollIndicator={false}>
+              {activeSheet === 'print' ? (
+                <>
+                  <View style={styles.sheetSection}>
+                    <Text style={styles.sheetSectionTitle}>图片模式</Text>
+                    <View style={styles.optionGroup}>
+                      {EXPORT_IMAGE_MODE_OPTIONS.map((option) => {
+                        const isSelected = option.mode === exportImageMode;
+                        return (
+                          <Pressable
+                            key={option.mode}
+                            accessibilityRole="radio"
+                            accessibilityState={{ checked: isSelected, disabled: isExportImageModeBusy }}
+                            disabled={isExportImageModeBusy}
+                            onPress={() => {
+                              void handleSelectExportImageMode(option.mode);
+                            }}
+                            style={({ pressed }) => [
+                              styles.modeOption,
+                              isSelected ? styles.modeOptionSelected : null,
+                              pressed && !isExportImageModeBusy ? styles.settingsRowPressed : null,
+                              isExportImageModeBusy ? styles.disabledButton : null,
+                            ]}>
+                            <View style={styles.modeOptionText}>
+                              <Text style={styles.modeOptionTitle}>{option.title}</Text>
+                              <Text style={styles.modeOptionDescription}>{option.description}</Text>
+                            </View>
+                            <MaterialIcons
+                              color={isSelected ? '#23A566' : '#C7C7CC'}
+                              name={isSelected ? 'radio-button-checked' : 'radio-button-unchecked'}
+                              size={22}
+                            />
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                    <View style={styles.modeExplanation}>
+                      <Text style={styles.modeExplanationTitle}>当前模式说明</Text>
+                      <Text style={styles.modeExplanationText}>
+                        {selectedExportImageModeOption.description}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {exportImageMode === 'clear_print' ? (
+                    <View style={styles.sheetSection}>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={handleTogglePrintEnhanceAdvancedSettings}
+                        style={({ pressed }) => [
+                          styles.advancedDisclosure,
+                          pressed ? styles.settingsRowPressed : null,
+                        ]}>
+                        <Text style={styles.sheetSectionTitle}>高级打印设置</Text>
+                        <MaterialIcons
+                          color="#8E8E93"
+                          name={shouldShowPrintEnhanceAdvancedSettings ? 'expand-less' : 'expand-more'}
+                          size={24}
+                        />
+                      </Pressable>
+
+                      {shouldShowPrintEnhanceAdvancedSettings ? (
+                        <View style={styles.advancedContent}>
+                          <Text style={styles.controlLabel}>清晰打印强度</Text>
+                          <View style={styles.segmentedControl}>
+                            {CLEAR_PRINT_STRENGTH_OPTIONS.map((option) => {
+                              const isSelected = option.value === exportClearPrintStrength;
+                              return (
+                                <Pressable
+                                  key={option.value}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: isSelected }}
+                                  disabled={isExportImageModeBusy}
+                                  onPress={() => {
+                                    void handleSelectClearPrintStrength(option.value);
+                                  }}
+                                  style={[
+                                    styles.segmentButton,
+                                    isSelected ? styles.segmentButtonSelected : null,
+                                  ]}>
+                                  <Text style={[
+                                    styles.segmentButtonText,
+                                    isSelected ? styles.segmentButtonTextSelected : null,
+                                  ]}>{option.title}</Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                          <Text style={styles.controlDescription}>
+                            {selectedClearPrintStrengthOption.description}
+                          </Text>
+
+                          <Text style={styles.controlLabel}>增强策略</Text>
+                          <View style={styles.segmentedControl}>
+                            {ENHANCE_PERFORMANCE_OPTIONS.map((option) => {
+                              const isSelected = option.value === exportEnhancePerformanceProfile;
+                              return (
+                                <Pressable
+                                  key={option.value}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: isSelected }}
+                                  disabled={isExportImageModeBusy}
+                                  onPress={() => {
+                                    void handleSelectEnhancePerformanceProfile(option.value);
+                                  }}
+                                  style={[
+                                    styles.segmentButton,
+                                    isSelected ? styles.segmentButtonSelected : null,
+                                  ]}>
+                                  <Text style={[
+                                    styles.segmentButtonText,
+                                    isSelected ? styles.segmentButtonTextSelected : null,
+                                  ]}>{option.title}</Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                          <Text style={styles.controlDescription}>
+                            {selectedEnhancePerformanceOption.description}
+                          </Text>
+
+                          <Text style={styles.controlLabel}>并发数量</Text>
+                          <View style={styles.segmentedControl}>
+                            {ENHANCE_CONCURRENCY_OPTIONS.map((option) => {
+                              const isSelected = option.value === exportEnhanceConcurrency;
+                              return (
+                                <Pressable
+                                  key={option.value}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: isSelected }}
+                                  disabled={isExportImageModeBusy}
+                                  onPress={() => {
+                                    void handleSelectEnhanceConcurrency(option.value);
+                                  }}
+                                  style={[
+                                    styles.segmentButton,
+                                    isSelected ? styles.segmentButtonSelected : null,
+                                  ]}>
+                                  <Text style={[
+                                    styles.segmentButtonText,
+                                    isSelected ? styles.segmentButtonTextSelected : null,
+                                  ]}>{option.title}</Text>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                          <Text style={styles.controlDescription}>
+                            {selectedEnhanceConcurrencyOption.description}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  <View style={styles.sheetSection}>
+                    <View style={styles.exportSummary}>
+                      <View>
+                        <Text style={styles.sheetSectionTitle}>今日练习卷</Text>
+                        <Text style={styles.exportPendingText}>
+                          实际待复做 {worksheetPendingCount} 题
+                        </Text>
+                      </View>
+                      <MaterialIcons color="#23A566" name="picture-as-pdf" size={26} />
+                    </View>
+                    <Pressable
+                      accessibilityLabel={worksheetExportButtonText}
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        busy: isExportingWorksheet,
+                        disabled: isExportingWorksheet || !canExportTodayWorksheet,
+                      }}
+                      disabled={isExportingWorksheet || !canExportTodayWorksheet}
+                      onPress={() => {
+                        void handleExportTodayWorksheet();
+                      }}
+                      style={({ pressed }) => [
+                        styles.primarySheetButton,
+                        pressed && canExportTodayWorksheet && !isExportingWorksheet
+                          ? styles.primaryButtonPressed
+                          : null,
+                        isExportingWorksheet || !canExportTodayWorksheet
+                          ? styles.disabledButton
+                          : null,
+                      ]}>
+                      {isExportingWorksheet ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
+                      <Text numberOfLines={2} style={styles.primarySheetButtonText}>
+                        {worksheetExportButtonText}
+                      </Text>
+                    </Pressable>
+                    <Text style={styles.exportHint}>{worksheetExportProgressHeadline}</Text>
+                    {worksheetExportProgressDetailText ? (
+                      <Text style={styles.exportProgressMeta}>{worksheetExportProgressDetailText}</Text>
+                    ) : null}
+                    {isExportingWorksheet && worksheetExportProgress.total > 0 ? (
+                      <View style={styles.progressTrack}>
+                        <View style={[styles.progressFill, { flex: worksheetExportProgressPercent }]} />
+                        <View style={{ flex: Math.max(0, 1 - worksheetExportProgressPercent) }} />
+                      </View>
+                    ) : null}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <View style={styles.sheetSection}>
+                    <Text style={styles.sheetSectionTitle}>本机占用</Text>
+                    <View style={styles.storageMetrics}>
+                      <View style={styles.storageMetricRow}>
+                        <Text style={styles.storageMetricLabel}>错题数量</Text>
+                        <Text style={styles.storageMetricValue}>
+                          {displayNumber(dataOverview.totalMistakes)} 道
+                        </Text>
+                      </View>
+                      <View style={styles.metricDivider} />
+                      <View style={styles.storageMetricRow}>
+                        <Text style={styles.storageMetricLabel}>图片数量</Text>
+                        <Text style={styles.storageMetricValue}>
+                          {displayNumber(dataOverview.imageCount)} 张
+                        </Text>
+                      </View>
+                      <View style={styles.metricDivider} />
+                      <View style={styles.storageMetricRow}>
+                        <Text style={styles.storageMetricLabel}>复做记录</Text>
+                        <Text style={styles.storageMetricValue}>
+                          {displayNumber(dataOverview.totalReviews)} 条
+                        </Text>
+                      </View>
+                      <View style={styles.metricDivider} />
+                      <View style={styles.storageMetricRow}>
+                        <Text style={styles.storageMetricLabel}>占用空间</Text>
+                        <Text style={styles.storageMetricValue}>{displayStorageText}</Text>
+                      </View>
+                    </View>
+                  </View>
+
+                  <View style={styles.sheetSection}>
+                    <Text style={styles.sheetSectionTitle}>缓存维护</Text>
+                    <Text style={styles.sheetBodyText}>
+                      清理打印增强过程中产生的临时图片，不会删除错题正在使用的原图。
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ busy: isClearingPrintEnhanceCache, disabled: isStorageBusy }}
+                      disabled={isStorageBusy}
+                      onPress={() => {
+                        void handleClearPrintEnhanceCache();
+                      }}
+                      style={({ pressed }) => [
+                        styles.secondarySheetButton,
+                        pressed && !isStorageBusy ? styles.settingsRowPressed : null,
+                        isStorageBusy ? styles.disabledButton : null,
+                      ]}>
+                      {isClearingPrintEnhanceCache
+                        ? <ActivityIndicator color="#23A566" size="small" />
+                        : <MaterialIcons color="#23A566" name="cleaning-services" size={20} />}
+                      <Text style={styles.secondarySheetButtonText}>
+                        {isClearingPrintEnhanceCache ? '正在清理…' : '清理图片缓存'}
+                      </Text>
+                    </Pressable>
+                  </View>
+                </>
+              )}
+            </ScrollView>
+          </View>
+          <AppToast {...toastProps} bottomOffset={Math.max(insets.bottom + 24, 32)} />
+        </View>
+      </Modal>
+
+      <AppToast {...toastProps} bottomOffset={toastBottomOffset} />
     </View>
   );
 }
@@ -2894,762 +2372,575 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
+    backgroundColor: '#F2F2F7',
+  },
+  screen: {
+    backgroundColor: '#F2F2F7',
   },
   screenContent: {
-    paddingTop: spacing.lg,
-    paddingBottom: layout.bottomTabHeight + spacing.xl,
-    gap: spacing.lg,
+    backgroundColor: '#F2F2F7',
+    paddingTop: 18,
+    paddingBottom: spacing.xl,
+    gap: 20,
   },
-  floatingAnchorWrap: {
-    position: 'absolute',
-    left: spacing.screenPadding,
-    right: spacing.screenPadding,
-    zIndex: 30,
-    elevation: 30,
+  pageHeader: {
+    gap: 4,
+    paddingHorizontal: 2,
   },
-  anchorTargetHighlighted: {
-    borderColor: colors.success,
-    shadowColor: colors.success,
-    shadowOpacity: 0.18,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 5,
-  },
-  card: {
-    borderRadius: radius.xl,
-  },
-  backupCard: {
-    borderRadius: 22,
-    borderColor: 'rgba(34, 197, 94, 0.18)',
-    backgroundColor: '#F8FFFA',
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.05,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 2,
-  },
-  cardRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.md,
-  },
-  backupCardRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.md,
-  },
-  iconBadge: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  iconGreen: {
-    backgroundColor: '#EAF8EE',
-    borderColor: '#C6EAD3',
-  },
-  backupIconBadge: {
-    width: 76,
-    height: 76,
-    borderRadius: 22,
-  },
-  iconBlue: {
-    backgroundColor: '#EAF2FF',
-    borderColor: '#C8DAFA',
-  },
-  iconOrange: {
-    backgroundColor: '#FFF4E5',
-    borderColor: '#F2D8AF',
-  },
-  iconPurple: {
-    backgroundColor: '#F1EBFF',
-    borderColor: '#DCCEF9',
-  },
-  iconGray: {
-    backgroundColor: '#F1F3F5',
-    borderColor: '#DBDFE4',
-  },
-  cardMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: spacing.sm,
-  },
-  backupMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: 10,
-  },
-  titleRow: {
+  pageTitleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  backupHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  backupTitleWrap: {
-    flex: 1,
-    minWidth: 0,
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-  },
-  cardTitle: {
-    ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
-    color: colors.textPrimary,
-  },
-  backupTitle: {
-    fontSize: 20,
-    lineHeight: 27,
-    fontWeight: '800',
-  },
-  backupChevron: {
-    flexShrink: 0,
-    marginLeft: spacing.xs,
-  },
-  cardDescription: {
-    ...typography.body,
-    color: colors.textSecondary,
-  },
-  backupDescription: {
-    color: '#4B5563',
-    lineHeight: 22,
-  },
-  metaText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-  },
-  exportHintWrap: {
-    gap: spacing.xs,
-  },
-  exportProgressMetaText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  exportProgressTrack: {
-    height: 5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.surfaceMuted,
-    overflow: 'hidden',
-  },
-  exportProgressFill: {
-    height: '100%',
-    borderRadius: radius.pill,
-    backgroundColor: colors.success,
-  },
-  backupMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-  },
-  backupMetaText: {
-    flex: 1,
-    minWidth: 0,
-    color: '#4B5563',
-  },
-  metaStrong: {
-    color: '#2A9D50',
-    fontWeight: '700',
-  },
-  backupMetaStrong: {
-    color: '#16A34A',
-    fontWeight: '800',
-  },
-  recommendBadge: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#E6C88F',
-    backgroundColor: '#FFF8E8',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
-  },
-  recommendText: {
-    ...typography.caption,
-    color: '#9C6B1A',
-    fontWeight: '700',
-  },
-  actionRow: {
-    marginTop: spacing.xs,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  backupActionRow: {
-    marginTop: spacing.xs,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 12,
   },
-  actionButton: {
-    minHeight: 44,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    justifyContent: 'center',
-    alignItems: 'center',
+  pageTitle: {
+    color: '#111111',
+    fontSize: 32,
+    lineHeight: 40,
+    fontWeight: '800',
   },
-  actionButtonText: {
-    ...typography.bodySmall,
-    fontWeight: '700',
+  pageSubtitle: {
+    color: '#6E6E73',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
   },
-  backupActionButton: {
-    minHeight: 46,
+  offlineBadge: {
+    minHeight: 30,
     borderRadius: 15,
-    flexGrow: 1,
-    flexShrink: 1,
-    flexBasis: 0,
-    minWidth: 104,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  backupActionContent: {
+    borderWidth: 1,
+    borderColor: '#B9DFC9',
+    backgroundColor: '#EAF7F0',
+    paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
+    gap: 6,
   },
-  backupActionText: {
-    flexShrink: 1,
-    textAlign: 'center',
+  offlineDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#23A566',
+  },
+  offlineText: {
+    color: '#23A566',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  section: {
+    gap: 8,
+  },
+  sectionLabel: {
+    color: '#6E6E73',
+    fontSize: 15,
     lineHeight: 20,
+    fontWeight: '600',
+    paddingHorizontal: 4,
   },
-  backupProgressWrap: {
-    borderRadius: radius.md,
+  settingsGroup: {
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#D7EAD9',
+    borderColor: '#E5E5EA',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    gap: spacing.xs,
+    overflow: 'hidden',
   },
-  backupProgressHeadline: {
-    ...typography.bodySmall,
-    color: '#238B49',
-    fontWeight: '800',
-    lineHeight: 20,
-  },
-  backupGeneratedRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.xs,
-  },
-  backupGeneratedText: {
-    ...typography.caption,
-    color: '#4B5563',
-    fontWeight: '700',
-    lineHeight: 18,
-    flex: 1,
-    minWidth: 0,
-  },
-  backupReSaveButton: {
-    minHeight: 40,
-    borderRadius: radius.lg,
+  settingsIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#72C490',
-    backgroundColor: '#F1FAF4',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-  },
-  backupReSaveButtonPressed: {
-    opacity: 0.82,
-  },
-  backupReSaveButtonText: {
-    ...typography.bodySmall,
-    color: '#238B49',
-    fontWeight: '800',
-    flexShrink: 1,
-  },
-  actionButtonGreen: {
-    borderColor: '#72C490',
-    backgroundColor: '#F1FAF4',
-  },
-  actionButtonTextGreen: {
-    color: '#238B49',
-  },
-  actionButtonOrange: {
-    borderColor: '#D1A15D',
-    backgroundColor: '#FFF6E8',
-  },
-  actionButtonTextOrange: {
-    color: '#A86A12',
-  },
-  actionButtonBlue: {
-    borderColor: '#8CB9F5',
-    backgroundColor: '#F1F7FF',
-  },
-  actionButtonTextBlue: {
-    color: '#2D74D6',
-  },
-  exportModeSection: {
-    marginTop: spacing.xs,
-    gap: spacing.xs,
-  },
-  exportModeList: {
-    gap: spacing.xs,
-  },
-  exportModeOption: {
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#E9DAC3',
-    backgroundColor: '#FFFDF9',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    gap: 6,
-  },
-  exportModeOptionSelected: {
-    borderColor: '#D1A15D',
-    backgroundColor: '#FFF6E8',
-  },
-  exportModeOptionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  exportModeTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    flexShrink: 1,
-    gap: spacing.xs,
-  },
-  exportModeTitle: {
-    ...typography.bodySmall,
-    color: '#564028',
-    fontWeight: '700',
-    flexShrink: 1,
-  },
-  exportModeTitleSelected: {
-    color: '#A86A12',
-  },
-  exportModeDescription: {
-    ...typography.caption,
-    color: '#6D5A45',
-    lineHeight: 18,
-  },
-  exportModeDescriptionSelected: {
-    color: '#875321',
-  },
-  clearPrintStrengthSection: {
-    marginTop: spacing.xs,
-    gap: spacing.xs,
-  },
-  clearPrintStrengthTrack: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#E9DAC3',
-    backgroundColor: '#FFFDF9',
-    padding: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  clearPrintStrengthStop: {
-    flex: 1,
-    minHeight: 34,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xs,
-  },
-  clearPrintStrengthStopSelected: {
-    borderColor: '#D1A15D',
-    backgroundColor: '#FFF6E8',
-  },
-  clearPrintStrengthStopText: {
-    ...typography.caption,
-    color: '#6D5A45',
-    fontWeight: '700',
-  },
-  clearPrintStrengthStopTextSelected: {
-    color: '#A86A12',
-  },
-  clearPrintStrengthDescription: {
-    ...typography.caption,
-    color: '#6D5A45',
-    lineHeight: 18,
-  },
-  enhanceConcurrencySection: {
-    marginTop: spacing.xs,
-    gap: spacing.xs,
-  },
-  enhanceConcurrencyTrack: {
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#E9DAC3',
-    backgroundColor: '#FFFDF9',
-    padding: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  enhanceConcurrencyStop: {
-    flex: 1,
-    minHeight: 34,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xs,
-  },
-  enhanceConcurrencyStopSelected: {
-    borderColor: '#D1A15D',
-    backgroundColor: '#FFF6E8',
-  },
-  enhanceConcurrencyStopInner: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 1,
-  },
-  enhanceConcurrencyStopText: {
-    ...typography.caption,
-    color: '#6D5A45',
-    fontWeight: '700',
-  },
-  enhanceConcurrencyStopTextSelected: {
-    color: '#A86A12',
-  },
-  enhanceConcurrencyStopHint: {
-    ...typography.caption,
-    color: '#9C6B1A',
-    fontSize: 10,
-    lineHeight: 12,
-  },
-  enhanceConcurrencyStopHintSelected: {
-    color: '#A86A12',
-  },
-  enhanceConcurrencyDescription: {
-    ...typography.caption,
-    color: '#6D5A45',
-    lineHeight: 18,
-  },
-  enhanceConcurrencyHint: {
-    ...typography.caption,
-    color: '#7A664C',
-    lineHeight: 18,
-  },
-  backupHintRow: {
-    marginTop: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-  },
-  backupHintText: {
-    ...typography.caption,
-    flex: 1,
-    color: '#6B7280',
-    lineHeight: 18,
-  },
-  statsCard: {
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#E2E8F3',
-    backgroundColor: '#F8FAFD',
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.05,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 2,
-  },
-  statsCardRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing.sm,
-  },
-  statsMain: {
-    flex: 1,
-    minWidth: 0,
-    gap: spacing.sm,
-  },
-  statsHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  statsHeaderIconWrap: {
-    width: 60,
-    height: 60,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#CCE0FC',
-    backgroundColor: '#EAF2FF',
+    borderColor: '#CBE8D8',
+    backgroundColor: '#EDF8F2',
     alignItems: 'center',
     justifyContent: 'center',
     flexShrink: 0,
   },
-  statsHeaderText: {
+  settingsRow: {
+    minHeight: 62,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  settingsRowPressed: {
+    backgroundColor: '#F4F4F6',
+  },
+  settingsRowText: {
+    flex: 1,
+    minWidth: 0,
+    gap: 1,
+  },
+  settingsRowTitle: {
+    color: '#1C1C1E',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '600',
+  },
+  settingsRowSubtitle: {
+    color: '#8E8E93',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+  },
+  settingsRowRight: {
+    flexShrink: 1,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  settingsDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 66,
+    backgroundColor: '#E5E5EA',
+  },
+  rowValueText: {
+    color: '#8E8E93',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '500',
+    textAlign: 'right',
+  },
+  backupPrimaryRow: {
+    minHeight: 88,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  backupPrimaryText: {
     flex: 1,
     minWidth: 0,
     gap: 2,
   },
-  statsTitle: {
-    color: '#131722',
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: '800',
+  backupPrimaryTitle: {
+    color: '#1C1C1E',
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: '700',
   },
-  statsUpdatedText: {
-    ...typography.bodySmall,
-    color: '#8691A2',
-    fontSize: 14,
-    lineHeight: 18,
-  },
-  statsRefreshButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#DEE6F2',
+  backupButton: {
+    minWidth: 98,
+    minHeight: 44,
+    borderRadius: 13,
+    paddingHorizontal: 13,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    gap: 6,
+    backgroundColor: '#23A566',
+    flexShrink: 0,
   },
-  statsGrid: {
+  backupButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+  },
+  primaryButtonPressed: {
+    opacity: 0.82,
+  },
+  inlineStatus: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E5EA',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 8,
+    backgroundColor: '#FBFBFC',
+  },
+  inlineStatusHeader: {
+    gap: 2,
+  },
+  inlineStatusTitle: {
+    color: '#3A3A3C',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  inlineStatusMeta: {
+    color: '#8E8E93',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
+  },
+  progressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#E5E5EA',
+    overflow: 'hidden',
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    rowGap: spacing.sm,
-    alignItems: 'flex-start',
   },
-  statItemCard: {
-    width: '48.6%',
-    minHeight: 74,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#E6ECF5',
-    backgroundColor: '#FFFFFF',
+  progressFill: {
+    backgroundColor: '#23A566',
+  },
+  inlineLinkButton: {
+    alignSelf: 'flex-start',
+    minHeight: 44,
+    borderRadius: 10,
     paddingHorizontal: 10,
-    paddingVertical: 8,
-    alignItems: 'flex-start',
-    justifyContent: 'center',
-    gap: 0,
-    marginBottom: 0,
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.03,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
   },
-  statItemBody: {
-    width: '100%',
+  inlineLinkText: {
+    color: '#23A566',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  overviewStats: {
+    minHeight: 104,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  overviewStatSlot: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  overviewDivider: {
+    width: StyleSheet.hairlineWidth,
+    marginVertical: 5,
+    backgroundColor: '#E5E5EA',
+  },
+  overviewStatContent: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  overviewLabel: {
+    color: '#6E6E73',
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  overviewValue: {
+    color: '#23A566',
+    fontSize: 25,
+    lineHeight: 30,
+    fontWeight: '800',
+    textAlign: 'center',
+    maxWidth: '100%',
+  },
+  compactErrorText: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E5EA',
+    color: '#D84A4A',
+    fontSize: 12,
+    lineHeight: 17,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  permissionNotice: {
+    minHeight: 48,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E5E5EA',
+    paddingHorizontal: 14,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
   },
-  statTextWrap: {
+  permissionNoticeText: {
+    flex: 1,
+    color: '#6E6E73',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  permissionAction: {
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  permissionActionText: {
+    color: '#23A566',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '700',
+  },
+  versionTapTarget: {
+    minHeight: 44,
+    minWidth: 54,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+  },
+  localDataNotice: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  localDataNoticeText: {
+    color: '#8E8E93',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  modalRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.28)',
+  },
+  bottomSheet: {
+    maxHeight: '90%',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: '#F2F2F7',
+    overflow: 'hidden',
+  },
+  sheetHeader: {
+    minHeight: 60,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#D1D1D6',
+    paddingLeft: 20,
+    paddingRight: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+  },
+  sheetTitle: {
+    color: '#1C1C1E',
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
+  },
+  sheetCloseButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sheetContent: {
+    padding: 16,
+    paddingBottom: 28,
+    gap: 16,
+  },
+  sheetSection: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+    gap: 12,
+  },
+  sheetSectionTitle: {
+    color: '#1C1C1E',
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  sheetBodyText: {
+    color: '#6E6E73',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  optionGroup: {
+    gap: 8,
+  },
+  modeOption: {
+    minHeight: 68,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E5EA',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  modeOptionSelected: {
+    borderColor: '#86CDA7',
+    backgroundColor: '#F2FAF5',
+  },
+  modeOptionText: {
     flex: 1,
     minWidth: 0,
     gap: 2,
   },
-  statItemIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#EAF2FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statValue: {
-    ...typography.sectionTitle,
-    color: '#2D74D6',
-    fontSize: 21,
-    lineHeight: 25,
-    fontWeight: '800',
-  },
-  statLabel: {
-    ...typography.caption,
-    color: '#7A8496',
-    fontSize: 11,
-    lineHeight: 14,
-    fontWeight: '500',
-    textAlign: 'left',
-  },
-  errorText: {
-    ...typography.caption,
-    color: colors.danger,
-    fontWeight: '700',
-  },
-  reminderTimeWrap: {
-    gap: spacing.xs,
-  },
-  reminderTimeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  reminderTimeButton: {
-    minHeight: 44,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D4D9E0',
-    backgroundColor: '#F8F9FB',
-    paddingHorizontal: spacing.sm,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 6,
-  },
-  reminderTimeButtonText: {
-    ...typography.caption,
-    color: '#505863',
-    fontWeight: '700',
-  },
-  reminderScheduleText: {
-    ...typography.caption,
-    color: '#6A717A',
+  modeOptionTitle: {
+    color: '#1C1C1E',
+    fontSize: 15,
+    lineHeight: 21,
     fontWeight: '600',
   },
-  reminderValueText: {
-    color: '#7B53CC',
-    fontWeight: '700',
+  modeOptionDescription: {
+    color: '#8E8E93',
+    fontSize: 12,
+    lineHeight: 17,
   },
-  storageValueText: {
-    color: '#2A9D50',
-    fontWeight: '700',
+  modeExplanation: {
+    borderRadius: 12,
+    backgroundColor: '#F2F2F7',
+    padding: 12,
+    gap: 3,
   },
-  reminderPermissionNotice: {
-    marginTop: spacing.xs,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#F1D08F',
-    backgroundColor: '#FFF8E9',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
+  modeExplanationTitle: {
+    color: '#3A3A3C',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  modeExplanationText: {
+    color: '#6E6E73',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  advancedDisclosure: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.xs,
   },
-  reminderPermissionText: {
-    ...typography.caption,
-    color: '#9C6B1A',
-    fontWeight: '700',
+  advancedContent: {
+    gap: 9,
+  },
+  controlLabel: {
+    color: '#3A3A3C',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+    marginTop: 3,
+  },
+  segmentedControl: {
+    minHeight: 40,
+    borderRadius: 10,
+    backgroundColor: '#F2F2F7',
+    padding: 3,
+    flexDirection: 'row',
+    gap: 3,
+  },
+  segmentButton: {
     flex: 1,
-  },
-  reminderSettingLink: {
-    minHeight: 32,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#E2BF7B',
-    backgroundColor: '#FFF2D8',
-    paddingHorizontal: spacing.sm,
-    justifyContent: 'center',
+    minWidth: 0,
+    minHeight: 34,
+    borderRadius: 8,
     alignItems: 'center',
-  },
-  reminderSettingLinkText: {
-    ...typography.caption,
-    color: '#8B5E16',
-    fontWeight: '700',
-  },
-  aboutSupportCardPressable: {
-    borderRadius: radius.xl,
-  },
-  aboutSupportCardPressed: {
-    opacity: 0.92,
-  },
-  aboutSupportPrimaryMeta: {
-    color: colors.textPrimary,
-    fontWeight: '600',
-  },
-  versionPressable: {
-    alignSelf: 'flex-start',
-    minHeight: 44,
     justifyContent: 'center',
-    borderRadius: radius.md,
-    paddingVertical: 4,
     paddingHorizontal: 4,
   },
-  devCard: {
-    borderRadius: radius.xl,
-    backgroundColor: '#FFFDF8',
-    borderColor: '#F2DEC0',
-    gap: spacing.sm,
+  segmentButtonSelected: {
+    borderWidth: 1,
+    borderColor: '#B9DFC9',
+    backgroundColor: '#FFFFFF',
   },
-  devTitle: {
-    ...typography.bodySmall,
-    color: '#8A5A22',
-    fontWeight: '700',
-  },
-  devNoticeText: {
-    ...typography.caption,
-    color: '#8A5A22',
+  segmentButtonText: {
+    color: '#6E6E73',
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '600',
+    textAlign: 'center',
   },
-  devEntry: {
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#EDDAC0',
-    backgroundColor: colors.surface,
-    padding: spacing.sm,
-    gap: spacing.xs,
+  segmentButtonTextSelected: {
+    color: '#23A566',
   },
-  devEntryTitle: {
-    ...typography.body,
-    color: colors.textPrimary,
-    fontWeight: '700',
+  controlDescription: {
+    color: '#8E8E93',
+    fontSize: 12,
+    lineHeight: 17,
   },
-  devEntryDesc: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  devCloseButton: {
-    alignSelf: 'flex-start',
-    minHeight: 44,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#E0CDAE',
-    backgroundColor: '#FFF7EA',
-    paddingHorizontal: spacing.md,
-    justifyContent: 'center',
-  },
-  devCloseButtonText: {
-    ...typography.caption,
-    color: '#8A5A22',
-    fontWeight: '700',
-  },
-  safetyNotice: {
-    marginTop: spacing.xs,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#BFEACD',
-    backgroundColor: '#ECF8EF',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  exportSummary: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
+    justifyContent: 'space-between',
+    gap: 12,
   },
-  safetyText: {
-    ...typography.bodySmall,
-    color: '#2A8E4A',
-    fontWeight: '600',
-    flex: 1,
+  exportPendingText: {
+    color: '#6E6E73',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  primarySheetButton: {
+    minHeight: 48,
+    borderRadius: 13,
+    backgroundColor: '#23A566',
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  primarySheetButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '700',
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  exportHint: {
+    color: '#6E6E73',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  exportProgressMeta: {
+    color: '#8E8E93',
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  storageMetrics: {
+    borderRadius: 12,
+    backgroundColor: '#F7F7F9',
+    overflow: 'hidden',
+  },
+  storageMetricRow: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  storageMetricLabel: {
+    color: '#3A3A3C',
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  storageMetricValue: {
+    color: '#23A566',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  metricDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginLeft: 12,
+    backgroundColor: '#E5E5EA',
+  },
+  secondarySheetButton: {
+    minHeight: 48,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#B9DFC9',
+    backgroundColor: '#F2FAF5',
+    paddingHorizontal: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  secondarySheetButtonText: {
+    color: '#23A566',
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
   },
   disabledButton: {
     opacity: 0.55,
