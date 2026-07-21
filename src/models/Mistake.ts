@@ -9,10 +9,14 @@ export interface Mistake {
   id: string;
   subject: string;
   module: string;
+  module_id?: string | null;
   title?: string | null;
   error_reason?: string | null;
+  error_reason_ids?: string | null;
   difficulty: number;
   note?: string | null;
+  my_solution_text?: string | null;
+  answer_text?: string | null;
   note_highlights?: string | null;
   review_count: number;
   status: MistakeStatus;
@@ -28,10 +32,14 @@ export interface Mistake {
 export interface CreateMistakeInput {
   id?: string;
   module: string;
+  module_id?: string | null;
   title?: string;
   error_reason?: string;
+  error_reason_ids?: string | null;
   difficulty?: number;
   note?: string | null;
+  my_solution_text?: string | null;
+  answer_text?: string | null;
   note_highlights?: string | null;
   subject?: string;
   status?: MistakeStatus;
@@ -45,10 +53,14 @@ export interface CreateMistakeInput {
 export interface UpdateMistakeInput {
   subject?: string;
   module?: string;
+  module_id?: string | null;
   title?: string | null;
   error_reason?: string | null;
+  error_reason_ids?: string | null;
   difficulty?: number;
   note?: string | null;
+  my_solution_text?: string | null;
+  answer_text?: string | null;
   note_highlights?: string | null;
   review_count?: number;
   status?: MistakeStatus;

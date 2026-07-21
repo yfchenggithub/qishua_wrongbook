@@ -22,11 +22,20 @@ export function createEmptyAddMistakeDraft(): AddMistakeDraft {
   return {
     draftId: createMistakeId(),
     subject: DEFAULT_SUBJECT,
+    moduleId: null,
     module: null,
     title: '',
+    errorReasonIds: [],
+    errorReasonLabels: [],
     errorReason: null,
     difficulty: DEFAULT_DIFFICULTY,
     note: '',
+    mySolutionText: '',
+    answerText: '',
+    questionImages: [],
+    mySolutionImages: [],
+    answerImages: [],
+    joinReviewPlan: false,
     questionImage: null,
     mySolutionImage: null,
     answerImage: null,
@@ -37,7 +46,7 @@ export function createEmptyAddMistakeDraft(): AddMistakeDraft {
 export function validateAddMistakeDraft(draft: AddMistakeDraft): AddMistakeValidationResult {
   const errors: string[] = [];
 
-  if (!draft.questionImage) {
+  if (draft.questionImages.length === 0 && !draft.questionImage) {
     errors.push('题目照片必填，请先拍摄或选择题目照片。');
   }
 

@@ -10,10 +10,14 @@
 | id | string | 主键，必填 | 错题 ID |
 | subject | string | 默认 `math` | 科目 |
 | module | string | 必填 | 模块：`函数/数列/导数/圆锥曲线/立体几何/概率统计/其他`，也可保存用户自定义模块 |
+| module_id | string | 可空 | 模块稳定 ID；内置模块使用 `builtin:*`，自定义模块使用 `custom:{custom_modules.id}`。旧数据可仅有 `module` |
 | title | string | 可空 | 错题标题 |
 | error_reason | string | 可空 | 错因：`粗心/不会/思路卡住/计算错误/概念不清/其他`，也可保存自定义文本 |
+| error_reason_ids | string | 可空 | 多选错因稳定 ID 的 JSON 字符串数组；旧数据可仅有 `error_reason` |
 | difficulty | number | 默认 `3`，范围 `1-5` | 难度 |
 | note | string | 可空 | 备注原文 |
+| my_solution_text | string | 可空 | “我的做法”文字说明 |
+| answer_text | string | 可空 | “答案／解析”文字说明 |
 | note_highlights | string | 可空 | 备注高亮区间 JSON，元素为 `{ start, end, color }`，`color` 枚举：`yellow/red/green` |
 | review_count | number | 默认 `0`，范围 `0-7` | 当前已重做次数 |
 | status | string | 必填，枚举：`collected/active/mastered/archived` | 错题状态：`collected` 表示已记录但未加入七刷，`active` 表示七刷中 |
@@ -173,3 +177,10 @@
 - 当队列数量为 `1` 时：沿用当前草稿 `draftId`，允许同时携带 `mySolutionImage`、`answerImage` 和 `note`。
 - 当队列数量大于 `1` 时：每条记录生成新的 `mistakeId`；`mySolutionImage`、`answerImage`、`note` 不复制到批量子项，避免一张做法图/答案图误绑定多题。
 - 批量保存不新增数据库表；仍使用 `mistakes`、`mistake_images` 现有契约。
+
+## 十六、新增错题补充信息兼容规则
+
+- `module` 与 `error_reason` 继续保存可直接展示和搜索的文本，避免旧页面、旧备份和旧数据失效。
+- `module_id` 与 `error_reason_ids` 用于新增流程中的稳定选择状态；读取旧数据时允许根据名称回退匹配。
+- `my_solution_text` 与 `answer_text` 均为可空字段；图片仍按 `mistake_images.type` 保存，并允许同类型多条记录按 `sort_order` 排序。
+- 新增页中的所有补充信息只在最终提交时随错题事务写入；Sheet 内保存只更新页面草稿。

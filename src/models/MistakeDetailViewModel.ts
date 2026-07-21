@@ -50,11 +50,15 @@ export interface DetailReviewRecordItem {
 export interface MistakeDetailViewModel {
   id: string;
   module: string;
+  moduleId?: string | null;
   title: string;
   subtitle: string;
   errorReason?: string | null;
+  errorReasonIds?: string[];
   difficulty: number;
   note?: string | null;
+  mySolutionText?: string | null;
+  answerText?: string | null;
   noteHighlights?: TextHighlightRange[];
   reviewCount: number;
   maxReviewCount: number;

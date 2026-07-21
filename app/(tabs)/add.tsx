@@ -1,2597 +1,566 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  Image,
-  type LayoutChangeEvent,
   Linking,
-  type NativeScrollEvent,
-  type NativeSyntheticEvent,
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
-  TextInput,
   View,
 } from 'react-native';
+import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
+  AddMistakeProgress,
+  type AddMistakeStage,
   AppToast,
-  type AppToastType,
-  BrandHeader,
-  CardContainer,
-  CustomModuleManagerModal,
-  FloatingBottomCta,
+  type ErrorReasonOption,
   ImagePreviewModal,
-  PrimaryButton,
-  QuickAnchorNav,
-  type QuickAnchorNavItem,
-  ScreenContainer,
-  SectionTitle,
-  TagChip,
+  ModulePickerSheet,
+  type ModulePickerOption,
+  OptionalInfoSheet,
+  PhotoPickerSection,
 } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
-import {
-  DIFFICULTY_OPTIONS,
-  ERROR_REASON_OPTIONS,
-  MISTAKE_NOTE_MAX_LENGTH,
-  MODULE_OPTIONS,
-} from '@/src/constants/mistakeOptions';
+import { ERROR_REASON_OPTIONS, MODULE_OPTIONS } from '@/src/constants/mistakeOptions';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { CustomErrorReason } from '@/src/models/CustomErrorReason';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { LocalImage, LocalImageType } from '@/src/models/LocalImage';
-import {
-  createEmptyAddMistakeDraft,
-  validateAddMistakeDraft,
-} from '@/src/services/AddMistakeValidationService';
-import { createMistakeFromDraft } from '@/src/services/CreateMistakeService';
-import {
-  CUSTOM_ERROR_REASON_TEMPLATES,
-  CustomErrorReasonService,
-  MAX_CUSTOM_ERROR_REASON_COUNT,
-} from '@/src/services/CustomErrorReasonService';
+import { MistakeRepository } from '@/src/repositories/MistakeRepository';
+import { createEmptyAddMistakeDraft, validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
+import { createMistakesFromDraft } from '@/src/services/CreateMistakeService';
+import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
 import {
   deleteLocalImage,
-  pickImageAndSave,
   pickImagesAndSave,
   saveSharedImageToMistakeFolder,
   takePhotoAndSave,
 } from '@/src/services/ImageService';
 import { setAddScreenHasUnsavedPhotos } from '@/src/services/LeaveGuardService';
 import { Logger } from '@/src/services/Logger';
-import { colors, radius, spacing, typography } from '@/src/styles/tokens';
-import { createMistakeId } from '@/src/utils/id';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const PAGE_SCOPE = 'AddScreen';
-const MAX_DRAFT_RETRY = 5;
-const MAX_PHOTO_QUEUE_SIZE = 20;
-const DOUBLE_TAP_DELAY = 300;
-const TOAST_DURATION_DEFAULT = 1800;
-const TOAST_DURATION_LONG = 2400;
+const GREEN = '#34C759';
+const TEXT = '#1C1C1E';
+const SECONDARY = '#8E8E93';
+const BORDER = '#E5E5EA';
+const BACKGROUND = '#F2F2F7';
+const MAX_IMAGES_PER_TYPE = 20;
 
-type DraftImageField = 'questionImage' | 'mySolutionImage' | 'answerImage';
-type CaptureCardVariant = 'primary' | 'compact';
-type QueuePhotoSource = 'camera' | 'album' | 'shared';
-
-type CaptureEntryConfig = {
-  key: DraftImageField;
-  type: LocalImageType;
-  title: string;
-  subtitle: string;
-};
-
-type QueuedPhoto = {
-  id: string;
-  image: LocalImage;
-  source: QueuePhotoSource;
-  createdAt: number;
-};
-
-type LastTapInfo = {
-  id: string;
-  time: number;
-};
-
-type ToastType = AppToastType;
 type SharedImageSearchParams = {
   sharedImageUri?: string | string[];
   sharedImageNonce?: string | string[];
   sharedImageError?: string | string[];
 };
-type AddAnchorId = 'question' | 'module' | 'mySolution' | 'answer' | 'errorReason' | 'supplement';
 
-const ADD_ANCHOR_ACTIVE_OFFSET = 104;
-const ADD_ANCHOR_SCROLL_OFFSET = spacing.sm;
-const ADD_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
-const ADD_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
-const ADD_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
-const ADD_ANCHOR_LABELS: Record<AddAnchorId, string> = {
-  question: '题目照片',
-  module: '选择模块',
-  mySolution: '我的做法',
-  answer: '答案解析',
-  errorReason: '错因',
-  supplement: '补充信息',
-};
-const ADD_ANCHOR_ITEMS: readonly QuickAnchorNavItem<AddAnchorId>[] = [
-  { id: 'question', label: ADD_ANCHOR_LABELS.question, shortLabel: '题目', icon: 'image' },
-  { id: 'module', label: ADD_ANCHOR_LABELS.module, shortLabel: '模块', icon: 'category' },
-  { id: 'mySolution', label: ADD_ANCHOR_LABELS.mySolution, shortLabel: '做法', icon: 'edit-note' },
-  { id: 'answer', label: ADD_ANCHOR_LABELS.answer, shortLabel: '答案', icon: 'menu-book' },
-  { id: 'errorReason', label: ADD_ANCHOR_LABELS.errorReason, shortLabel: '错因', icon: 'error-outline' },
-  { id: 'supplement', label: ADD_ANCHOR_LABELS.supplement, shortLabel: '补充', icon: 'notes' },
-];
-
-const QUESTION_CAPTURE_ENTRY: CaptureEntryConfig = {
-  key: 'questionImage',
-  type: 'question',
-  title: '题目照片',
-  subtitle: '拍原题，建议只框住一道题',
-};
-
-const OPTIONAL_CAPTURE_ENTRIES: CaptureEntryConfig[] = [
-  {
-    key: 'mySolutionImage',
-    type: 'my_solution',
-    title: '我的做法（可选）',
-    subtitle: '需要时再拍，方便复盘错误过程',
-  },
-  {
-    key: 'answerImage',
-    type: 'answer',
-    title: '答案/解析（可选）',
-    subtitle: '需要时再拍，保存标准答案或讲解',
-  },
-];
-
-function createNextDraft(previousDraftId: string): AddMistakeDraft {
-  let nextDraft = createEmptyAddMistakeDraft();
-  let retryCount = 0;
-
-  while (nextDraft.draftId === previousDraftId && retryCount < MAX_DRAFT_RETRY) {
-    nextDraft = createEmptyAddMistakeDraft();
-    retryCount += 1;
-  }
-
-  return nextDraft;
+function firstParam(value: string | string[] | undefined): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
 }
 
-function hasValue(value: string | null | undefined): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
-function getModuleLabel(moduleValue: string | null): string {
-  if (!moduleValue) {
-    return '数学';
-  }
-
-  const option = MODULE_OPTIONS.find((item) => item.value === moduleValue);
-  return option?.label ?? moduleValue;
-}
-
-function buildCanonicalQuestionTitle(moduleValue: string | null, questionNo: number): string {
-  const normalizedQuestionNo = Number.isFinite(questionNo) && questionNo > 0
-    ? Math.floor(questionNo)
-    : 1;
-  return `${getModuleLabel(moduleValue)} · 第 ${normalizedQuestionNo} 题`;
-}
-
-function isCancelLikeMessage(message?: string): boolean {
-  if (!message) {
-    return false;
-  }
-  const normalized = message.toLowerCase();
+function isCancelMessage(message?: string): boolean {
+  const normalized = message?.toLocaleLowerCase() ?? '';
   return normalized.includes('cancel') || normalized.includes('取消');
 }
 
-function toShortUri(uri?: string | null): string | null {
-  if (!uri) {
-    return null;
-  }
-  const trimmed = uri.trim();
-  if (trimmed.length <= 64) {
-    return trimmed;
-  }
-  return `${trimmed.slice(0, 28)}...${trimmed.slice(-20)}`;
+function shouldOpenSettings(message?: string): boolean {
+  const normalized = message?.toLocaleLowerCase() ?? '';
+  return normalized.includes('settings') || normalized.includes('设置');
 }
 
-function getFirstSearchParam(value: string | string[] | undefined): string | null {
-  const rawValue = Array.isArray(value) ? value[0] : value;
-  if (typeof rawValue !== 'string') {
-    return null;
-  }
-
-  const trimmed = rawValue.trim();
-  return trimmed.length > 0 ? trimmed : null;
+function moveItem<T>(items: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return items;
+  const next = [...items];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
 }
 
-function getSharedImageErrorMessage(errorCode: string | null): string | null {
-  switch (errorCode) {
-    case 'unsupported_share_type':
-      return '暂不支持该分享类型，请分享图片。';
-    case 'missing_image':
-      return '没有读取到分享图片，请重新分享一次。';
-    case 'image_read_failed':
-      return '图片读取失败，请重试。';
-    case 'empty_image_uri':
-      return '分享图片路径为空，请重新分享一次。';
-    case null:
-      return null;
-    default:
-      return '导入图片失败，请重试。';
-  }
+function customModuleOption(item: CustomModule): ModulePickerOption {
+  return { id: `custom:${item.id}`, label: item.name, isCustom: true };
 }
 
-function normalizeValidationErrors(draft: AddMistakeDraft, errors: string[]): string[] {
-  const normalized: string[] = [];
-
-  if (!draft.questionImage) {
-    normalized.push('请先拍题目照片');
-  }
-  if (!hasValue(draft.module)) {
-    normalized.push('请选择模块');
-  }
-
-  if (normalized.length > 0) {
-    return normalized;
-  }
-
-  const fallback = errors
-    .map((item) => (typeof item === 'string' ? item.trim() : ''))
-    .filter((item) => item.length > 0);
-  return fallback.length > 0 ? fallback : ['校验未通过，请检查输入信息'];
+function customReasonOption(item: CustomErrorReason): ErrorReasonOption {
+  return { id: `custom:${item.id}`, label: item.name, isCustom: true };
 }
 
-function setDraftImageByField(
-  draft: AddMistakeDraft,
-  field: DraftImageField,
-  image: LocalImage | null,
-): AddMistakeDraft {
-  switch (field) {
-    case 'questionImage':
-      return { ...draft, questionImage: image };
-    case 'mySolutionImage':
-      return { ...draft, mySolutionImage: image };
-    case 'answerImage':
-      return { ...draft, answerImage: image };
-    default:
-      return draft;
-  }
-}
-
-function getDraftImageByField(draft: AddMistakeDraft, field: DraftImageField): LocalImage | null {
-  switch (field) {
-    case 'questionImage':
-      return draft.questionImage;
-    case 'mySolutionImage':
-      return draft.mySolutionImage;
-    case 'answerImage':
-      return draft.answerImage;
-    default:
-      return null;
-  }
-}
-
-function buildQueuedPhoto(image: LocalImage, source: QueuePhotoSource): QueuedPhoto {
-  return {
-    id: image.id,
-    image,
-    source,
-    createdAt: Date.now(),
-  };
-}
-
-function buildDraftForQueuedPhoto(
-  baseDraft: AddMistakeDraft,
-  photo: QueuedPhoto,
-  index: number,
-  totalCount: number,
-): AddMistakeDraft {
-  const isSingle = totalCount === 1;
-  const now = new Date();
-  const title = buildCanonicalQuestionTitle(baseDraft.module, index + 1);
-
-  return {
-    ...baseDraft,
-    draftId: totalCount > 1 ? createMistakeId() : baseDraft.draftId,
-    title,
-    questionImage: photo.image,
-    mySolutionImage: isSingle ? baseDraft.mySolutionImage : null,
-    answerImage: isSingle ? baseDraft.answerImage : null,
-    note: isSingle ? baseDraft.note : '',
-    createdAt: now.toISOString(),
-  };
-}
-
-function createNextDraftKeepingModule(previousDraft: AddMistakeDraft): AddMistakeDraft {
-  const nextDraft = createNextDraft(previousDraft.draftId);
-  return {
-    ...nextDraft,
-    module: previousDraft.module,
-  };
-}
-
-function CaptureEntryCard({
-  config,
-  image,
-  busy,
-  variant = 'primary',
-  onTakePhoto,
-  onPickImage,
-  onDeleteImage,
-}: {
-  config: CaptureEntryConfig;
-  image: LocalImage | null;
-  busy: boolean;
-  variant?: CaptureCardVariant;
-  onTakePhoto: () => void;
-  onPickImage: () => void;
-  onDeleteImage: () => void;
-}) {
-  const isCompact = variant === 'compact';
-  const canTapPreviewToTakePhoto = !image && !busy;
-  const photoActionText = image ? '重新拍照' : '拍照';
-
-  return (
-    <CardContainer
-      style={[styles.captureCard, isCompact && styles.captureCardCompact]}
-      padding={isCompact ? spacing.sm : spacing.md}>
-      <Text
-        numberOfLines={1}
-        maxFontSizeMultiplier={1.1}
-        style={[styles.captureTitle, isCompact && styles.captureTitleCompact]}>
-        {config.title}
-      </Text>
-      <Text
-        numberOfLines={isCompact ? 1 : 2}
-        maxFontSizeMultiplier={1.1}
-        style={[styles.captureSubtitle, isCompact && styles.captureSubtitleCompact]}>
-        {config.subtitle}
-      </Text>
-
-      <Pressable
-        accessibilityRole={canTapPreviewToTakePhoto ? 'button' : undefined}
-        accessibilityLabel={canTapPreviewToTakePhoto ? 'Take photo' : undefined}
-        onPress={canTapPreviewToTakePhoto ? onTakePhoto : undefined}
-        disabled={!canTapPreviewToTakePhoto}
-        style={({ pressed }) => [
-          styles.capturePreviewWrap,
-          isCompact && styles.capturePreviewWrapCompact,
-          canTapPreviewToTakePhoto && pressed && styles.capturePreviewWrapPressed,
-        ]}>
-        {image ? (
-          <Image source={{ uri: image.uri }} style={styles.capturePreviewImage} resizeMode="cover" />
-        ) : (
-          <View style={styles.capturePlaceholder}>
-            <View style={styles.cameraBody}>
-              <View style={styles.cameraLens} />
-            </View>
-            <Text maxFontSizeMultiplier={1.1} style={styles.capturePlaceholderText}>
-              点击拍题
-            </Text>
-          </View>
-        )}
-      </Pressable>
-
-      <View style={styles.captureActionRow}>
-        <Pressable
-          onPress={onTakePhoto}
-          disabled={busy}
-          style={[
-            styles.captureActionButton,
-            styles.captureActionPrimary,
-            isCompact && styles.captureActionButtonCompact,
-            busy && styles.disabledButton,
-          ]}>
-          <Text maxFontSizeMultiplier={1.1} style={styles.captureActionPrimaryText}>
-            {photoActionText}
-          </Text>
-        </Pressable>
-
-        <Pressable
-          onPress={onPickImage}
-          disabled={busy}
-          style={[
-            styles.captureActionButton,
-            styles.captureActionSecondary,
-            isCompact && styles.captureActionButtonCompact,
-            busy && styles.disabledButton,
-          ]}>
-          <Text maxFontSizeMultiplier={1.1} style={styles.captureActionSecondaryText}>
-            从相册选择
-          </Text>
-        </Pressable>
-      </View>
-
-      {image ? (
-        <View style={styles.captureFooterRow}>
-          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.imageMetaText}>
-            已选择：{image.fileName}
-          </Text>
-          <Pressable
-            onPress={onDeleteImage}
-            disabled={busy}
-            style={[
-              styles.captureDeleteButton,
-              isCompact && styles.captureDeleteButtonCompact,
-              busy && styles.disabledButton,
-            ]}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.captureDeleteText}>
-              删除
-            </Text>
-          </Pressable>
-        </View>
-      ) : (
-        <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.imageMetaText}>
-          尚未选择图片
-        </Text>
-      )}
-    </CardContainer>
-  );
-}
-
-function QuestionPhotoQueueCard({
-  config,
-  queue,
-  busy,
-  onTakePhoto,
-  onPickImage,
-  onDeletePhoto,
-  onPhotoPress,
-}: {
-  config: CaptureEntryConfig;
-  queue: QueuedPhoto[];
-  busy: boolean;
-  onTakePhoto: () => void;
-  onPickImage: () => void;
-  onDeletePhoto: (photoId: string) => void;
-  onPhotoPress: (photo: QueuedPhoto) => void;
-}) {
-  const hasPhotos = queue.length > 0;
-  const canAddMore = queue.length < MAX_PHOTO_QUEUE_SIZE;
-  const addPhotoHint = canAddMore
-    ? '请点击下方“拍照”按钮添加'
-    : '已达到 20 张上限，请先保存当前队列';
-
-  return (
-    <CardContainer style={styles.captureCard} padding={spacing.md}>
-      <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.captureTitle}>
-        {config.title}
-      </Text>
-      <Text numberOfLines={2} maxFontSizeMultiplier={1.1} style={styles.captureSubtitle}>
-        {config.subtitle}
-      </Text>
-      <View style={styles.combineHintRow}>
-        <MaterialIcons name="collections" size={16} color={colors.textSecondary} />
-        <Text maxFontSizeMultiplier={1.1} style={styles.combineHintText}>
-          多张图想合成一张，可到设置里的关于与支持查看方法。
-        </Text>
-      </View>
-
-      <View style={styles.capturePreviewWrap}>
-        {hasPhotos ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.questionQueueContent}>
-            {queue.map((item, index) => (
-              <View key={item.id} style={styles.questionThumbItem}>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`题目缩略图 ${index + 1}`}
-                  onPress={() => onPhotoPress(item)}
-                  style={({ pressed }) => [
-                    styles.questionThumbPressable,
-                    pressed ? styles.questionThumbPressablePressed : null,
-                  ]}>
-                  <Image source={{ uri: item.image.uri }} style={styles.questionThumbImage} resizeMode="cover" />
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`删除第 ${index + 1} 题`}
-                  onPress={() => onDeletePhoto(item.id)}
-                  disabled={busy}
-                  style={({ pressed }) => [
-                    styles.questionThumbDeleteButton,
-                    pressed && !busy ? styles.questionThumbDeleteButtonPressed : null,
-                    busy ? styles.disabledButton : null,
-                  ]}>
-                  <Text maxFontSizeMultiplier={1.1} style={styles.questionThumbDeleteText}>
-                    ×
-                  </Text>
-                </Pressable>
-                <View style={styles.questionThumbOrderBadge}>
-                  <Text maxFontSizeMultiplier={1.1} style={styles.questionThumbOrderText}>
-                    第 {index + 1} 题
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </ScrollView>
-        ) : (
-          <View style={styles.capturePlaceholder}>
-            {/* <View style={styles.cameraBody}>
-              <View style={styles.cameraLens} />
-            </View> */}
-            <Text maxFontSizeMultiplier={1.1} style={styles.capturePlaceholderText}>
-              暂无题目照片
-            </Text>
-            <Text maxFontSizeMultiplier={1.1} style={styles.capturePlaceholderHintText}>
-              {addPhotoHint}
-            </Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.captureActionRow}>
-        <Pressable
-          onPress={onTakePhoto}
-          disabled={busy || !canAddMore}
-          style={[
-            styles.captureActionButton,
-            styles.captureActionPrimary,
-            (busy || !canAddMore) && styles.disabledButton,
-          ]}>
-          <Text maxFontSizeMultiplier={1.1} style={styles.captureActionPrimaryText}>
-            拍照
-          </Text>
-        </Pressable>
-
-        <Pressable
-          onPress={onPickImage}
-          disabled={busy || !canAddMore}
-          style={[
-            styles.captureActionButton,
-            styles.captureActionSecondary,
-            (busy || !canAddMore) && styles.disabledButton,
-          ]}>
-          <Text maxFontSizeMultiplier={1.1} style={styles.captureActionSecondaryText}>
-            从相册选择
-          </Text>
-        </Pressable>
-      </View>
-
-      {hasPhotos ? (
-        <View style={styles.questionQueueHintWrap}>
-          <Text maxFontSizeMultiplier={1.1} style={styles.imageMetaText}>
-            已选择 {queue.length} 道题
-          </Text>
-          <Text maxFontSizeMultiplier={1.1} style={styles.imageMetaText}>
-            每张照片将保存为一道错题
-          </Text>
-        </View>
-      ) : (
-        <Text maxFontSizeMultiplier={1.1} style={styles.imageMetaText}>
-          请先拍题目照片
-        </Text>
-      )}
-    </CardContainer>
-  );
+function allOptionalImages(draft: AddMistakeDraft): LocalImage[] {
+  return [...draft.mySolutionImages, ...draft.answerImages];
 }
 
 export default function AddScreen() {
-  const navigation = useNavigation();
-  const searchParams = useLocalSearchParams<SharedImageSearchParams>();
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation();
+  const params = useLocalSearchParams<SharedImageSearchParams>();
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
-  const [photoQueue, setPhotoQueue] = useState<QueuedPhoto[]>([]);
-  const [previewPhoto, setPreviewPhoto] = useState<QueuedPhoto | null>(null);
-  const [lastTapInfo, setLastTapInfo] = useState<LastTapInfo | null>(null);
-  const [validationErrors, setValidationErrors] = useState<string[]>([]);
-  const [saveErrorMessage, setSaveErrorMessage] = useState<string | null>(null);
-  const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
-  const [joinReviewPlanOnSave, setJoinReviewPlanOnSave] = useState(false);
-  const [showOptionalInfo, setShowOptionalInfo] = useState(false);
+  const [stage, setStage] = useState<AddMistakeStage>('QUESTION');
+  const [moduleSheetVisible, setModuleSheetVisible] = useState(false);
+  const [optionalSheetVisible, setOptionalSheetVisible] = useState(false);
+  const [stageBeforeOptional, setStageBeforeOptional] = useState<AddMistakeStage>('QUESTION');
   const [customModules, setCustomModules] = useState<CustomModule[]>([]);
-  const [customModuleModalVisible, setCustomModuleModalVisible] = useState(false);
-  const [customModuleBusy, setCustomModuleBusy] = useState(false);
-  const [customModuleMessage, setCustomModuleMessage] = useState<string | null>(null);
-  const [customErrorReasons, setCustomErrorReasons] = useState<CustomErrorReason[]>([]);
-  const [customErrorReasonModalVisible, setCustomErrorReasonModalVisible] = useState(false);
-  const [customErrorReasonBusy, setCustomErrorReasonBusy] = useState(false);
-  const [customErrorReasonMessage, setCustomErrorReasonMessage] = useState<string | null>(null);
-  const [saveBarHeight, setSaveBarHeight] = useState(0);
-  const [activeAnchorId, setActiveAnchorId] = useState<AddAnchorId>('question');
-  const [highlightedAnchorId, setHighlightedAnchorId] = useState<AddAnchorId | null>(null);
-  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
-  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
-  const addScrollRef = useRef<ScrollView | null>(null);
-  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
-  const anchorLayoutsRef = useRef<Partial<Record<AddAnchorId, number>>>({});
-  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const { props: toastProps, showToast } = useAppToast({ defaultDuration: TOAST_DURATION_DEFAULT });
-  const pendingAnchorPressRef = useRef<AddAnchorId | null>(null);
-  const lastHandledSharedImageKeyRef = useRef<string | null>(null);
-  const lastHandledSharedErrorKeyRef = useRef<string | null>(null);
-  const showToastRef = useRef<
-    (message: string, type?: ToastType, duration?: number) => void
-  >(() => undefined);
-  const runImageActionRef = useRef<
-    (actionKey: string, handler: () => Promise<void>) => Promise<void>
-  >(async () => undefined);
-  const syncDraftQuestionImageRef = useRef<(queue: QueuedPhoto[]) => void>(() => undefined);
+  const [customReasons, setCustomReasons] = useState<CustomErrorReason[]>([]);
+  const [recentModuleNames, setRecentModuleNames] = useState<string[]>([]);
+  const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<{ image: LocalImage; title: string } | null>(null);
+  const lastSharedKeyRef = useRef<string | null>(null);
+  const lastSharedErrorKeyRef = useRef<string | null>(null);
+  const optionalSessionUrisRef = useRef<Set<string>>(new Set());
+  const { props: toastProps, showToast } = useAppToast({ defaultDuration: 1900 });
 
-  const isImageBusy = activeImageAction !== null;
-  const isBusy = isImageBusy || isSaving;
-  const missingQuestionImage = photoQueue.length === 0;
-  const missingModule = !hasValue(draft.module);
-  const canSave = !isBusy && !missingQuestionImage && !missingModule;
-  const queueCount = photoQueue.length;
-  const saveBarBottomOffset = Math.max(insets.bottom + spacing.xs, spacing.xs);
-  const fallbackSaveBarHeight = 138;
-  const effectiveSaveBarHeight = saveBarHeight > 0 ? saveBarHeight : fallbackSaveBarHeight;
-  const contentBottomPadding = saveBarBottomOffset + effectiveSaveBarHeight + spacing.lg;
-  const toastBottomOffset = saveBarBottomOffset + effectiveSaveBarHeight + spacing.sm;
-  const shouldShowFloatingAnchorNav = isFloatingAnchorVisible;
-  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
-  const moduleOptions = [
-    ...MODULE_OPTIONS,
-    ...customModules
-      .filter((moduleItem) => !MODULE_OPTIONS.some((item) => item.value === moduleItem.name))
-      .map((moduleItem) => ({
-        value: moduleItem.name,
-        label: moduleItem.name,
-      })),
-  ];
-  const errorReasonOptions = [
-    ...ERROR_REASON_OPTIONS,
-    ...customErrorReasons
-      .filter((reasonItem) => !ERROR_REASON_OPTIONS.some((item) => item.value === reasonItem.name))
-      .map((reasonItem) => ({
-        value: reasonItem.name,
-        label: reasonItem.name,
-      })),
-  ];
-  const sharedImageUri = getFirstSearchParam(searchParams.sharedImageUri);
-  const sharedImageNonce = getFirstSearchParam(searchParams.sharedImageNonce);
-  const sharedImageError = getFirstSearchParam(searchParams.sharedImageError);
+  const imageBusy = activeImageAction !== null;
+  const busy = imageBusy || saving;
+  const hasQuestion = draft.questionImages.length > 0;
+  const hasModule = !!draft.module?.trim();
+  const canProceed = hasQuestion && hasModule && !busy;
+  const validationHint = !hasQuestion
+    ? '请先添加题目照片'
+    : !hasModule
+      ? '请选择所属模块'
+      : imageBusy
+        ? '图片处理中，请稍候'
+        : '仅保存在本机';
 
-  const saveHintTextV2 = isSaving
-    ? '正在保存...'
-    : isImageBusy
-      ? '图片处理中，请稍候...'
-      : missingQuestionImage
-        ? '请先拍题目照片'
-        : missingModule
-          ? '请选择模块'
-          : queueCount > 1
-            ? joinReviewPlanOnSave
-              ? `将保存 ${queueCount} 道并加入 7 刷`
-              : `将保存 ${queueCount} 道到题库`
-            : joinReviewPlanOnSave
-              ? '保存后立即进入 7 刷'
-              : '仅保存到题库，可稍后加入 7 刷';
+  const moduleOptions = useMemo<ModulePickerOption[]>(() => [
+    ...MODULE_OPTIONS.map((item) => ({ id: item.id, label: item.label })),
+    ...customModules.map(customModuleOption),
+  ], [customModules]);
+  const reasonOptions = useMemo<ErrorReasonOption[]>(() => [
+    ...ERROR_REASON_OPTIONS.map((item) => ({ id: item.id, label: item.label })),
+    ...customReasons.map(customReasonOption),
+  ], [customReasons]);
+  const recentModuleIds = recentModuleNames
+    .map((name) => moduleOptions.find((item) => item.label === name)?.id)
+    .filter((id): id is string => !!id);
+  const optionalSummary = useMemo(() => {
+    const parts: string[] = [];
+    if (draft.mySolutionImages.length > 0 || draft.mySolutionText.trim()) parts.push('做法已添加');
+    if (draft.answerImages.length > 0 || draft.answerText.trim()) parts.push('解析已添加');
+    if (draft.errorReasonIds.length > 0) parts.push(`${draft.errorReasonIds.length} 个错因`);
+    parts.push(`${draft.difficulty} ${['', '简单', '偏易', '中等', '较难', '很难'][draft.difficulty]}`);
+    if (draft.title.trim() || draft.note.trim()) parts.push('标题备注已填写');
+    return parts.join(' · ');
+  }, [draft]);
 
-  const saveButtonTitle = isSaving
-    ? '正在保存...'
-    : queueCount > 1
-      ? joinReviewPlanOnSave
-        ? `保存 ${queueCount} 道并加入 7 刷`
-        : `保存 ${queueCount} 道`
-      : joinReviewPlanOnSave
-        ? '保存并加入 7 刷'
-        : '保存到题库';
-
-  const _legacySaveHintText = isSaving
-    ? '保存中，请稍候...'
-    : isImageBusy
-      ? '图片处理中，请稍候...'
-      : missingQuestionImage
-        ? '请先拍题目照片'
-        : missingModule
-          ? '请选择模块'
-          : '仅保存到题库，可稍后加入 7 刷';
-
-  void _legacySaveHintText;
-
-  function updateDraft<K extends keyof AddMistakeDraft>(field: K, value: AddMistakeDraft[K]) {
-    setDraft((prev) => ({ ...prev, [field]: value }));
-  }
-
-  function updateDraftImage(field: DraftImageField, image: LocalImage | null) {
-    setDraft((prev) => setDraftImageByField(prev, field, image));
-  }
-
-  function syncDraftQuestionImage(queue: QueuedPhoto[]) {
-    updateDraftImage('questionImage', queue[0]?.image ?? null);
-  }
-
-  function handleQueuePhotoPress(photo: QueuedPhoto) {
-    const now = Date.now();
-
-    if (lastTapInfo && lastTapInfo.id === photo.id && now - lastTapInfo.time < DOUBLE_TAP_DELAY) {
-      Logger.info(PAGE_SCOPE, 'Question thumbnail double tapped for preview.', {
-        draftId: draft.draftId,
-        photoId: photo.id,
-        photoQueueSize: photoQueue.length,
-        uriShort: toShortUri(photo.image.uri),
-      });
-      setPreviewPhoto(photo);
-      setLastTapInfo(null);
-      return;
-    }
-
-    setLastTapInfo({
-      id: photo.id,
-      time: now,
+  useEffect(() => {
+    let mounted = true;
+    void Promise.all([
+      CustomModuleService.listCustomModules(),
+      CustomErrorReasonService.listCustomErrorReasons(),
+      MistakeRepository.listRecentMistakes(12),
+    ]).then(([modules, reasons, recentMistakes]) => {
+      if (!mounted) return;
+      setCustomModules(modules);
+      setCustomReasons(reasons);
+      setRecentModuleNames(Array.from(new Set(recentMistakes.map((item) => item.module))).slice(0, 3));
+    }).catch((error) => {
+      Logger.error(PAGE_SCOPE, 'Failed to load add-screen options.', { error });
+      if (mounted) showToast('部分自定义选项加载失败', 'warning');
     });
-  }
-
-  function handleClosePreview() {
-    setPreviewPhoto(null);
-  }
-
-  async function handleCreateCustomModule(moduleName: string): Promise<boolean> {
-    if (customModuleBusy) {
-      return false;
-    }
-
-    setCustomModuleBusy(true);
-    setCustomModuleMessage(null);
-    try {
-      const result = await CustomModuleService.createCustomModule(moduleName);
-      if (!result.ok) {
-        const message = result.errorMessage ?? '创建自定义模块失败';
-        setCustomModuleMessage(message);
-        showToast(message, 'warning', TOAST_DURATION_LONG);
-        return false;
-      }
-
-      if (result.modules) {
-        setCustomModules(result.modules);
-      }
-      if (result.module) {
-        updateDraft('module', result.module.name);
-      }
-      showToast('已添加自定义模块', 'success');
-      return true;
-    } finally {
-      setCustomModuleBusy(false);
-    }
-  }
-
-  async function handleUpdateCustomModule(moduleId: string, moduleName: string): Promise<boolean> {
-    if (customModuleBusy) {
-      return false;
-    }
-
-    const previousModule = customModules.find((item) => item.id === moduleId);
-    setCustomModuleBusy(true);
-    setCustomModuleMessage(null);
-    try {
-      const result = await CustomModuleService.updateCustomModuleName(moduleId, moduleName);
-      if (!result.ok) {
-        const message = result.errorMessage ?? '编辑自定义模块失败';
-        setCustomModuleMessage(message);
-        showToast(message, 'warning', TOAST_DURATION_LONG);
-        return false;
-      }
-
-      if (result.modules) {
-        setCustomModules(result.modules);
-      }
-      if (previousModule && draft.module === previousModule.name && result.module) {
-        updateDraft('module', result.module.name);
-      }
-      showToast('自定义模块已更新', 'success');
-      return true;
-    } finally {
-      setCustomModuleBusy(false);
-    }
-  }
-
-  function handleDeleteCustomModule(moduleItem: CustomModule) {
-    if (customModuleBusy) {
-      return;
-    }
-
-    Alert.alert('删除模块', `确认删除“${moduleItem.name}”？已保存错题不会被删除。`, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            setCustomModuleBusy(true);
-            setCustomModuleMessage(null);
-            try {
-              const result = await CustomModuleService.deleteCustomModule(moduleItem.id);
-              if (!result.ok) {
-                const message = result.errorMessage ?? '删除自定义模块失败';
-                setCustomModuleMessage(message);
-                showToast(message, 'error', TOAST_DURATION_LONG);
-                return;
-              }
-
-              if (result.modules) {
-                setCustomModules(result.modules);
-              }
-              if (draft.module === moduleItem.name) {
-                updateDraft('module', null);
-              }
-              showToast('自定义模块已删除', 'info');
-            } finally {
-              setCustomModuleBusy(false);
-            }
-          })();
-        },
-      },
-    ]);
-  }
-
-  function handleMoveCustomModule(moduleId: string, direction: 'up' | 'down') {
-    if (customModuleBusy) {
-      return;
-    }
-
-    void (async () => {
-      setCustomModuleBusy(true);
-      setCustomModuleMessage(null);
-      try {
-        const result = await CustomModuleService.moveCustomModule(moduleId, direction);
-        if (!result.ok) {
-          const message = result.errorMessage ?? '调整模块排序失败';
-          setCustomModuleMessage(message);
-          showToast(message, 'warning', TOAST_DURATION_LONG);
-          return;
-        }
-        if (result.modules) {
-          setCustomModules(result.modules);
-        }
-      } finally {
-        setCustomModuleBusy(false);
-      }
-    })();
-  }
-
-  async function handleUseCustomModuleTemplate(moduleName: string): Promise<boolean> {
-    return handleCreateCustomModule(moduleName);
-  }
-
-  async function handleCreateCustomErrorReason(reasonName: string): Promise<boolean> {
-    if (customErrorReasonBusy) {
-      return false;
-    }
-
-    setCustomErrorReasonBusy(true);
-    setCustomErrorReasonMessage(null);
-    try {
-      const result = await CustomErrorReasonService.createCustomErrorReason(reasonName);
-      if (!result.ok) {
-        const message = result.errorMessage ?? '创建自定义错因失败';
-        setCustomErrorReasonMessage(message);
-        showToast(message, 'warning', TOAST_DURATION_LONG);
-        return false;
-      }
-
-      if (result.reasons) {
-        setCustomErrorReasons(result.reasons);
-      }
-      if (result.reason) {
-        updateDraft('errorReason', result.reason.name);
-      }
-      showToast('已添加自定义错因', 'success');
-      return true;
-    } finally {
-      setCustomErrorReasonBusy(false);
-    }
-  }
-
-  async function handleUpdateCustomErrorReason(reasonId: string, reasonName: string): Promise<boolean> {
-    if (customErrorReasonBusy) {
-      return false;
-    }
-
-    const previousReason = customErrorReasons.find((item) => item.id === reasonId);
-    setCustomErrorReasonBusy(true);
-    setCustomErrorReasonMessage(null);
-    try {
-      const result = await CustomErrorReasonService.updateCustomErrorReasonName(reasonId, reasonName);
-      if (!result.ok) {
-        const message = result.errorMessage ?? '编辑自定义错因失败';
-        setCustomErrorReasonMessage(message);
-        showToast(message, 'warning', TOAST_DURATION_LONG);
-        return false;
-      }
-
-      if (result.reasons) {
-        setCustomErrorReasons(result.reasons);
-      }
-      if (previousReason && draft.errorReason === previousReason.name && result.reason) {
-        updateDraft('errorReason', result.reason.name);
-      }
-      showToast('自定义错因已更新', 'success');
-      return true;
-    } finally {
-      setCustomErrorReasonBusy(false);
-    }
-  }
-
-  function handleDeleteCustomErrorReason(reasonItem: CustomErrorReason) {
-    if (customErrorReasonBusy) {
-      return;
-    }
-
-    Alert.alert('删除错因', `确认删除“${reasonItem.name}”？已保存错题不会被删除。`, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            setCustomErrorReasonBusy(true);
-            setCustomErrorReasonMessage(null);
-            try {
-              const result = await CustomErrorReasonService.deleteCustomErrorReason(reasonItem.id);
-              if (!result.ok) {
-                const message = result.errorMessage ?? '删除自定义错因失败';
-                setCustomErrorReasonMessage(message);
-                showToast(message, 'error', TOAST_DURATION_LONG);
-                return;
-              }
-
-              if (result.reasons) {
-                setCustomErrorReasons(result.reasons);
-              }
-              if (draft.errorReason === reasonItem.name) {
-                updateDraft('errorReason', null);
-              }
-              showToast('自定义错因已删除', 'info');
-            } finally {
-              setCustomErrorReasonBusy(false);
-            }
-          })();
-        },
-      },
-    ]);
-  }
-
-  function handleMoveCustomErrorReason(reasonId: string, direction: 'up' | 'down') {
-    if (customErrorReasonBusy) {
-      return;
-    }
-
-    void (async () => {
-      setCustomErrorReasonBusy(true);
-      setCustomErrorReasonMessage(null);
-      try {
-        const result = await CustomErrorReasonService.moveCustomErrorReason(reasonId, direction);
-        if (!result.ok) {
-          const message = result.errorMessage ?? '调整错因排序失败';
-          setCustomErrorReasonMessage(message);
-          showToast(message, 'warning', TOAST_DURATION_LONG);
-          return;
-        }
-        if (result.reasons) {
-          setCustomErrorReasons(result.reasons);
-        }
-      } finally {
-        setCustomErrorReasonBusy(false);
-      }
-    })();
-  }
-
-  async function handleUseCustomErrorReasonTemplate(reasonName: string): Promise<boolean> {
-    return handleCreateCustomErrorReason(reasonName);
-  }
+    return () => { mounted = false; };
+  }, [showToast]);
 
   useEffect(() => {
-    return () => {
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-        anchorHighlightTimerRef.current = null;
-      }
-    };
-  }, []);
+    setAddScreenHasUnsavedPhotos(draft.questionImages.length > 0);
+  }, [draft.questionImages.length]);
 
-  function isOptionalDetailAnchor(anchorId: AddAnchorId): boolean {
-    return (
-      anchorId === 'mySolution'
-      || anchorId === 'answer'
-      || anchorId === 'errorReason'
-      || anchorId === 'supplement'
-    );
-  }
-
-  function getLastMeasuredAnchorId(): AddAnchorId {
-    let lastAnchorId: AddAnchorId = 'question';
-    for (const item of ADD_ANCHOR_ITEMS) {
-      if (typeof anchorLayoutsRef.current[item.id] === 'number') {
-        lastAnchorId = item.id;
-      }
-    }
-    return lastAnchorId;
-  }
-
-  function handleAnchorLayout(anchorId: AddAnchorId, event: LayoutChangeEvent) {
-    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
-    if (anchorLayoutsRef.current[anchorId] !== nextY) {
-      anchorLayoutsRef.current = {
-        ...anchorLayoutsRef.current,
-        [anchorId]: nextY,
-      };
-    }
-
-    if (pendingAnchorPressRef.current === anchorId) {
-      pendingAnchorPressRef.current = null;
-      setTimeout(() => {
-        scrollToAnchor(anchorId);
-      }, 0);
-    }
-  }
-
-  function handleAnchorNavLayout(event: LayoutChangeEvent) {
-    const { y, height } = event.nativeEvent.layout;
-    anchorNavLayoutRef.current = {
-      y: Math.max(0, Math.round(y)),
-      height: Math.max(0, Math.round(height)),
-    };
-  }
-
-  function resolveActiveAnchorId(scrollY: number, maxScrollY: number): AddAnchorId {
-    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
-      return getLastMeasuredAnchorId();
-    }
-
-    const thresholdY = scrollY + ADD_ANCHOR_ACTIVE_OFFSET;
-    let nextAnchorId: AddAnchorId = 'question';
-    for (const item of ADD_ANCHOR_ITEMS) {
-      const anchorY = anchorLayoutsRef.current[item.id];
-      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
-        nextAnchorId = item.id;
-      }
-    }
-
-    return nextAnchorId;
-  }
-
-  function scrollToAnchor(anchorId: AddAnchorId): boolean {
-    const targetY = anchorLayoutsRef.current[anchorId];
-    const label = ADD_ANCHOR_LABELS[anchorId];
-    if (typeof targetY !== 'number') {
-      return false;
-    }
-
-    const anchorNavLayout = anchorNavLayoutRef.current;
-    const floatingTriggerY = anchorNavLayout
-      ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
-      : Number.POSITIVE_INFINITY;
-    const willShowFloatingAnchor =
-      Math.max(0, targetY - ADD_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
-
-    let scrollOffset: number = ADD_ANCHOR_SCROLL_OFFSET;
-    if (isFloatingAnchorVisible || willShowFloatingAnchor) {
-      scrollOffset = isAnchorNavCollapsed
-        ? ADD_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
-        : ADD_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
-    }
-
-    addScrollRef.current?.scrollTo({
-      y: Math.max(0, targetY - scrollOffset),
-      animated: true,
-    });
-    setActiveAnchorId(anchorId);
-    setHighlightedAnchorId(anchorId);
-
-    if (anchorHighlightTimerRef.current) {
-      clearTimeout(anchorHighlightTimerRef.current);
-    }
-    anchorHighlightTimerRef.current = setTimeout(() => {
-      setHighlightedAnchorId(null);
-      anchorHighlightTimerRef.current = null;
-    }, ADD_ANCHOR_HIGHLIGHT_DURATION_MS);
-
-    showToast(`已跳转到 ${label}`, 'anchor');
-    return true;
-  }
-
-  function handleAddScroll(event: NativeSyntheticEvent<NativeScrollEvent>) {
-    const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-    const y = contentOffset.y;
-    const maxScrollY = Math.max(0, contentSize.height - layoutMeasurement.height);
-    const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
-    setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
-
-    const anchorNavLayout = anchorNavLayoutRef.current;
-    const nextFloatingAnchorVisible = anchorNavLayout
-      ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
-      : false;
-    setIsFloatingAnchorVisible((current) =>
-      current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
-    if (!nextFloatingAnchorVisible) {
-      setIsAnchorNavCollapsed((current) => (current ? current : true));
-    }
-  }
-
-  function handleAnchorPress(anchorId: AddAnchorId) {
-    if (isOptionalDetailAnchor(anchorId) && !showOptionalInfo) {
-      pendingAnchorPressRef.current = anchorId;
-      setShowOptionalInfo(true);
-      return;
-    }
-
-    if (!scrollToAnchor(anchorId)) {
-      if (isOptionalDetailAnchor(anchorId)) {
-        pendingAnchorPressRef.current = anchorId;
-        setShowOptionalInfo(true);
-        return;
-      }
-      showToast(`${ADD_ANCHOR_LABELS[anchorId]}位置准备中，请稍后再试`, 'anchor');
-    }
-  }
-
-  function handleToggleAnchorNavCollapsed() {
-    setIsAnchorNavCollapsed((current) => !current);
-  }
+  useEffect(() => () => setAddScreenHasUnsavedPhotos(false), []);
 
   useEffect(() => {
-    if (showOptionalInfo) {
-      return;
-    }
-
-    pendingAnchorPressRef.current = null;
-    const nextAnchorLayouts = { ...anchorLayoutsRef.current };
-    delete nextAnchorLayouts.mySolution;
-    delete nextAnchorLayouts.answer;
-    delete nextAnchorLayouts.errorReason;
-    delete nextAnchorLayouts.supplement;
-    anchorLayoutsRef.current = nextAnchorLayouts;
-    if (isOptionalDetailAnchor(activeAnchorId)) {
-      setActiveAnchorId('module');
-    }
-  }, [activeAnchorId, showOptionalInfo]);
-
-  useEffect(() => {
-    let isMounted = true;
-
-    CustomModuleService.listCustomModules()
-      .then((modules) => {
-        if (isMounted) {
-          setCustomModules(modules);
-        }
-      })
-      .catch((error) => {
-        Logger.error(PAGE_SCOPE, 'Failed to load custom modules.', { error });
-        if (isMounted) {
-          setCustomModuleMessage('自定义模块加载失败');
-        }
-      });
-
-    CustomErrorReasonService.listCustomErrorReasons()
-      .then((reasons) => {
-        if (isMounted) {
-          setCustomErrorReasons(reasons);
-        }
-      })
-      .catch((error) => {
-        Logger.error(PAGE_SCOPE, 'Failed to load custom error reasons.', { error });
-        if (isMounted) {
-          setCustomErrorReasonMessage('自定义错因加载失败');
-        }
-      });
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    setAddScreenHasUnsavedPhotos(photoQueue.length > 0);
-  }, [photoQueue.length]);
-
-  useEffect(() => {
-    return () => {
-      setAddScreenHasUnsavedPhotos(false);
-    };
-  }, []);
-
-  useEffect(() => {
-    const hasUnsavedChanges = photoQueue.length > 0;
-    const unsubscribe = navigation.addListener('beforeRemove', (event) => {
-      if (!hasUnsavedChanges) {
-        return;
-      }
-
+    const hasUnsaved = draft.questionImages.length > 0;
+    return navigation.addListener('beforeRemove', (event) => {
+      if (!hasUnsaved) return;
       event.preventDefault();
-      Alert.alert(
-        '确认离开',
-        '当前还有未保存的题目，确定离开吗？',
-        [
-          { text: '继续编辑', style: 'cancel' },
-          {
-            text: '放弃离开',
-            style: 'destructive',
-            onPress: () => navigation.dispatch(event.data.action),
-          },
-        ],
-      );
+      Alert.alert('确认离开', '当前还有未保存的题目，确定离开吗？', [
+        { text: '继续编辑', style: 'cancel' },
+        { text: '放弃离开', style: 'destructive', onPress: () => navigation.dispatch(event.data.action) },
+      ]);
     });
+  }, [draft.questionImages.length, navigation]);
 
-    return unsubscribe;
-  }, [navigation, photoQueue.length]);
-
-  async function runImageAction(actionKey: string, handler: () => Promise<void>) {
-    if (isBusy || isSaving) {
-      return;
-    }
-
-    setActiveImageAction(actionKey);
+  const runImageAction = useCallback(async function runImageAction<T>(
+    key: string,
+    action: () => Promise<T>,
+  ): Promise<T | null> {
+    if (busy) return null;
+    setActiveImageAction(key);
     try {
-      await handler();
+      return await action();
     } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Image action failed.', { actionKey, error });
-      showToast(error instanceof Error ? error.message : String(error), 'error', TOAST_DURATION_LONG);
+      Logger.error(PAGE_SCOPE, 'Image action failed.', { key, error });
+      showToast('图片处理失败，请重试', 'error', 2400);
+      return null;
     } finally {
       setActiveImageAction(null);
     }
-  }
+  }, [busy, showToast]);
 
-  function shouldPromptOpenSettings(message?: string): boolean {
-    if (!message) {
-      return false;
+  function handleImageFailure(message: string | undefined, source: 'camera' | 'album') {
+    if (isCancelMessage(message)) return;
+    if (shouldOpenSettings(message)) {
+      Alert.alert('权限受限', source === 'camera' ? '需要相机权限才能拍题，请到系统设置中开启。' : '需要相册权限才能选择图片，请到系统设置中开启。', [
+        { text: '取消', style: 'cancel' },
+        { text: '去设置', onPress: () => void Linking.openSettings() },
+      ]);
+      return;
     }
-
-    const normalized = message.toLowerCase();
-    return (
-      normalized.includes('system settings')
-      || normalized.includes('open settings')
-      || normalized.includes('去设置')
-      || normalized.includes('系统设置')
-    );
+    showToast(source === 'camera' ? '拍照失败，请重试' : '图片保存失败，请重试', 'error', 2400);
   }
 
-  function promptOpenSettings(permissionName: 'camera' | 'album') {
-    const message =
-      permissionName === 'camera'
-        ? '需要相机权限才能拍题，请到系统设置中开启。'
-        : '需要相册权限才能选择图片，请到系统设置中开启。';
-
-    Alert.alert('权限受限', message, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '去设置',
-        onPress: () => {
-          void Linking.openSettings();
-        },
-      },
-    ]);
+  async function takeImage(type: LocalImageType, index: number, session = false): Promise<LocalImage | null> {
+    const result = await runImageAction(`take-${type}`, () => takePhotoAndSave({ mistakeId: draft.draftId, type, index }));
+    if (!result?.ok || !result.image) {
+      handleImageFailure(result?.errorMessage, 'camera');
+      return null;
+    }
+    if (session) optionalSessionUrisRef.current.add(result.image.uri);
+    return result.image;
   }
 
-  async function handleTakePhoto(config: CaptureEntryConfig) {
-    await runImageAction(`take-${config.key}`, async () => {
-      if (config.key === 'questionImage') {
-        Logger.info(PAGE_SCOPE, 'Question camera button pressed.', {
-          draftId: draft.draftId,
-          photoQueueSize: photoQueue.length,
-        });
+  async function pickImages(type: LocalImageType, index: number, maxSelection: number, session = false): Promise<LocalImage[]> {
+    const result = await runImageAction(`pick-${type}`, () => pickImagesAndSave({ mistakeId: draft.draftId, type, index, maxSelection }));
+    if (!result) return [];
+    if (!result.ok) handleImageFailure(result.errorMessage, 'album');
+    if (session) result.images.forEach((image) => optionalSessionUrisRef.current.add(image.uri));
+    return result.images;
+  }
 
-        if (photoQueue.length >= MAX_PHOTO_QUEUE_SIZE) {
-          Logger.warn(PAGE_SCOPE, 'Question photo queue reached max size before capture.', {
-            draftId: draft.draftId,
-            photoQueueSize: photoQueue.length,
-          });
-          showToast('已达到 20 张上限，请先保存当前队列', 'warning');
-          return;
-        }
-      }
-
-      const result = await takePhotoAndSave({
-        mistakeId: draft.draftId,
-        type: config.type,
-      });
-
-      if ((!result.ok || !result.image) && config.key === 'questionImage') {
-        const message = result.errorMessage?.trim();
-
-        if (isCancelLikeMessage(message)) {
-          Logger.info(PAGE_SCOPE, 'Question photo capture canceled by user.', {
-            draftId: draft.draftId,
-            photoQueueSize: photoQueue.length,
-          });
-          return;
-        }
-
-        Logger.error(PAGE_SCOPE, 'Question photo capture failed.', {
-          draftId: draft.draftId,
-          message: message ?? null,
-        });
-        if (shouldPromptOpenSettings(message)) {
-          promptOpenSettings('camera');
-          return;
-        }
-        showToast('拍照失败，请重试', 'error', TOAST_DURATION_LONG);
-        return;
-      }
-
-      if (!result.ok || !result.image) {
-        const message = result.errorMessage?.trim();
-        if (isCancelLikeMessage(message)) {
-          return;
-        }
-        if (shouldPromptOpenSettings(message)) {
-          promptOpenSettings('camera');
-          return;
-        }
-        showToast(message ?? `${config.title}未完成`, 'error', TOAST_DURATION_LONG);
-        return;
-      }
-
-      if (config.key === 'questionImage') {
-        Logger.info(PAGE_SCOPE, 'Question photo captured successfully.', {
-          draftId: draft.draftId,
-          uriShort: toShortUri(result.image.uri),
-        });
-
-        const queueItem = buildQueuedPhoto(result.image, 'camera');
-        const nextQueue = [...photoQueue, queueItem];
-        setPhotoQueue(nextQueue);
-        syncDraftQuestionImage(nextQueue);
-        Logger.info(PAGE_SCOPE, 'Question photo appended into queue.', {
-          draftId: draft.draftId,
-          photoId: queueItem.id,
-          photoQueueSize: nextQueue.length,
-        });
-        showToast('已添加 1 张照片', 'success');
-      } else {
-        updateDraftImage(config.key, result.image);
-        showToast(`${config.title}已更新`, 'success');
-      }
-      setValidationErrors([]);
-      setSaveErrorMessage(null);
+  async function handleTakeQuestion() {
+    if (draft.questionImages.length >= MAX_IMAGES_PER_TYPE) {
+      showToast('最多添加 20 张题目照片', 'warning');
+      return;
+    }
+    const image = await takeImage('question', draft.questionImages.length);
+    if (!image) return;
+    setDraft((current) => {
+      const questionImages = [...current.questionImages, image];
+      return { ...current, questionImages, questionImage: questionImages[0] ?? null };
     });
+    showToast('已添加题目照片', 'success');
   }
 
-  async function handlePickImage(config: CaptureEntryConfig) {
-    await runImageAction(`pick-${config.key}`, async () => {
-      if (config.key === 'questionImage') {
-        Logger.info(PAGE_SCOPE, 'Question album button pressed.', {
-          draftId: draft.draftId,
-          photoQueueSize: photoQueue.length,
-        });
-
-        if (photoQueue.length >= MAX_PHOTO_QUEUE_SIZE) {
-          showToast('已达到 20 张上限，请先保存当前队列', 'warning');
-          return;
-        }
-
-        const availableSlots = MAX_PHOTO_QUEUE_SIZE - photoQueue.length;
-        const batchResult = await pickImagesAndSave({
-          mistakeId: draft.draftId,
-          type: config.type,
-          index: photoQueue.length + 1,
-          maxSelection: availableSlots,
-        });
-
-        const acceptedImages = batchResult.images.slice(0, availableSlots);
-        const overflowImages = batchResult.images.slice(availableSlots);
-        if (overflowImages.length > 0) {
-          Logger.warn(PAGE_SCOPE, 'Album selection overflowed available slots, cleaning extras.', {
-            draftId: draft.draftId,
-            availableSlots,
-            overflowCount: overflowImages.length,
-          });
-          await Promise.all(overflowImages.map(async (image) => {
-            await deleteLocalImage(image.uri);
-          }));
-          showToast('已达到 20 张上限，请先保存当前队列', 'warning');
-        }
-
-        if (acceptedImages.length > 0) {
-          const queueItems = acceptedImages.map((image) => buildQueuedPhoto(image, 'album'));
-          const nextQueue = [...photoQueue, ...queueItems];
-          Logger.info(PAGE_SCOPE, 'Picked images from album and appended to queue.', {
-            draftId: draft.draftId,
-            pickedCount: queueItems.length,
-            photoQueueSize: nextQueue.length,
-          });
-          setPhotoQueue(nextQueue);
-          syncDraftQuestionImage(nextQueue);
-          showToast(`已添加 ${queueItems.length} 张照片`, 'success');
-        }
-
-        if (!batchResult.ok) {
-          const message = batchResult.errorMessage?.trim();
-          if (isCancelLikeMessage(message)) {
-            Logger.info(PAGE_SCOPE, 'Album selection canceled by user.', {
-              draftId: draft.draftId,
-              photoQueueSize: photoQueue.length,
-            });
-            return;
-          }
-
-          Logger.error(PAGE_SCOPE, 'Album multi-pick failed for question photos.', {
-            draftId: draft.draftId,
-            message: message ?? null,
-            appendedCount: batchResult.images.length,
-          });
-          if (shouldPromptOpenSettings(message)) {
-            promptOpenSettings('album');
-            return;
-          }
-          showToast('图片保存失败，请重试', 'error', TOAST_DURATION_LONG);
-          return;
-        }
-
-        setValidationErrors([]);
-        setSaveErrorMessage(null);
-        return;
-      }
-
-      const result = await pickImageAndSave({
-        mistakeId: draft.draftId,
-        type: config.type,
-      });
-
-      if (!result.ok || !result.image) {
-        const message = result.errorMessage?.trim();
-        if (isCancelLikeMessage(message)) {
-          return;
-        }
-        if (shouldPromptOpenSettings(message)) {
-          promptOpenSettings('album');
-          return;
-        }
-        showToast(message ?? `${config.title}未完成`, 'error', TOAST_DURATION_LONG);
-        return;
-      }
-
-      updateDraftImage(config.key, result.image);
-      setValidationErrors([]);
-      setSaveErrorMessage(null);
-      showToast(`${config.title}已更新`, 'success');
+  async function handlePickQuestion() {
+    const available = MAX_IMAGES_PER_TYPE - draft.questionImages.length;
+    if (available <= 0) {
+      showToast('最多添加 20 张题目照片', 'warning');
+      return;
+    }
+    const images = await pickImages('question', draft.questionImages.length, available);
+    if (images.length === 0) return;
+    setDraft((current) => {
+      const questionImages = [...current.questionImages, ...images].slice(0, MAX_IMAGES_PER_TYPE);
+      return { ...current, questionImages, questionImage: questionImages[0] ?? null };
     });
+    showToast(`已添加 ${images.length} 张照片`, 'success');
   }
 
-  showToastRef.current = showToast;
-  runImageActionRef.current = runImageAction;
-  syncDraftQuestionImageRef.current = syncDraftQuestionImage;
-
-  useEffect(() => {
-    const message = getSharedImageErrorMessage(sharedImageError);
-    if (!message) {
-      return;
-    }
-
-    const errorKey = `${sharedImageNonce ?? 'no-nonce'}:${sharedImageError}`;
-    if (lastHandledSharedErrorKeyRef.current === errorKey) {
-      return;
-    }
-
-    lastHandledSharedErrorKeyRef.current = errorKey;
-    Logger.warn(PAGE_SCOPE, 'Shared image intent could not be imported.', {
-      draftId: draft.draftId,
-      sharedImageError,
-      sharedImageNonce,
-    });
-    showToastRef.current(message, 'warning', TOAST_DURATION_LONG);
-  }, [draft.draftId, sharedImageError, sharedImageNonce]);
-
-  useEffect(() => {
-    if (!sharedImageUri) {
-      return;
-    }
-
-    const importKey = `${sharedImageNonce ?? 'no-nonce'}:${sharedImageUri}`;
-    if (lastHandledSharedImageKeyRef.current === importKey) {
-      return;
-    }
-
-    if (isImageBusy || isSaving) {
-      return;
-    }
-
-    if (photoQueue.length >= MAX_PHOTO_QUEUE_SIZE) {
-      lastHandledSharedImageKeyRef.current = importKey;
-      Logger.warn(PAGE_SCOPE, 'Skip importing shared image because question queue is full.', {
-        draftId: draft.draftId,
-        photoQueueSize: photoQueue.length,
-        sharedImageUriShort: toShortUri(sharedImageUri),
-      });
-      showToastRef.current('已达到 20 张上限，请先保存当前队列', 'warning');
-      return;
-    }
-
-    lastHandledSharedImageKeyRef.current = importKey;
-    void runImageActionRef.current(`shared-question-${sharedImageNonce ?? Date.now()}`, async () => {
-      Logger.info(PAGE_SCOPE, 'Start importing shared image into add draft.', {
-        draftId: draft.draftId,
-        photoQueueSize: photoQueue.length,
-        sharedImageUriShort: toShortUri(sharedImageUri),
-      });
-
-      const result = await saveSharedImageToMistakeFolder({
-        mistakeId: draft.draftId,
-        type: 'question',
-        sourceUri: sharedImageUri,
-        index: photoQueue.length + 1,
-      });
-
-      if (!result.ok || !result.image) {
-        const message = result.errorMessage?.trim();
-        Logger.error(PAGE_SCOPE, 'Failed to import shared image into add draft.', {
-          draftId: draft.draftId,
-          message: message ?? null,
-          sharedImageUriShort: toShortUri(sharedImageUri),
-        });
-        showToastRef.current('图片读取失败，请重试', 'error', TOAST_DURATION_LONG);
-        return;
-      }
-
-      const importedImage = result.image;
-      const queueItem = buildQueuedPhoto(importedImage, 'shared');
-      setPhotoQueue((prev) => {
-        if (prev.length >= MAX_PHOTO_QUEUE_SIZE) {
-          void deleteLocalImage(importedImage.uri);
-          return prev;
-        }
-
-        const nextQueue = [...prev, queueItem];
-        syncDraftQuestionImageRef.current(nextQueue);
-        return nextQueue;
-      });
-      setValidationErrors([]);
-      setSaveErrorMessage(null);
-      showToastRef.current('已从其他应用导入图片', 'success');
-
-      Logger.info(PAGE_SCOPE, 'Imported shared image into add draft successfully.', {
-        draftId: draft.draftId,
-        photoId: queueItem.id,
-        savedUriShort: toShortUri(importedImage.uri),
-      });
-    });
-  }, [
-    draft.draftId,
-    isImageBusy,
-    isSaving,
-    photoQueue.length,
-    sharedImageNonce,
-    sharedImageUri,
-  ]);
-
-  function handleDeleteQueuedQuestionPhoto(photoId: string) {
-    const target = photoQueue.find((item) => item.id === photoId);
-    if (!target) {
-      return;
-    }
-
+  function handleDeleteQuestion(image: LocalImage) {
     Alert.alert('删除照片', '确认删除这张题目照片吗？', [
       { text: '取消', style: 'cancel' },
       {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          void runImageAction(`delete-question-${photoId}`, async () => {
-            const removed = await deleteLocalImage(target.image.uri);
-            if (!removed) {
-              Logger.warn(PAGE_SCOPE, 'Failed to delete queue image file, but removed from queue.', {
-                draftId: draft.draftId,
-                photoId,
-                uri: target.image.uri,
-              });
-            }
-
-            setPhotoQueue((prev) => {
-              const next = prev.filter((item) => item.id !== photoId);
-              syncDraftQuestionImage(next);
-              return next;
+        text: '删除', style: 'destructive', onPress: () => {
+          void runImageAction(`delete-question-${image.id}`, async () => {
+            await deleteLocalImage(image.uri);
+            setDraft((current) => {
+              const questionImages = current.questionImages.filter((item) => item.id !== image.id);
+              return { ...current, questionImages, questionImage: questionImages[0] ?? null };
             });
-            if (previewPhoto?.id === photoId) {
-              setPreviewPhoto(null);
-            }
-            if (lastTapInfo?.id === photoId) {
-              setLastTapInfo(null);
-            }
-            setValidationErrors([]);
-            setSaveErrorMessage(null);
+            if (preview?.image.id === image.id) setPreview(null);
             showToast('已删除照片', 'info');
+            return true;
           });
         },
       },
     ]);
   }
 
-  function handleDeleteImage(config: CaptureEntryConfig) {
-    const image = getDraftImageByField(draft, config.key);
-    if (!image) {
-      return;
-    }
-
-    Alert.alert('删除图片', `确认删除${config.title}？`, [
-      { text: '取消', style: 'cancel' },
-      {
-        text: '删除',
-        style: 'destructive',
-        onPress: () => {
-          void runImageAction(`delete-${config.key}`, async () => {
-            const removed = await deleteLocalImage(image.uri);
-            if (!removed) {
-              Logger.error(PAGE_SCOPE, 'Failed to delete selected image.', {
-                draftId: draft.draftId,
-                imageType: config.type,
-                uri: image.uri,
-              });
-              showToast('删除失败，请稍后重试', 'error', TOAST_DURATION_LONG);
-              return;
-            }
-
-            updateDraftImage(config.key, null);
-            setValidationErrors([]);
-            setSaveErrorMessage(null);
-            showToast('已删除照片', 'info');
-          });
-        },
-      },
-    ]);
+  function openOptionalSheet() {
+    optionalSessionUrisRef.current = new Set();
+    setStageBeforeOptional(stage);
+    setStage('SUPPLEMENT');
+    setOptionalSheetVisible(true);
   }
 
-  async function handleSaveDraftBatch(): Promise<boolean> {
-    if (isBusy || isSaving) {
-      return true;
-    }
+  function cleanupUris(uris: Iterable<string>) {
+    void Promise.all(Array.from(uris).map(async (uri) => deleteLocalImage(uri))).catch((error) => {
+      Logger.warn(PAGE_SCOPE, 'Failed to clean draft image.', { error });
+    });
+  }
 
-    const validationInput: AddMistakeDraft = {
+  function handleOptionalCancel() {
+    cleanupUris(optionalSessionUrisRef.current);
+    optionalSessionUrisRef.current = new Set();
+    setOptionalSheetVisible(false);
+    setStage(stageBeforeOptional);
+  }
+
+  function handleOptionalComplete(working: AddMistakeDraft) {
+    const keptUris = new Set(allOptionalImages(working).map((image) => image.uri));
+    const removedCommitted = allOptionalImages(draft)
+      .map((image) => image.uri)
+      .filter((uri) => !keptUris.has(uri));
+    const abandonedNew = Array.from(optionalSessionUrisRef.current).filter((uri) => !keptUris.has(uri));
+    cleanupUris([...removedCommitted, ...abandonedNew]);
+    optionalSessionUrisRef.current = new Set();
+    setDraft({
+      ...working,
+      mySolutionImage: working.mySolutionImages[0] ?? null,
+      answerImage: working.answerImages[0] ?? null,
+    });
+    setOptionalSheetVisible(false);
+    setStage('READY_TO_SAVE');
+  }
+
+  async function handleCreateModule(name: string): Promise<ModulePickerOption | null> {
+    const result = await CustomModuleService.createCustomModule(name);
+    if (!result.ok || !result.module) {
+      showToast(result.errorMessage ?? '创建模块失败', 'warning', 2400);
+      return null;
+    }
+    if (result.modules) setCustomModules(result.modules);
+    showToast('已创建自定义模块', 'success');
+    return customModuleOption(result.module);
+  }
+
+  async function handleCreateReason(name: string): Promise<ErrorReasonOption | null> {
+    const result = await CustomErrorReasonService.createCustomErrorReason(name);
+    if (!result.ok || !result.reason) {
+      showToast(result.errorMessage ?? '创建错因失败', 'warning', 2400);
+      return null;
+    }
+    if (result.reasons) setCustomReasons(result.reasons);
+    showToast('已创建自定义错因', 'success');
+    return customReasonOption(result.reason);
+  }
+
+  async function handleSave() {
+    if (busy) return;
+    const saveDraft = {
       ...draft,
-      questionImage: photoQueue[0]?.image ?? null,
+      questionImage: draft.questionImages[0] ?? null,
+      errorReason: draft.errorReasonLabels.join('、') || null,
     };
-    const validation = validateAddMistakeDraft(validationInput);
+    const validation = validateAddMistakeDraft(saveDraft);
     if (!validation.ok) {
-      const normalizedErrors = normalizeValidationErrors(validationInput, validation.errors);
-      setValidationErrors(normalizedErrors);
-      setSaveErrorMessage(null);
-      showToast(normalizedErrors[0] ?? '校验未通过', 'warning');
-      return true;
+      showToast(validation.errors[0] ?? '请检查必填信息', 'warning', 2400);
+      return;
     }
-
-    setValidationErrors([]);
-    setSaveErrorMessage(null);
-    setIsSaving(true);
-
+    setSaving(true);
     try {
-      const startedAt = Date.now();
-      const totalCount = photoQueue.length;
-      let successCount = 0;
-      const failedPhotos: QueuedPhoto[] = [];
-      const failedMessages: string[] = [];
-
-      Logger.info(PAGE_SCOPE, 'Start batch saving queued photos.', {
-        draftId: draft.draftId,
-        totalCount,
-        module: draft.module,
-      });
-
-      for (let index = 0; index < totalCount; index += 1) {
-        const photo = photoQueue[index];
-        const saveDraft = buildDraftForQueuedPhoto(draft, photo, index, totalCount);
-        const saveResult = await createMistakeFromDraft(saveDraft, {
-          joinReviewPlan: joinReviewPlanOnSave,
-        });
-
-        if (saveResult.ok) {
-          successCount += 1;
-          Logger.info(PAGE_SCOPE, 'Saved one queued photo as mistake successfully.', {
-            draftId: draft.draftId,
-            sourcePhotoId: photo.id,
-            sourcePhotoUriShort: toShortUri(photo.image.uri),
-            mistakeId: saveResult.mistakeId ?? null,
-            index,
-            successCount,
-            totalCount,
-          });
-          continue;
-        }
-
-        failedPhotos.push(photo);
-        failedMessages.push(saveResult.errorMessage ?? '保存失败，请重试');
-        Logger.error(PAGE_SCOPE, 'Failed to save one queued photo as mistake.', {
-          draftId: draft.draftId,
-          sourcePhotoId: photo.id,
-          sourcePhotoUriShort: toShortUri(photo.image.uri),
-          index,
-          successCount,
-          totalCount,
-          errorMessage: saveResult.errorMessage ?? null,
-        });
-      }
-
-      const failedCount = failedPhotos.length;
-      const elapsedMs = Date.now() - startedAt;
-      Logger.info(PAGE_SCOPE, 'Batch save finished.', {
-        draftId: draft.draftId,
-        totalCount,
-        successCount,
-        failedCount,
-        elapsedMs,
-      });
-
-      if (failedCount === 0) {
-        const nextDraft = createNextDraftKeepingModule(draft);
-        setDraft(nextDraft);
-        setPhotoQueue([]);
-        setPreviewPhoto(null);
-        setLastTapInfo(null);
-        setValidationErrors([]);
-        setSaveErrorMessage(null);
-        setShowOptionalInfo(false);
-        setJoinReviewPlanOnSave(false);
-        showToast(
-          joinReviewPlanOnSave
-            ? successCount > 1
-              ? `已保存 ${successCount} 道并加入 7 刷`
-              : '保存成功，已加入 7 刷'
-            : successCount > 1
-              ? `已保存 ${successCount} 道到题库`
-              : '保存成功，已加入题库',
-          'success',
-        );
-        return true;
-      }
-
-      if (successCount > 0) {
-        const partialMessage = `成功 ${successCount} 道，失败 ${failedCount} 道`;
-        setPhotoQueue(failedPhotos);
-        syncDraftQuestionImage(failedPhotos);
-        if (previewPhoto && !failedPhotos.some((item) => item.id === previewPhoto.id)) {
-          setPreviewPhoto(null);
-        }
-        if (lastTapInfo && !failedPhotos.some((item) => item.id === lastTapInfo.id)) {
-          setLastTapInfo(null);
-        }
-        setSaveErrorMessage(partialMessage);
-        showToast(`已保存 ${successCount} 道，${failedCount} 道失败，请检查后重试`, 'warning', TOAST_DURATION_LONG);
-        return true;
-      }
-
-      const firstError = failedMessages[0] ?? '保存失败，请重试';
-      setSaveErrorMessage(firstError);
-      showToast(`保存失败：${firstError}`, 'error', TOAST_DURATION_LONG);
-      return true;
-    } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Unexpected error while batch saving draft.', {
-        draftId: draft.draftId,
-        error,
-      });
-      const message = error instanceof Error ? error.message : String(error);
-      setSaveErrorMessage(message);
-      showToast(`保存失败：${message}`, 'error', TOAST_DURATION_LONG);
-      return true;
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
-  async function handleSaveDraft() {
-    const handled = await handleSaveDraftBatch();
-    if (handled) {
-      return;
-    }
-
-    if (isBusy) {
-      return;
-    }
-
-    const result = validateAddMistakeDraft(draft);
-    if (!result.ok) {
-      const normalizedErrors = normalizeValidationErrors(draft, result.errors);
-      setValidationErrors(normalizedErrors);
-      setSaveErrorMessage(null);
-      Alert.alert('校验未通过', normalizedErrors.join('\n'));
-      return;
-    }
-
-    setValidationErrors([]);
-    setSaveErrorMessage(null);
-    setIsSaving(true);
-
-    try {
-      const saveResult = await createMistakeFromDraft(draft, {
-        joinReviewPlan: joinReviewPlanOnSave,
-      });
-      if (!saveResult.ok) {
-        const message = saveResult.errorMessage ?? '保存失败，请稍后重试。';
-        Logger.error(PAGE_SCOPE, 'Failed to save draft.', {
-          draftId: draft.draftId,
-          message,
-        });
-        setSaveErrorMessage(message);
-        Alert.alert('保存失败', message);
+      const result = await createMistakesFromDraft(saveDraft, { joinReviewPlan: saveDraft.joinReviewPlan });
+      if (!result.ok) {
+        showToast(result.errorMessage ?? '保存失败，请稍后重试', 'error', 2600);
         return;
       }
-
-      const previousDraftId = draft.draftId;
-      Alert.alert(
-        '保存成功',
-        joinReviewPlanOnSave ? '错题已加入 7 刷计划。' : '错题已保存到题库，可在详情页加入 7 刷。',
+      const count = result.mistakeIds?.length ?? 1;
+      const moduleName = saveDraft.module?.trim();
+      if (moduleName) setRecentModuleNames((current) => [moduleName, ...current.filter((item) => item !== moduleName)].slice(0, 3));
+      setDraft(createEmptyAddMistakeDraft());
+      setStage('QUESTION');
+      setPreview(null);
+      showToast(
+        count > 1
+          ? `已保存 ${count} 道${saveDraft.joinReviewPlan ? '并加入 7 刷' : '到题库'}`
+          : saveDraft.joinReviewPlan ? '保存成功，已加入 7 刷' : '保存成功，已加入题库',
+        'success',
+        2400,
       );
-      setDraft(createNextDraft(previousDraftId));
-      setPhotoQueue([]);
-      setPreviewPhoto(null);
-      setLastTapInfo(null);
-      setValidationErrors([]);
-      setSaveErrorMessage(null);
-      setShowOptionalInfo(false);
-      setJoinReviewPlanOnSave(false);
     } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Unexpected error while saving draft.', {
-        draftId: draft.draftId,
-        error,
-      });
-      const message = error instanceof Error ? error.message : String(error);
-      setSaveErrorMessage(message);
-      Alert.alert('保存失败', message);
+      Logger.error(PAGE_SCOPE, 'Unexpected save error.', { error });
+      showToast('保存失败，请稍后重试', 'error', 2600);
     } finally {
-      setIsSaving(false);
+      setSaving(false);
     }
   }
 
+  const sharedUri = firstParam(params.sharedImageUri);
+  const sharedNonce = firstParam(params.sharedImageNonce);
+  const sharedError = firstParam(params.sharedImageError);
+
+  useEffect(() => {
+    if (!sharedError) return;
+    const key = `${sharedNonce ?? 'none'}:${sharedError}`;
+    if (lastSharedErrorKeyRef.current === key) return;
+    lastSharedErrorKeyRef.current = key;
+    showToast('从其他应用导入图片失败，请重试', 'warning', 2400);
+  }, [sharedError, sharedNonce, showToast]);
+
+  useEffect(() => {
+    if (!sharedUri || busy || draft.questionImages.length >= MAX_IMAGES_PER_TYPE) return;
+    const key = `${sharedNonce ?? 'none'}:${sharedUri}`;
+    if (lastSharedKeyRef.current === key) return;
+    lastSharedKeyRef.current = key;
+    void runImageAction('shared-question', () => saveSharedImageToMistakeFolder({
+      mistakeId: draft.draftId,
+      type: 'question',
+      sourceUri: sharedUri,
+      index: draft.questionImages.length,
+    })).then((result) => {
+      if (!result?.ok || !result.image) {
+        showToast('图片读取失败，请重试', 'error', 2400);
+        return;
+      }
+      setDraft((current) => {
+        const questionImages = [...current.questionImages, result.image as LocalImage];
+        return { ...current, questionImages, questionImage: questionImages[0] ?? null };
+      });
+      showToast('已从其他应用导入图片', 'success');
+    });
+  }, [busy, draft.draftId, draft.questionImages.length, runImageAction, sharedNonce, sharedUri, showToast]);
+
+  const bottomBarHeight = 116 + Math.max(insets.bottom, 8);
+
   return (
-    <View style={styles.pageRoot}>
-      <ScreenContainer
-        scroll
-        scrollRef={addScrollRef}
-        safeAreaEdges={['top']}
-        contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
-        onScroll={handleAddScroll}>
-      <BrandHeader title="新增错题" subtitle="快速记录错题，需要时再加入 7 刷" />
+    <View style={styles.root}>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={[styles.content, { paddingTop: Math.max(insets.top, 14), paddingBottom: bottomBarHeight + 22 }]}>
+        <Text style={styles.pageTitle}>新增错题</Text>
+        <AddMistakeProgress stage={stage} />
 
-      <View onLayout={handleAnchorNavLayout}>
-        <QuickAnchorNav
-          items={ADD_ANCHOR_ITEMS}
-          activeAnchorId={activeAnchorId}
-          horizontalCompact
-          onAnchorPress={handleAnchorPress}
-        />
-      </View>
-
-      <View
-        style={[
-          styles.sectionBlock,
-          highlightedAnchorId === 'question' ? styles.anchorSectionHighlighted : null,
-        ]}
-        onLayout={(event) => handleAnchorLayout('question', event)}>
-        <SectionTitle title="题目照片" />
-        <QuestionPhotoQueueCard
-          config={QUESTION_CAPTURE_ENTRY}
-          queue={photoQueue}
-          busy={isBusy}
-          onTakePhoto={() => {
-            void handleTakePhoto(QUESTION_CAPTURE_ENTRY);
-          }}
-          onPickImage={() => {
-            void handlePickImage(QUESTION_CAPTURE_ENTRY);
-          }}
-          onDeletePhoto={handleDeleteQueuedQuestionPhoto}
-          onPhotoPress={handleQueuePhotoPress}
-        />
-      </View>
-
-      <View
-        style={[
-          styles.sectionBlock,
-          highlightedAnchorId === 'module' ? styles.anchorSectionHighlighted : null,
-        ]}
-        onLayout={(event) => handleAnchorLayout('module', event)}>
-        <SectionTitle title="选择模块" />
-        <View style={styles.tagsRow}>
-          {moduleOptions.map((item) => (
-            <TagChip
-              key={item.value}
-              label={item.label}
-              selected={draft.module === item.value}
-              onPress={() => updateDraft('module', draft.module === item.value ? null : item.value)}
-            />
-          ))}
+        <View style={styles.sectionHeading}>
+          <Text style={styles.sectionTitle}>题目照片</Text>
+          <Text style={styles.sectionHelp}>先添加题目照片，其他信息稍后再补</Text>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => {
-            setCustomModuleMessage(null);
-            setCustomModuleModalVisible(true);
-          }}
-          style={({ pressed }) => [
-            styles.customModuleEntry,
-            pressed ? styles.customModuleEntryPressed : null,
-          ]}>
-          <MaterialIcons name="add" size={19} color={colors.textSecondary} />
-          <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.customModuleEntryText}>
-            自定义模块
-          </Text>
-          <View style={styles.customModuleNewBadge}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.customModuleNewBadgeText}>
-              New
-            </Text>
-          </View>
-        </Pressable>
-      </View>
-
-      {validationErrors.length > 0 ? (
-        <CardContainer style={styles.errorCard} padding={spacing.md}>
-          <Text style={styles.errorTitle}>校验提示</Text>
-          {validationErrors.map((error) => (
-            <Text key={error} style={styles.errorItemText}>
-              - {error}
-            </Text>
-          ))}
-        </CardContainer>
-      ) : null}
-
-      {saveErrorMessage ? (
-        <CardContainer style={styles.errorCard} padding={spacing.md}>
-          <Text style={styles.errorTitle}>保存失败</Text>
-          <Text style={styles.errorItemText}>- {saveErrorMessage}</Text>
-        </CardContainer>
-      ) : null}
-
-      <View style={styles.optionalSection}>
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => setShowOptionalInfo((prev) => !prev)}
-          style={styles.optionalToggle}>
-          <View style={styles.optionalTextWrap}>
-            <Text maxFontSizeMultiplier={1.1} style={styles.optionalTitle}>
-              可选信息
-            </Text>
-            <Text maxFontSizeMultiplier={1.1} style={styles.optionalSubtitle}>
-              想记录更多再展开
-            </Text>
-          </View>
-          <Text maxFontSizeMultiplier={1.1} style={styles.optionalActionText}>
-            {showOptionalInfo ? '收起' : '展开'}
-          </Text>
-        </Pressable>
-      </View>
-
-      {showOptionalInfo ? (
-        <>
-          {OPTIONAL_CAPTURE_ENTRIES.map((config) => {
-            const anchorId: AddAnchorId = config.key === 'mySolutionImage' ? 'mySolution' : 'answer';
-            return (
-              <View
-                key={config.key}
-                style={[
-                  styles.sectionBlock,
-                  highlightedAnchorId === anchorId ? styles.anchorSectionHighlighted : null,
-                ]}
-                onLayout={(event) => handleAnchorLayout(anchorId, event)}>
-                <CaptureEntryCard
-                  config={config}
-                  image={getDraftImageByField(draft, config.key)}
-                  busy={isBusy}
-                  variant="compact"
-                  onTakePhoto={() => {
-                    void handleTakePhoto(config);
-                  }}
-                  onPickImage={() => {
-                    void handlePickImage(config);
-                  }}
-                  onDeleteImage={() => handleDeleteImage(config)}
-                />
-              </View>
-            );
+        <PhotoPickerSection
+          busy={busy}
+          images={draft.questionImages}
+          emptyTitle="拍摄题目"
+          emptySubtitle="支持多张，稍后可调整顺序"
+          onTakePhoto={() => void handleTakeQuestion()}
+          onPickImages={() => void handlePickQuestion()}
+          onDelete={handleDeleteQuestion}
+          onMove={(from, to) => setDraft((current) => {
+            const questionImages = moveItem(current.questionImages, from, to);
+            return { ...current, questionImages, questionImage: questionImages[0] ?? null };
           })}
-
-          <View
-            style={[
-              styles.sectionBlock,
-              highlightedAnchorId === 'errorReason' ? styles.anchorSectionHighlighted : null,
-            ]}
-            onLayout={(event) => handleAnchorLayout('errorReason', event)}>
-            <SectionTitle title="错因（可选）" />
-            <View style={styles.tagsRow}>
-              {errorReasonOptions.map((item) => (
-                <TagChip
-                  key={item.value}
-                  label={item.label}
-                  selected={draft.errorReason === item.value}
-                  onPress={() =>
-                    updateDraft(
-                      'errorReason',
-                      draft.errorReason === item.value ? null : item.value,
-                    )
-                  }
-                />
-              ))}
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                setCustomErrorReasonMessage(null);
-                setCustomErrorReasonModalVisible(true);
-              }}
-              style={({ pressed }) => [
-                styles.customModuleEntry,
-                pressed ? styles.customModuleEntryPressed : null,
-              ]}>
-              <MaterialIcons name="add" size={19} color={colors.textSecondary} />
-              <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.customModuleEntryText}>
-                自定义错因
-              </Text>
-              <View style={styles.customModuleNewBadge}>
-                <Text maxFontSizeMultiplier={1.1} style={styles.customModuleNewBadgeText}>
-                  New
-                </Text>
-              </View>
-            </Pressable>
-          </View>
-
-          <View style={styles.sectionBlock}>
-            <SectionTitle title="难度（可选）" />
-            <Text maxFontSizeMultiplier={1.1} style={styles.optionalHint}>
-              默认 3 中等，不选也能保存
-            </Text>
-            <View style={styles.tagsRow}>
-              {DIFFICULTY_OPTIONS.map((item) => (
-                <TagChip
-                  key={item.value}
-                  label={item.label}
-                  selected={draft.difficulty === item.value}
-                  onPress={() => updateDraft('difficulty', item.value)}
-                />
-              ))}
-            </View>
-          </View>
-
-          <View
-            style={[
-              styles.sectionBlock,
-              highlightedAnchorId === 'supplement' ? styles.anchorSectionHighlighted : null,
-            ]}
-            onLayout={(event) => handleAnchorLayout('supplement', event)}>
-            <SectionTitle title="补充信息（可选）" />
-            <CardContainer padding={spacing.md} style={styles.inputCard}>
-              <Text style={styles.inputLabel}>标题</Text>
-              <TextInput
-                value={draft.title}
-                onChangeText={(value) => updateDraft('title', value)}
-                placeholder="例如：椭圆切线范围题"
-                placeholderTextColor={colors.textMuted}
-                style={styles.textInput}
-                maxFontSizeMultiplier={1.2}
-              />
-
-              <Text style={styles.inputLabel}>备注</Text>
-              <TextInput
-                value={draft.note}
-                onChangeText={(value) => updateDraft('note', value)}
-                placeholder="例如：第二问要先设参数"
-                placeholderTextColor={colors.textMuted}
-                style={[styles.textInput, styles.noteInput]}
-                multiline
-                maxLength={MISTAKE_NOTE_MAX_LENGTH}
-                maxFontSizeMultiplier={1.2}
-                textAlignVertical="top"
-              />
-            </CardContainer>
-          </View>
-        </>
-      ) : null}
-
-      <ImagePreviewModal
-        visible={previewPhoto !== null}
-        uri={previewPhoto?.image.uri ?? null}
-        title="题目照片预览"
-        interactionMode="zoomable"
-        logSource="add_screen"
-        onClose={handleClosePreview}
-      />
-      <CustomModuleManagerModal
-        visible={customModuleModalVisible}
-        customModules={customModules}
-        selectedModule={draft.module}
-        busy={customModuleBusy}
-        message={customModuleMessage}
-        onClose={() => setCustomModuleModalVisible(false)}
-        onSelectModule={(moduleName) => updateDraft('module', moduleName)}
-        onCreateModule={handleCreateCustomModule}
-        onUpdateModule={handleUpdateCustomModule}
-        onDeleteModule={handleDeleteCustomModule}
-        onMoveModule={handleMoveCustomModule}
-        onUseTemplate={handleUseCustomModuleTemplate}
-      />
-      <CustomModuleManagerModal
-        visible={customErrorReasonModalVisible}
-        customModules={customErrorReasons}
-        selectedModule={draft.errorReason}
-        busy={customErrorReasonBusy}
-        message={customErrorReasonMessage}
-        labels={{
-          title: '自定义错因',
-          closeAccessibilityLabel: '关闭自定义错因',
-          saveAccessibilityLabel: '保存错因',
-          mineTabLabel: '我的错因',
-          addPlaceholder: '添加新错因',
-          editPlaceholder: '编辑错因名称',
-          emptyText: '还没有自定义错因',
-          selectAccessibilityLabel: (name) => `选择错因${name}`,
-          moveUpAccessibilityLabel: '上移错因',
-          moveDownAccessibilityLabel: '下移错因',
-          editAccessibilityLabel: '编辑错因',
-          deleteAccessibilityLabel: '删除错因',
-        }}
-        templates={CUSTOM_ERROR_REASON_TEMPLATES}
-        maxItemCount={MAX_CUSTOM_ERROR_REASON_COUNT}
-        onClose={() => setCustomErrorReasonModalVisible(false)}
-        onSelectModule={(reasonName) => updateDraft('errorReason', reasonName)}
-        onCreateModule={handleCreateCustomErrorReason}
-        onUpdateModule={handleUpdateCustomErrorReason}
-        onDeleteModule={handleDeleteCustomErrorReason}
-        onMoveModule={handleMoveCustomErrorReason}
-        onUseTemplate={handleUseCustomErrorReasonTemplate}
-      />
-      </ScreenContainer>
-
-      {shouldShowFloatingAnchorNav ? (
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.floatingAnchorWrap,
-            { top: floatingAnchorTop },
-          ]}>
-          <QuickAnchorNav
-            items={ADD_ANCHOR_ITEMS}
-            activeAnchorId={activeAnchorId}
-            collapsed={isAnchorNavCollapsed}
-            floating
-            horizontalCompact
-            onToggleCollapsed={handleToggleAnchorNavCollapsed}
-            onAnchorPress={handleAnchorPress}
-          />
-        </View>
-      ) : null}
-
-      <FloatingBottomCta
-        bottom={saveBarBottomOffset}
-        hintText={saveHintTextV2}
-        hintActive={canSave}
-        onHeightChange={(nextHeight) => {
-          setSaveBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-        }}>
-        <Pressable
-          accessibilityRole="switch"
-          accessibilityState={{
-            checked: joinReviewPlanOnSave,
-            disabled: isBusy,
-          }}
-          disabled={isBusy}
-          onPress={() => setJoinReviewPlanOnSave((current) => !current)}
-          style={({ pressed }) => [
-            styles.savePlanToggle,
-            joinReviewPlanOnSave ? styles.savePlanToggleActive : null,
-            pressed && !isBusy ? styles.savePlanTogglePressed : null,
-            isBusy ? styles.disabledButton : null,
-          ]}>
-          <MaterialIcons
-            name={joinReviewPlanOnSave ? 'check-circle' : 'radio-button-unchecked'}
-            size={22}
-            color={joinReviewPlanOnSave ? colors.success : colors.textMuted}
-          />
-          <View style={styles.savePlanTextWrap}>
-            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.savePlanTitle}>
-              同时加入 7 刷
-            </Text>
-            <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.savePlanSubtitle}>
-              {joinReviewPlanOnSave ? '保存后今天可复做' : '默认仅保存到题库'}
-            </Text>
-          </View>
-        </Pressable>
-        <PrimaryButton
-          title={saveButtonTitle}
-          disabled={!canSave}
-          onPress={() => {
-            void handleSaveDraft();
-          }}
+          onPreview={(image, index) => setPreview({ image, title: `题目照片 ${index + 1}/${draft.questionImages.length}` })}
         />
-      </FloatingBottomCta>
+        {draft.questionImages.length > 1 ? <Text style={styles.batchHint}>当前按原有批量规则保存为 {draft.questionImages.length} 道错题，顺序决定题号。</Text> : null}
 
-      <AppToast
-        {...toastProps}
-        bottomOffset={toastBottomOffset}
+        <View style={styles.infoList}>
+          <InfoRow
+            icon="layers"
+            title="所属模块"
+            value={draft.module ?? '未选择'}
+            active={!!draft.module}
+            onPress={() => setModuleSheetVisible(true)}
+          />
+          <InfoRow
+            border
+            icon="list-alt"
+            title="可选信息"
+            subtitle="做法、解析、错因、难度和备注"
+            value={optionalSummary}
+            onPress={openOptionalSheet}
+          />
+          <View style={[styles.infoRow, styles.infoBorder]}>
+            <View style={styles.infoIcon}><MaterialIcons name="event-available" size={24} color={draft.joinReviewPlan ? GREEN : SECONDARY} /></View>
+            <View style={styles.infoCopy}>
+              <Text style={styles.infoTitle}>同时加入 7 刷</Text>
+              <Text style={styles.infoSubtitle}>按复习节奏加入今日计划</Text>
+            </View>
+            <Switch
+              accessibilityLabel="同时加入 7 刷"
+              disabled={busy}
+              onValueChange={(joinReviewPlan) => setDraft((current) => ({ ...current, joinReviewPlan }))}
+              thumbColor="#FFFFFF"
+              trackColor={{ false: '#D1D1D6', true: GREEN }}
+              value={draft.joinReviewPlan}
+            />
+          </View>
+        </View>
+      </ScrollView>
+
+      <View style={[styles.bottomBar, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+        <Text style={[styles.saveHint, !canProceed && styles.saveHintWarning]}>{validationHint}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: !canProceed }}
+          disabled={!canProceed}
+          onPress={() => stage === 'READY_TO_SAVE' ? void handleSave() : openOptionalSheet()}
+          style={({ pressed }) => [styles.primaryButton, !canProceed && styles.primaryDisabled, pressed && canProceed && styles.primaryPressed]}>
+          <Text style={styles.primaryText}>{saving ? '正在保存…' : stage === 'READY_TO_SAVE' ? '保存到题库' : '下一步'}</Text>
+        </Pressable>
+      </View>
+
+      <ModulePickerSheet
+        visible={moduleSheetVisible}
+        selectedId={draft.moduleId}
+        options={moduleOptions}
+        recentIds={recentModuleIds}
+        busy={busy}
+        onCancel={() => setModuleSheetVisible(false)}
+        onComplete={(option) => {
+          setDraft((current) => ({ ...current, moduleId: option?.id ?? null, module: option?.label ?? null }));
+          setModuleSheetVisible(false);
+        }}
+        onCreateCustom={handleCreateModule}
       />
+      <OptionalInfoSheet
+        visible={optionalSheetVisible}
+        draft={draft}
+        reasonOptions={reasonOptions}
+        imageBusy={imageBusy}
+        onTakePhoto={(type, index) => takeImage(type, index, true)}
+        onPickImages={async (type, index) => ({ images: await pickImages(type, index, MAX_IMAGES_PER_TYPE - index, true), ok: true })}
+        onCreateCustomReason={handleCreateReason}
+        onCancel={() => handleOptionalCancel()}
+        onComplete={handleOptionalComplete}
+      />
+      <ImagePreviewModal
+        visible={!!preview}
+        uri={preview?.image.uri ?? null}
+        title={preview?.title ?? '题目照片'}
+        interactionMode="zoomable"
+        logSource="add-question"
+        onClose={() => setPreview(null)}
+      />
+      <AppToast {...toastProps} bottomOffset={bottomBarHeight + 12} />
     </View>
   );
 }
 
+function InfoRow({ icon, title, subtitle, value, active = false, border = false, onPress }: { icon: keyof typeof MaterialIcons.glyphMap; title: string; subtitle?: string; value: string; active?: boolean; border?: boolean; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.infoRow, border && styles.infoBorder, pressed && styles.rowPressed]}>
+      <View style={styles.infoIcon}><MaterialIcons name={icon} size={24} color={active ? GREEN : SECONDARY} /></View>
+      <View style={styles.infoCopy}><Text style={styles.infoTitle}>{title}</Text>{subtitle ? <Text style={styles.infoSubtitle}>{subtitle}</Text> : null}</View>
+      <Text numberOfLines={2} style={[styles.infoValue, active && styles.infoValueActive]}>{value}</Text>
+      <MaterialIcons name="chevron-right" size={24} color={SECONDARY} />
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  pageRoot: {
-    flex: 1,
-  },
-  screenContent: {
-    paddingTop: spacing.lg,
-    gap: spacing.md,
-  },
-  floatingAnchorWrap: {
-    position: 'absolute',
-    left: spacing.screenPadding,
-    right: spacing.screenPadding,
-    zIndex: 30,
-    elevation: 30,
-  },
-  savePlanToggle: {
-    minHeight: 46,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  savePlanToggleActive: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
-  },
-  savePlanTogglePressed: {
-    opacity: 0.86,
-  },
-  savePlanTextWrap: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  savePlanTitle: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  savePlanSubtitle: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  anchorSectionHighlighted: {
-    marginHorizontal: -spacing.sm,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.success,
-    backgroundColor: '#FBFFFC',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-  },
-  sectionBlock: {
-    gap: spacing.sm,
-  },
-  captureCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
-  },
-  captureCardCompact: {
-    gap: spacing.xs,
-  },
-  captureTitle: {
-    ...typography.sectionTitle,
-    fontSize: 18,
-    lineHeight: 24,
-  },
-  captureTitleCompact: {
-    fontSize: 16,
-    lineHeight: 22,
-  },
-  captureSubtitle: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-  },
-  captureSubtitleCompact: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  combineHintRow: {
-    borderRadius: radius.lg,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-  },
-  combineHintText: {
-    ...typography.caption,
-    flex: 1,
-    color: colors.textSecondary,
-    lineHeight: 18,
-  },
-  capturePreviewWrap: {
-    height: 126,
-    borderRadius: radius.md,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-  },
-  capturePreviewWrapCompact: {
-    height: 106,
-  },
-  capturePreviewWrapPressed: {
-    opacity: 0.85,
-  },
-  capturePreviewImage: {
-    width: '100%',
-    height: '100%',
-  },
-  questionQueueContent: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
-    gap: spacing.sm,
-    alignItems: 'center',
-  },
-  questionThumbItem: {
-    width: 108,
-    height: 108,
-    borderRadius: radius.md,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    position: 'relative',
-  },
-  questionThumbPressable: {
-    width: '100%',
-    height: '100%',
-  },
-  questionThumbPressablePressed: {
-    opacity: 0.92,
-  },
-  questionThumbImage: {
-    width: '100%',
-    height: '100%',
-  },
-  questionThumbDeleteButton: {
-    position: 'absolute',
-    top: 6,
-    right: 6,
-    width: 24,
-    height: 24,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(0, 0, 0, 0.72)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  questionThumbDeleteButtonPressed: {
-    opacity: 0.8,
-  },
-  questionThumbDeleteText: {
-    ...typography.caption,
-    color: colors.white,
-    fontWeight: '700',
-    lineHeight: 16,
-  },
-  questionThumbOrderBadge: {
-    position: 'absolute',
-    left: 6,
-    bottom: 6,
-    borderRadius: radius.lg,
-    backgroundColor: 'rgba(0, 0, 0, 0.66)',
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 2,
-  },
-  questionThumbOrderText: {
-    ...typography.caption,
-    color: colors.white,
-    fontWeight: '700',
-  },
-  capturePlaceholder: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: spacing.xs,
-    borderStyle: 'dashed',
-    borderWidth: 1,
-    borderColor: '#D9DCE1',
-    margin: spacing.sm,
-    borderRadius: radius.md,
-  },
-  cameraBody: {
-    width: 36,
-    height: 24,
-    borderRadius: radius.sm,
-    backgroundColor: colors.black,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cameraLens: {
-    width: 13,
-    height: 13,
-    borderRadius: radius.pill,
-    borderWidth: 2,
-    borderColor: colors.white,
-  },
-  capturePlaceholderText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '600',
-  },
-  capturePlaceholderHintText: {
-    ...typography.caption,
-    color: colors.textMuted,
-  },
-  captureActionRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-  },
-  captureActionButton: {
-    flex: 1,
-    minHeight: 36,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  captureActionButtonCompact: {
-    minHeight: 34,
-  },
-  captureActionPrimary: {
-    backgroundColor: colors.successBg,
-    borderColor: colors.successBorder,
-  },
-  captureActionSecondary: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-  },
-  captureActionPrimaryText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '700',
-  },
-  captureActionSecondaryText: {
-    ...typography.caption,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  captureFooterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  questionQueueHintWrap: {
-    gap: 2,
-  },
-  imageMetaText: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    flex: 1,
-  },
-  captureDeleteButton: {
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#F0C3C3',
-    backgroundColor: '#FFECEC',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  captureDeleteButtonCompact: {
-    paddingVertical: 2,
-  },
-  captureDeleteText: {
-    ...typography.caption,
-    color: colors.danger,
-    fontWeight: '700',
-  },
-  optionalSection: {
-    marginTop: spacing.xs,
-  },
-  optionalToggle: {
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  optionalTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  optionalTitle: {
-    ...typography.body,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  optionalSubtitle: {
-    ...typography.caption,
-    color: colors.textSecondary,
-  },
-  optionalActionText: {
-    ...typography.caption,
-    color: colors.textPrimary,
-    fontWeight: '700',
-  },
-  captureListCompact: {
-    gap: spacing.sm,
-  },
-  optionalHint: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginTop: -2,
-  },
-  tagsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.xs,
-  },
-  customModuleEntry: {
-    minHeight: 36,
-    alignSelf: 'stretch',
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: colors.border,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-  },
-  customModuleEntryPressed: {
-    opacity: 0.84,
-  },
-  customModuleEntryText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-    fontWeight: '700',
-  },
-  customModuleNewBadge: {
-    borderRadius: radius.pill,
-    backgroundColor: colors.successBg,
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 1,
-  },
-  customModuleNewBadgeText: {
-    ...typography.caption,
-    color: colors.success,
-    fontWeight: '800',
-  },
-  inputCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
-  },
-  inputLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    fontWeight: '700',
-  },
-  textInput: {
-    ...typography.body,
-    color: colors.textPrimary,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surface,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    minHeight: 42,
-  },
-  noteInput: {
-    minHeight: 88,
-  },
-  errorCard: {
-    borderRadius: radius.xl,
-    borderColor: '#F2C9C9',
-    backgroundColor: '#FFF5F5',
-    gap: spacing.xs,
-  },
-  errorTitle: {
-    ...typography.body,
-    color: colors.danger,
-    fontWeight: '700',
-  },
-  errorItemText: {
-    ...typography.caption,
-    color: colors.danger,
-  },
-  disabledButton: {
-    opacity: 0.5,
-  },
+  root: { flex: 1, backgroundColor: BACKGROUND },
+  content: { paddingHorizontal: 20 },
+  pageTitle: { color: TEXT, fontSize: 31, lineHeight: 38, fontWeight: '800' },
+  sectionHeading: { marginTop: 4, marginBottom: 13 },
+  sectionTitle: { color: TEXT, fontSize: 22, lineHeight: 29, fontWeight: '700' },
+  sectionHelp: { marginTop: 5, color: SECONDARY, fontSize: 15, lineHeight: 21 },
+  batchHint: { marginTop: 9, color: SECONDARY, fontSize: 13, lineHeight: 18 },
+  infoList: { overflow: 'hidden', marginTop: 22, borderRadius: 18, backgroundColor: '#FFFFFF' },
+  infoRow: { minHeight: 74, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 11 },
+  infoBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER },
+  infoIcon: { width: 38, alignItems: 'center', justifyContent: 'center' },
+  infoCopy: { flex: 1 },
+  infoTitle: { color: TEXT, fontSize: 17, fontWeight: '600' },
+  infoSubtitle: { marginTop: 3, color: SECONDARY, fontSize: 13, lineHeight: 18 },
+  infoValue: { maxWidth: 126, color: SECONDARY, fontSize: 14, lineHeight: 19, textAlign: 'right' },
+  infoValueActive: { color: GREEN, fontWeight: '600' },
+  rowPressed: { opacity: 0.55 },
+  bottomBar: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 8, paddingHorizontal: 20, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER, backgroundColor: 'rgba(242,242,247,0.98)' },
+  saveHint: { marginBottom: 7, color: SECONDARY, fontSize: 13, textAlign: 'center' },
+  saveHintWarning: { color: '#C76D00' },
+  primaryButton: { minHeight: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 15, backgroundColor: GREEN },
+  primaryDisabled: { backgroundColor: '#B9DCC3' },
+  primaryPressed: { opacity: 0.72 },
+  primaryText: { color: '#FFFFFF', fontSize: 18, fontWeight: '700' },
 });

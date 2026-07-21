@@ -134,11 +134,12 @@ type DetailModulePickerOption = {
   label: string;
 };
 type DetailErrorReasonOption = {
-  value: string | null;
+  id: string;
   label: string;
 };
 type DetailMetadataDraft = {
-  errorReason: string | null;
+  errorReasonIds: string[];
+  errorReasonLabels: string[];
   difficulty: number;
 };
 type MaybePreviewImage = {
@@ -600,6 +601,7 @@ function normalizeMetadataErrorReason(value: string | null | undefined): string 
 function appendErrorReasonOption(
   options: DetailErrorReasonOption[],
   seenKeys: Set<string>,
+  id: string,
   value: string | null | undefined,
   label?: string,
 ) {
@@ -615,32 +617,36 @@ function appendErrorReasonOption(
 
   seenKeys.add(key);
   options.push({
-    value: normalizedValue,
+    id,
     label: label ?? normalizedValue,
   });
 }
 
 function buildDetailErrorReasonOptions(
   customErrorReasons: CustomErrorReason[],
-  currentErrorReason: string | null,
+  draft: DetailMetadataDraft,
 ): DetailErrorReasonOption[] {
-  const options: DetailErrorReasonOption[] = [{ value: null, label: '未填写' }];
+  const options: DetailErrorReasonOption[] = [];
   const seenKeys = new Set<string>();
 
   for (const option of ERROR_REASON_OPTIONS) {
-    appendErrorReasonOption(options, seenKeys, option.value, option.label);
+    appendErrorReasonOption(options, seenKeys, option.id, option.value, option.label);
   }
   for (const reasonItem of customErrorReasons) {
-    appendErrorReasonOption(options, seenKeys, reasonItem.name);
+    const selectedIndex = draft.errorReasonLabels.findIndex(
+      (label) => toModulePickerKey(label) === toModulePickerKey(reasonItem.name),
+    );
+    appendErrorReasonOption(
+      options,
+      seenKeys,
+      selectedIndex >= 0 ? draft.errorReasonIds[selectedIndex] : `custom:${reasonItem.id}`,
+      reasonItem.name,
+    );
   }
 
-  const normalizedCurrentReason = normalizeMetadataErrorReason(currentErrorReason);
-  if (normalizedCurrentReason && !seenKeys.has(toModulePickerKey(normalizedCurrentReason))) {
-    options.splice(1, 0, {
-      value: normalizedCurrentReason,
-      label: normalizedCurrentReason,
-    });
-  }
+  draft.errorReasonLabels.forEach((label, index) => {
+    appendErrorReasonOption(options, seenKeys, draft.errorReasonIds[index] ?? `legacy:${label}`, label);
+  });
 
   return options;
 }
@@ -654,8 +660,15 @@ function normalizeMetadataDifficulty(value: number): number {
 }
 
 function buildMetadataDraft(detail: MistakeDetailViewModel): DetailMetadataDraft {
+  const labels = normalizeMetadataErrorReason(detail.errorReason)?.split('、').map((label) => label.trim()).filter(Boolean) ?? [];
+  const storedIds = Array.isArray(detail.errorReasonIds) ? detail.errorReasonIds : [];
   return {
-    errorReason: normalizeMetadataErrorReason(detail.errorReason),
+    errorReasonIds: labels.map((label, index) => {
+      const storedId = storedIds[index];
+      if (storedId) return storedId;
+      return ERROR_REASON_OPTIONS.find((option) => option.value === label)?.id ?? `legacy:${label}`;
+    }),
+    errorReasonLabels: labels,
     difficulty: normalizeMetadataDifficulty(detail.difficulty),
   };
 }
@@ -1117,7 +1130,7 @@ function DetailMetadataEditorModal({
     return null;
   }
 
-  const errorReasonOptions = buildDetailErrorReasonOptions(customErrorReasons, draft.errorReason);
+  const errorReasonOptions = buildDetailErrorReasonOptions(customErrorReasons, draft);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -1160,19 +1173,30 @@ function DetailMetadataEditorModal({
             <Text style={styles.metadataSectionTitle}>错因</Text>
             <View style={styles.metadataChipRow}>
               {errorReasonOptions.map((option) => {
-                const selected = draft.errorReason === option.value;
+                const selectedIndex = draft.errorReasonIds.indexOf(option.id);
+                const selected = selectedIndex >= 0;
                 return (
                   <Pressable
-                    key={option.value ?? 'none'}
-                    accessibilityRole="button"
+                    key={option.id}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: selected }}
                     accessibilityLabel={`选择错因：${option.label}`}
                     disabled={busy}
-                    onPress={() =>
+                    onPress={() => {
+                      if (selected) {
+                        onChangeDraft({
+                          ...draft,
+                          errorReasonIds: draft.errorReasonIds.filter((_, index) => index !== selectedIndex),
+                          errorReasonLabels: draft.errorReasonLabels.filter((_, index) => index !== selectedIndex),
+                        });
+                        return;
+                      }
                       onChangeDraft({
                         ...draft,
-                        errorReason: option.value,
-                      })
-                    }
+                        errorReasonIds: [...draft.errorReasonIds, option.id],
+                        errorReasonLabels: [...draft.errorReasonLabels, option.label],
+                      });
+                    }}
                     style={({ pressed }) => [
                       styles.metadataChip,
                       selected && styles.metadataChipSelected,
@@ -3151,12 +3175,16 @@ export default function MistakeDetailScreen() {
     }
 
     const nextDraft: DetailMetadataDraft = {
-      errorReason: normalizeMetadataErrorReason(metadataDraft.errorReason),
+      errorReasonIds: [...metadataDraft.errorReasonIds],
+      errorReasonLabels: metadataDraft.errorReasonLabels
+        .map((label) => normalizeMetadataErrorReason(label))
+        .filter((label): label is string => label !== null),
       difficulty: normalizeMetadataDifficulty(metadataDraft.difficulty),
     };
     const currentDraft = buildMetadataDraft(state.detail);
     if (
-      nextDraft.errorReason === currentDraft.errorReason
+      nextDraft.errorReasonIds.join('|') === currentDraft.errorReasonIds.join('|')
+      && nextDraft.errorReasonLabels.join('|') === currentDraft.errorReasonLabels.join('|')
       && nextDraft.difficulty === currentDraft.difficulty
     ) {
       handleCloseMetadataEditor();
@@ -3168,7 +3196,7 @@ export default function MistakeDetailScreen() {
     try {
       const result = await MistakeDetailService.updateMistakeMetadata({
         mistakeId: state.detail.id,
-        errorReason: nextDraft.errorReason,
+        errorReason: nextDraft.errorReasonLabels.join('、') || null,
         difficulty: nextDraft.difficulty,
       });
 
@@ -4532,6 +4560,22 @@ export default function MistakeDetailScreen() {
                     );
                   })}
                 </ScrollView>
+                {state.detail.mySolutionText || state.detail.answerText ? (
+                  <View style={styles.supplementTextList}>
+                    {state.detail.mySolutionText ? (
+                      <View style={styles.supplementTextRow}>
+                        <Text style={styles.supplementTextTitle}>我的做法</Text>
+                        <Text selectable style={styles.supplementTextBody}>{state.detail.mySolutionText}</Text>
+                      </View>
+                    ) : null}
+                    {state.detail.answerText ? (
+                      <View style={styles.supplementTextRow}>
+                        <Text style={styles.supplementTextTitle}>答案／解析</Text>
+                        <Text selectable style={styles.supplementTextBody}>{state.detail.answerText}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
 
               <View
@@ -5235,6 +5279,28 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     paddingRight: spacing.xs,
     paddingBottom: spacing.xs,
+  },
+  supplementTextList: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  supplementTextRow: {
+    borderRadius: radius.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.surface,
+  },
+  supplementTextTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  supplementTextBody: {
+    marginTop: spacing.xs,
+    color: colors.textSecondary,
+    fontSize: 14,
+    lineHeight: 21,
   },
   reviewTimelineGroup: {
     borderRadius: 20,

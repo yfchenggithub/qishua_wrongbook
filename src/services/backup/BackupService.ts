@@ -94,7 +94,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, 7, DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, 7, 8, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -107,10 +107,14 @@ INSERT INTO mistakes (
   id,
   subject,
   module,
+  module_id,
   title,
   error_reason,
+  error_reason_ids,
   difficulty,
   note,
+  my_solution_text,
+  answer_text,
   note_highlights,
   review_count,
   status,
@@ -121,7 +125,7 @@ INSERT INTO mistakes (
   last_review_result,
   is_pinned,
   last_viewed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const INSERT_REVIEW_RECORD_SQL = `
@@ -2348,10 +2352,14 @@ async function runRestoreDatabaseTransaction(options: {
             mistake.id,
             mistake.subject,
             mistake.module,
+            mistake.module_id ?? null,
             mistake.title ?? null,
             mistake.error_reason ?? null,
+            mistake.error_reason_ids ?? null,
             mistake.difficulty,
             mistake.note ?? null,
+            mistake.my_solution_text ?? null,
+            mistake.answer_text ?? null,
             mistake.note_highlights ?? null,
             mistake.review_count,
             mistake.status,

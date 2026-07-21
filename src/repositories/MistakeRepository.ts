@@ -20,10 +20,14 @@ INSERT INTO mistakes (
   id,
   subject,
   module,
+  module_id,
   title,
   error_reason,
+  error_reason_ids,
   difficulty,
   note,
+  my_solution_text,
+  answer_text,
   note_highlights,
   review_count,
   status,
@@ -34,7 +38,7 @@ INSERT INTO mistakes (
   last_review_result,
   is_pinned,
   last_viewed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const SELECT_MISTAKE_FIELDS_SQL = `
@@ -42,10 +46,14 @@ SELECT
   id,
   subject,
   module,
+  module_id,
   title,
   error_reason,
+  error_reason_ids,
   difficulty,
   note,
+  my_solution_text,
+  answer_text,
   note_highlights,
   review_count,
   status,
@@ -467,10 +475,14 @@ async function createMistakeInDatabase(
     id: inputId && inputId.length > 0 ? inputId : buildMistakeId(),
     subject: input.subject?.trim() || DEFAULT_SUBJECT,
     module: input.module,
+    module_id: input.module_id ?? null,
     title: input.title ?? null,
     error_reason: input.error_reason ?? null,
+    error_reason_ids: input.error_reason_ids ?? null,
     difficulty: normalizeDifficulty(input.difficulty),
     note: input.note ?? null,
+    my_solution_text: input.my_solution_text ?? null,
+    answer_text: input.answer_text ?? null,
     note_highlights: input.note_highlights ?? null,
     review_count: 0,
     status,
@@ -488,10 +500,14 @@ async function createMistakeInDatabase(
     record.id,
     record.subject,
     record.module,
+    record.module_id ?? null,
     record.title ?? null,
     record.error_reason ?? null,
+    record.error_reason_ids ?? null,
     record.difficulty,
     record.note ?? null,
+    record.my_solution_text ?? null,
+    record.answer_text ?? null,
     record.note_highlights ?? null,
     record.review_count,
     record.status,
@@ -628,6 +644,8 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
   OR module LIKE ?
   OR error_reason LIKE ?
   OR note LIKE ?
+  OR my_solution_text LIKE ?
+  OR answer_text LIKE ?
   OR EXISTS (
     SELECT 1
     FROM review_records review_note_search
@@ -645,6 +663,8 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
   )
 )`);
     bindParams.push(
+      likeKeyword,
+      likeKeyword,
       likeKeyword,
       likeKeyword,
       likeKeyword,
@@ -1128,10 +1148,14 @@ FROM mistakes;`,
       const updatableFields: (keyof UpdateMistakeInput)[] = [
         'subject',
         'module',
+        'module_id',
         'title',
         'error_reason',
+        'error_reason_ids',
         'difficulty',
         'note',
+        'my_solution_text',
+        'answer_text',
         'note_highlights',
         'review_count',
         'status',

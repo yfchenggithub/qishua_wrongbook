@@ -6,6 +6,7 @@ import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
 import { validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
+import { createMistakeId } from '@/src/utils/id';
 import type * as SQLite from 'expo-sqlite';
 
 const SERVICE_SCOPE = 'CreateMistakeService';
@@ -16,6 +17,10 @@ type CreateMistakeFromDraftResult = {
   ok: boolean;
   mistakeId?: string;
   errorMessage?: string;
+};
+
+export type CreateMistakesFromDraftResult = CreateMistakeFromDraftResult & {
+  mistakeIds?: string[];
 };
 
 type CreateMistakeFromDraftOptions = {
@@ -77,46 +82,78 @@ function toShortUri(uri: string | null | undefined): string | null {
 
 function getDraftImagePresence(draft: AddMistakeDraft): DraftImagePresence {
   return {
-    hasQuestionImage: !!draft.questionImage?.uri?.trim(),
-    hasMySolutionImage: !!draft.mySolutionImage?.uri?.trim(),
-    hasAnswerImage: !!draft.answerImage?.uri?.trim(),
+    hasQuestionImage: getImages(draft.questionImages, draft.questionImage).length > 0,
+    hasMySolutionImage: getImages(draft.mySolutionImages, draft.mySolutionImage).length > 0,
+    hasAnswerImage: getImages(draft.answerImages, draft.answerImage).length > 0,
   };
+}
+
+function getImages(images: readonly AddMistakeDraft['questionImages'][number][], fallback: AddMistakeDraft['questionImage']) {
+  const validImages = Array.isArray(images)
+    ? images.filter((image) => typeof image?.uri === 'string' && image.uri.trim().length > 0)
+    : [];
+  if (validImages.length > 0) {
+    return validImages;
+  }
+  return fallback?.uri?.trim() ? [fallback] : [];
 }
 
 function collectImageInputs(draft: AddMistakeDraft): MistakeImageInput[] {
   const images: MistakeImageInput[] = [];
-  let nextSortOrder = 0;
-
-  const questionUri = draft.questionImage?.uri?.trim();
-  if (questionUri) {
-    images.push({
-      type: 'question',
-      uri: questionUri,
-      sort_order: nextSortOrder,
+  const appendImages = (
+    type: MistakeImageInput['type'],
+    localImages: ReturnType<typeof getImages>,
+  ) => {
+    localImages.forEach((image, index) => {
+      const uri = image.uri.trim();
+      if (!uri) {
+        return;
+      }
+      images.push({ type, uri, sort_order: index });
     });
-    nextSortOrder += 1;
-  }
+  };
 
-  const mySolutionUri = draft.mySolutionImage?.uri?.trim();
-  if (mySolutionUri) {
-    images.push({
-      type: 'my_solution',
-      uri: mySolutionUri,
-      sort_order: nextSortOrder,
-    });
-    nextSortOrder += 1;
-  }
-
-  const answerUri = draft.answerImage?.uri?.trim();
-  if (answerUri) {
-    images.push({
-      type: 'answer',
-      uri: answerUri,
-      sort_order: nextSortOrder,
-    });
-  }
+  appendImages('question', getImages(draft.questionImages, draft.questionImage));
+  appendImages('my_solution', getImages(draft.mySolutionImages, draft.mySolutionImage));
+  appendImages('answer', getImages(draft.answerImages, draft.answerImage));
 
   return images;
+}
+
+function serializeIds(ids: readonly string[]): string | undefined {
+  const normalized = Array.from(new Set(ids.map((id) => id.trim()).filter(Boolean)));
+  return normalized.length > 0 ? JSON.stringify(normalized) : undefined;
+}
+
+function buildDisplayErrorReason(draft: AddMistakeDraft): string | undefined {
+  const labels = Array.from(
+    new Set(draft.errorReasonLabels.map((label) => label.trim()).filter(Boolean)),
+  );
+  if (labels.length > 0) {
+    return labels.join('、');
+  }
+  return normalizeOptionalText(draft.errorReason);
+}
+
+function buildDraftForBatchQuestion(
+  draft: AddMistakeDraft,
+  questionImage: AddMistakeDraft['questionImages'][number],
+  mistakeId: string,
+): AddMistakeDraft {
+  return {
+    ...draft,
+    draftId: mistakeId,
+    title: '',
+    note: '',
+    mySolutionText: '',
+    answerText: '',
+    questionImages: [questionImage],
+    mySolutionImages: [],
+    answerImages: [],
+    questionImage,
+    mySolutionImage: null,
+    answerImage: null,
+  };
 }
 
 async function persistDraft(
@@ -132,12 +169,14 @@ async function persistDraft(
     throw new Error('模块不能为空。');
   }
 
-  const questionImageUri = draft.questionImage?.uri?.trim();
+  const questionImageUri = getImages(draft.questionImages, draft.questionImage)[0]?.uri?.trim();
   if (!questionImageUri) {
     throw new Error('题目照片必填。');
   }
 
-  const answerImageUri = normalizeOptionalText(draft.answerImage?.uri) ?? null;
+  const answerImageUri = normalizeOptionalText(
+    getImages(draft.answerImages, draft.answerImage)[0]?.uri,
+  ) ?? null;
   const imagePresence = getDraftImagePresence(draft);
 
   Logger.info(SERVICE_SCOPE, 'Start persisting mistake draft.', {
@@ -153,10 +192,14 @@ async function persistDraft(
     id: mistakeId,
     subject: draft.subject?.trim() || DEFAULT_SUBJECT,
     module: moduleName,
-    title: buildCanonicalQuestionTitle(moduleName, questionNo),
-    error_reason: normalizeOptionalText(draft.errorReason),
+    module_id: normalizeOptionalText(draft.moduleId) ?? null,
+    title: normalizeOptionalText(draft.title) ?? buildCanonicalQuestionTitle(moduleName, questionNo),
+    error_reason: buildDisplayErrorReason(draft),
+    error_reason_ids: serializeIds(draft.errorReasonIds) ?? null,
     difficulty: draft.difficulty,
     note: normalizeOptionalText(draft.note),
+    my_solution_text: normalizeOptionalText(draft.mySolutionText) ?? null,
+    answer_text: normalizeOptionalText(draft.answerText) ?? null,
     status: joinReviewPlan ? REVIEW_STATUS.ACTIVE : REVIEW_STATUS.COLLECTED,
     next_review_at: joinReviewPlan ? new Date().toISOString() : null,
   });
@@ -245,7 +288,7 @@ export async function createMistakeFromDraft(
         draft,
         mistakeId,
         questionNo,
-        options?.joinReviewPlan === true,
+        options?.joinReviewPlan ?? draft.joinReviewPlan,
         () => {
           mistakeCreated = true;
         },
@@ -296,5 +339,62 @@ export async function createMistakeFromDraft(
       ok: false,
       errorMessage: toErrorMessage(error) || FALLBACK_ERROR_MESSAGE,
     };
+  }
+}
+
+export async function createMistakesFromDraft(
+  draft: AddMistakeDraft,
+  options?: CreateMistakeFromDraftOptions,
+): Promise<CreateMistakesFromDraftResult> {
+  const questionImages = getImages(draft.questionImages, draft.questionImage);
+  if (questionImages.length <= 1) {
+    const result = await createMistakeFromDraft(draft, options);
+    return result.ok
+      ? { ...result, mistakeIds: result.mistakeId ? [result.mistakeId] : [] }
+      : result;
+  }
+
+  const validation = validateAddMistakeDraft({
+    ...draft,
+    questionImages,
+    questionImage: questionImages[0] ?? null,
+  });
+  if (!validation.ok) {
+    return { ok: false, errorMessage: validation.errors.join('\n') };
+  }
+
+  const moduleName = draft.module?.trim();
+  if (!moduleName) {
+    return { ok: false, errorMessage: '模块不能为空。' };
+  }
+
+  const mistakeIds = questionImages.map((_, index) =>
+    index === 0 ? draft.draftId : createMistakeId(),
+  );
+  try {
+    await withDatabaseTransaction(async (db) => {
+      const questionNumbers = await MistakeRepository.reserveNextQuestionNumbersByModuleInTransaction(
+        db,
+        moduleName,
+        questionImages.length,
+      );
+      for (let index = 0; index < questionImages.length; index += 1) {
+        await persistDraft(
+          db,
+          buildDraftForBatchQuestion(draft, questionImages[index], mistakeIds[index]),
+          mistakeIds[index],
+          questionNumbers[index],
+          options?.joinReviewPlan ?? draft.joinReviewPlan,
+        );
+      }
+    });
+
+    void ReviewReminderService.refreshReminderSchedule({ reason: 'create_mistake' }).catch((error) => {
+      Logger.warn(SERVICE_SCOPE, 'Reminder refresh failed after batch creation.', { error });
+    });
+    return { ok: true, mistakeId: mistakeIds[0], mistakeIds };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to save batch mistake draft.', { draftId: draft.draftId, error });
+    return { ok: false, errorMessage: toErrorMessage(error) || FALLBACK_ERROR_MESSAGE };
   }
 }

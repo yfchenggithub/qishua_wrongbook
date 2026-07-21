@@ -1,5 +1,5 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
-import { MISTAKE_NOTE_MAX_LENGTH } from '@/src/constants/mistakeOptions';
+import { ERROR_REASON_OPTIONS, MISTAKE_NOTE_MAX_LENGTH, MODULE_OPTIONS } from '@/src/constants/mistakeOptions';
 import type {
   DetailImageSlot,
   DetailPreviewImageItem,
@@ -11,6 +11,8 @@ import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import {
+  CustomErrorReasonRepository,
+  CustomModuleRepository,
   MistakeImageRepository,
   MistakeRelationRepository,
   MistakeRepository,
@@ -261,6 +263,49 @@ function findImagesByType(images: MistakeImage[], type: DetailImageSlot['type'])
   return images.filter((image) => image.type === type);
 }
 
+function parseStoredStringArray(value?: string | null): string[] {
+  if (!value?.trim()) {
+    return [];
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+async function resolveStoredModuleId(moduleName: string): Promise<string | null> {
+  const builtIn = MODULE_OPTIONS.find((option) => option.value === moduleName);
+  if (builtIn) {
+    return builtIn.id;
+  }
+  const custom = await CustomModuleRepository.findCustomModuleByName(moduleName);
+  return custom ? `custom:${custom.id}` : null;
+}
+
+async function resolveStoredErrorReasonIds(errorReason: string | null): Promise<string | null> {
+  if (!errorReason) {
+    return null;
+  }
+  const labels = errorReason.split('、').map((label) => label.trim()).filter(Boolean);
+  const ids: string[] = [];
+  for (const label of labels) {
+    const builtIn = ERROR_REASON_OPTIONS.find((option) => option.value === label);
+    if (builtIn) {
+      ids.push(builtIn.id);
+      continue;
+    }
+    const custom = await CustomErrorReasonRepository.findCustomErrorReasonByName(label);
+    if (custom) {
+      ids.push(`custom:${custom.id}`);
+    }
+  }
+  return ids.length > 0 ? JSON.stringify(Array.from(new Set(ids))) : null;
+}
+
 function buildStatusLabel(status: MistakeStatus, reviewCount: number): string {
   if (status === REVIEW_STATUS.COLLECTED) {
     return '待整理';
@@ -417,11 +462,15 @@ async function mapMistakeToDetailViewModel(
   return {
     id: mistake.id,
     module: mistake.module,
+    moduleId: mistake.module_id ?? null,
     title: buildDetailTitle(mistake.module, mistake.title),
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,
+    errorReasonIds: parseStoredStringArray(mistake.error_reason_ids),
     difficulty: mistake.difficulty,
     note: mistake.note ?? null,
+    mySolutionText: mistake.my_solution_text ?? null,
+    answerText: mistake.answer_text ?? null,
     noteHighlights: parseStoredTextHighlights(mistake.note_highlights, mistake.note ?? ''),
     reviewCount: mistake.review_count,
     maxReviewCount: MAX_REVIEW_COUNT,
@@ -1092,8 +1141,10 @@ export async function updateMistakeModule(
       currentMistake.module,
       nextModule,
     );
+    const nextModuleId = await resolveStoredModuleId(nextModule);
     const updated = await MistakeRepository.updateMistake(mistakeId, {
       module: nextModule,
+      module_id: nextModuleId,
       title: nextTitle ?? null,
     });
     if (!updated) {
@@ -1155,8 +1206,10 @@ export async function updateMistakeMetadata(
   const nextErrorReason = normalizeOptionalText(params.errorReason ?? null);
 
   try {
+    const nextErrorReasonIds = await resolveStoredErrorReasonIds(nextErrorReason);
     const updated = await MistakeRepository.updateMistake(mistakeId, {
       error_reason: nextErrorReason,
+      error_reason_ids: nextErrorReasonIds,
       difficulty: nextDifficulty,
     });
     if (!updated) {

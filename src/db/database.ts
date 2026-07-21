@@ -132,6 +132,28 @@ CREATE INDEX IF NOT EXISTS idx_mistakes_last_viewed_at ON mistakes(last_viewed_a
 `);
 }
 
+async function ensureAddMistakeSupplementColumns(db: SQLite.SQLiteDatabase): Promise<void> {
+  await ensureColumn(db, 'mistakes', 'module_id', 'ALTER TABLE mistakes ADD COLUMN module_id TEXT;');
+  await ensureColumn(
+    db,
+    'mistakes',
+    'error_reason_ids',
+    'ALTER TABLE mistakes ADD COLUMN error_reason_ids TEXT;',
+  );
+  await ensureColumn(
+    db,
+    'mistakes',
+    'my_solution_text',
+    'ALTER TABLE mistakes ADD COLUMN my_solution_text TEXT;',
+  );
+  await ensureColumn(
+    db,
+    'mistakes',
+    'answer_text',
+    'ALTER TABLE mistakes ADD COLUMN answer_text TEXT;',
+  );
+}
+
 async function ensureMistakesCollectedStatusSupport(db: SQLite.SQLiteDatabase): Promise<void> {
   const row = await db.getFirstAsync<TableSqlRow>(
     "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'mistakes' LIMIT 1;",
@@ -158,10 +180,14 @@ INSERT INTO mistakes_new (
   id,
   subject,
   module,
+  module_id,
   title,
   error_reason,
+  error_reason_ids,
   difficulty,
   note,
+  my_solution_text,
+  answer_text,
   note_highlights,
   review_count,
   status,
@@ -177,10 +203,14 @@ SELECT
   id,
   subject,
   module,
+  module_id,
   title,
   error_reason,
+  error_reason_ids,
   difficulty,
   note,
+  my_solution_text,
+  answer_text,
   note_highlights,
   review_count,
   status,
@@ -203,6 +233,7 @@ async function ensureBackwardCompatibleColumns(db: SQLite.SQLiteDatabase): Promi
   await ensureReviewRecordsVoiceNoteColumn(db);
   await ensureTextHighlightColumns(db);
   await ensureLibraryColumns(db);
+  await ensureAddMistakeSupplementColumns(db);
   await ensureMistakesCollectedStatusSupport(db);
 }
 

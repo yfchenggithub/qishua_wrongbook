@@ -1,3 +1,4 @@
+export * from './addMistake';
 export * from './library';
 export * from './review';
 export * from './ui';
