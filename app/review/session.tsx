@@ -4,7 +4,6 @@ import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import {
   ActivityIndicator,
   Alert,
-  Animated,
   BackHandler,
   type GestureResponderEvent,
   Image,
@@ -24,19 +23,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AppToast,
   type AppToastType,
-  BrandHeader,
   calculateImagePreviewHeight,
   CardContainer,
-  FloatingBottomCta,
+  ExplanationTabs,
   ImagePreviewModal,
   type ImagePreviewModalImageActionItem,
   type ImagePreviewModalLongPressHelpers,
   PrimaryButton,
-  QuickAnchorNav,
-  type QuickAnchorNavItem,
+  ReviewFilterSheet,
+  ReviewHeader,
+  ReviewProgress,
+  ReviewResultBar,
   ScreenContainer,
   TextNoteEditorModal,
   TextNotePreview,
+  type ExplanationTab,
+  type ReviewQuickTarget,
 } from '@/src/components';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import {
@@ -55,7 +57,6 @@ import type { ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import {
   MusicBottomSheet,
-  MusicEntryButton,
   MusicMiniPlayer,
   useMusicInterruption,
 } from '@/src/music';
@@ -67,6 +68,7 @@ import * as ReviewSessionService from '@/src/services/ReviewSessionService';
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
 import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { prewarmTodayReviewPrintEnhanceCache } from '@/src/services/export/PrintEnhancePrewarmService';
+import { reviewSessionColors as reviewPalette } from '@/src/styles/reviewSessionTokens';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 import { areTextHighlightsEqual, normalizeTextHighlights } from '@/src/utils/textHighlights';
 
@@ -74,15 +76,13 @@ const PAGE_SCOPE = 'ReviewSessionPage';
 const TOAST_DURATION_DEFAULT = 2000;
 const TOAST_DURATION_LONG = 3200;
 const TOAST_DURATION_SHORT = 1400;
-const QUESTION_PREVIEW_MIN_HEIGHT = 112;
-const QUESTION_PREVIEW_MAX_HEIGHT = 228;
-const QUESTION_PREVIEW_EMPTY_HEIGHT = 148;
-const QUESTION_PREVIEW_FALLBACK_HEIGHT = 148;
+const QUESTION_PREVIEW_MIN_HEIGHT = 160;
+const QUESTION_PREVIEW_MAX_HEIGHT = 360;
+const QUESTION_PREVIEW_EMPTY_HEIGHT = 190;
+const QUESTION_PREVIEW_FALLBACK_HEIGHT = 220;
 const VOICE_PLAYBACK_END_BUFFER_MS = 280;
 const VOICE_RECORDING_MIN_DURATION_MS = 3000;
 const VOICE_RECORDING_MAX_DURATION_MS = 30 * 60 * 1000;
-const BUTTON_HINT_LIFT_DISTANCE = 4;
-const INLINE_MODULE_FILTER_OPTION_LIMIT = 3;
 
 type ToastType = AppToastType;
 type SessionState = 'loading' | 'empty' | 'error' | 'ready';
@@ -134,32 +134,6 @@ const EMPTY_RESULT_STATS: SessionResultStats = {
   fuzzy: 0,
   unknown: 0,
 };
-
-type SessionAnchorId = 'filter' | 'progress' | 'question' | 'solution' | 'voice' | 'text';
-
-const SESSION_ANCHOR_ACTIVE_OFFSET = 104;
-const SESSION_ANCHOR_SCROLL_OFFSET = spacing.sm;
-const SESSION_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET = 64;
-const SESSION_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET = 112;
-const SESSION_ANCHOR_HIGHLIGHT_DURATION_MS = 1200;
-
-const SESSION_ANCHOR_LABELS: Record<SessionAnchorId, string> = {
-  filter: '模块筛选',
-  progress: '当前题',
-  question: '题目图片',
-  solution: '我的做法',
-  voice: '语音讲解',
-  text: '文字讲解',
-};
-
-const SESSION_ANCHOR_ITEMS: readonly QuickAnchorNavItem<SessionAnchorId>[] = [
-  { id: 'filter', label: SESSION_ANCHOR_LABELS.filter, shortLabel: '筛选', icon: 'filter-list' },
-  { id: 'progress', label: SESSION_ANCHOR_LABELS.progress, shortLabel: '题目', icon: 'fact-check' },
-  { id: 'question', label: SESSION_ANCHOR_LABELS.question, shortLabel: '题图', icon: 'image' },
-  { id: 'solution', label: SESSION_ANCHOR_LABELS.solution, shortLabel: '做法', icon: 'edit-note' },
-  { id: 'voice', label: SESSION_ANCHOR_LABELS.voice, shortLabel: '语音', icon: 'record-voice-over' },
-  { id: 'text', label: SESSION_ANCHOR_LABELS.text, shortLabel: '文字', icon: 'article' },
-];
 
 const REVIEW_ACTIONS: {
   label: string;
@@ -240,44 +214,6 @@ function isQueueItemInModuleFilter(
   return normalizeModuleFilterValue(item.module) === moduleFilter;
 }
 
-function formatModuleFilterOptionText(option: ModuleFilterOption): string {
-  if (option.count <= 0) {
-    return option.label;
-  }
-  if (option.remainingCount <= 0) {
-    return `${option.label} \u5df2\u5b8c\u6210`;
-  }
-  return `${option.label} \u5269${option.remainingCount}/${option.count}`;
-}
-
-function formatModuleFilterAccessibilityLabel(option: ModuleFilterOption): string {
-  if (option.count <= 0) {
-    return `\u7b5b\u9009${option.label}\u6a21\u5757`;
-  }
-  if (option.remainingCount <= 0) {
-    return `\u7b5b\u9009${option.label}\u6a21\u5757\uff0c\u5df2\u5b8c\u6210\uff0c\u5171${option.count}\u9053`;
-  }
-  return `\u7b5b\u9009${option.label}\u6a21\u5757\uff0c\u5269${option.remainingCount}\u9053\uff0c\u5171${option.count}\u9053`;
-}
-
-function formatModuleFilterHint(option: ModuleFilterOption | null, selectedModuleFilter: ModuleFilterValue): string {
-  if (!option) {
-    return selectedModuleFilter === null
-      ? '\u5df2\u7b5b\u9009\uff1a\u663e\u793a\u5168\u90e8\u4eca\u65e5\u590d\u505a\u9898'
-      : `\u5df2\u7b5b\u9009\uff1a\u4ec5\u663e\u793a\u201c${selectedModuleFilter}\u201d\u6a21\u5757\u590d\u505a\u9898`;
-  }
-
-  if (option.remainingCount <= 0) {
-    return selectedModuleFilter === null
-      ? `\u5df2\u7b5b\u9009\uff1a\u5168\u90e8\u5df2\u5b8c\u6210\uff0c\u5171 ${option.count} \u9053\u4eca\u65e5\u590d\u505a\u9898`
-      : `\u5df2\u7b5b\u9009\uff1a\u201c${selectedModuleFilter}\u201d\u6a21\u5757\u5df2\u5b8c\u6210\uff0c\u5171 ${option.count} \u9053\u590d\u505a\u9898`;
-  }
-
-  return selectedModuleFilter === null
-    ? `\u5df2\u7b5b\u9009\uff1a\u5168\u90e8\u5269 ${option.remainingCount}/${option.count} \u9053\u4eca\u65e5\u590d\u505a\u9898`
-    : `\u5df2\u7b5b\u9009\uff1a\u201c${selectedModuleFilter}\u201d\u6a21\u5757\u5269 ${option.remainingCount}/${option.count} \u9053\u590d\u505a\u9898`;
-}
-
 function isCancelLikeMessage(input?: string): boolean {
   const normalized = typeof input === 'string' ? input.trim().toLowerCase() : '';
   return normalized.includes('cancel') || normalized.includes('取消');
@@ -287,31 +223,11 @@ function isPositiveFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
-function formatFileSize(fileSize: number): string {
-  if (fileSize < 1024) {
-    return `${fileSize} B`;
-  }
-  if (fileSize < 1024 * 1024) {
-    return `${Math.round(fileSize / 1024)} KB`;
-  }
-  return `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function createReviewSolutionEditId(mistakeId: string): string {
   const randomPart = Math.floor(Math.random() * 10000)
     .toString()
     .padStart(4, '0');
   return `review-solution-edit-${mistakeId}-${Date.now()}-${randomPart}`;
-}
-
-function getReviewActionSymbol(tone: 'known' | 'fuzzy' | 'unknown'): string {
-  if (tone === 'known') {
-    return '\u2713';
-  }
-  if (tone === 'fuzzy') {
-    return '?';
-  }
-  return '\u00D7';
 }
 
 function getStatsKeyForReviewResult(result: ReviewResult): SessionResultKey {
@@ -381,11 +297,12 @@ function TodayQuestionListSheet({
   onClose: () => void;
   onSelectItem: (item: ReviewSessionQueueItem) => void;
 }) {
+  const insets = useSafeAreaInsets();
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.questionListOverlay}>
         <Pressable style={styles.questionListBackdrop} onPress={onClose} />
-        <View style={styles.questionListSheet}>
+        <View style={[styles.questionListSheet, { paddingBottom: Math.max(insets.bottom, spacing.lg) }]}>
           <View style={styles.questionListHandle} />
           <View style={styles.questionListHeader}>
             <View style={styles.questionListHeaderTextWrap}>
@@ -468,77 +385,6 @@ function TodayQuestionListSheet({
                               : null,
                     ]}>
                     {status.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </View>
-    </Modal>
-  );
-}
-
-function ModuleFilterSheet({
-  visible,
-  options,
-  selectedValue,
-  onClose,
-  onSelectOption,
-}: {
-  visible: boolean;
-  options: ModuleFilterOption[];
-  selectedValue: ModuleFilterValue;
-  onClose: () => void;
-  onSelectOption: (value: ModuleFilterValue) => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={styles.questionListOverlay}>
-        <Pressable style={styles.questionListBackdrop} onPress={onClose} />
-        <View style={styles.questionListSheet}>
-          <View style={styles.questionListHandle} />
-          <View style={styles.questionListHeader}>
-            <View style={styles.questionListHeaderTextWrap}>
-              <Text style={styles.questionListTitle}>选择模块</Text>
-              <Text style={styles.questionListSubtitle}>{`共 ${options.length} 个筛选项`}</Text>
-            </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="关闭模块选择"
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.questionListCloseButton,
-                pressed ? styles.questionListCloseButtonPressed : null,
-              ]}>
-              <MaterialIcons name="close" size={22} color="#0F172A" />
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={styles.moduleFilterSheetScroll}
-            contentContainerStyle={styles.moduleFilterSheetContent}>
-            {options.map((option) => {
-              const selected = selectedValue === option.value;
-              return (
-                <Pressable
-                  key={option.key}
-                  accessibilityRole="button"
-                  accessibilityLabel={formatModuleFilterAccessibilityLabel(option)}
-                  onPress={() => onSelectOption(option.value)}
-                  style={({ pressed }) => [
-                    styles.moduleFilterSheetChip,
-                    selected ? styles.moduleFilterSheetChipSelected : null,
-                    pressed ? styles.moduleFilterChipPressed : null,
-                  ]}>
-                  <Text
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={1.1}
-                    style={[
-                      styles.moduleFilterChipText,
-                      selected ? styles.moduleFilterChipTextSelected : null,
-                    ]}>
-                    {formatModuleFilterOptionText(option)}
                   </Text>
                 </Pressable>
               );
@@ -730,10 +576,16 @@ function findNextPendingReviewIndexAfterSubmit(
 
 function QuestionImageCard({
   slot,
+  title,
+  module,
   onPreview,
+  onOpenDetail,
 }: {
   slot?: DetailImageSlot;
+  title: string;
+  module: string;
   onPreview?: (uri: string) => void;
+  onOpenDetail: () => void;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const [previewWidth, setPreviewWidth] = useState(0);
@@ -828,12 +680,21 @@ function QuestionImageCard({
   const loadFailed = hasUri && slot?.exists === true && imageFailed;
 
   return (
-    <CardContainer style={styles.questionCard} padding={spacing.lg}>
-      <View style={styles.sectionHeaderRow}>
-        <View style={styles.sectionIconWrap}>
-          <MaterialIcons name="image" size={20} color="#16A34A" />
+    <CardContainer style={styles.questionCard} padding={0}>
+      <View style={styles.questionHeading}>
+        <Text accessibilityRole="header" style={styles.questionMainTitle}>{title}</Text>
+        <View style={styles.questionMetaRow}>
+          <Text numberOfLines={2} style={styles.questionModule}>{module || '未分类'}</Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="进入当前错题详情页"
+            hitSlop={8}
+            onPress={onOpenDetail}
+            style={({ pressed }) => [styles.questionDetailButton, pressed && styles.questionDetailButtonPressed]}>
+            <Text style={styles.questionDetailText}>错题详情</Text>
+            <MaterialIcons name="chevron-right" size={17} color={reviewPalette.textSecondary} />
+          </Pressable>
         </View>
-        <Text style={styles.questionTitle}>题目图片</Text>
       </View>
       <View
         onLayout={handleQuestionImageLayout}
@@ -1002,17 +863,7 @@ function ReviewSolutionImageCard({
   const canEdit = hasImage && !imageFailed && !isBusy;
 
   return (
-    <CardContainer style={styles.solutionCard} padding={spacing.lg}>
-      <View style={styles.sectionHeaderRow}>
-        <View style={styles.solutionIconWrap}>
-          <MaterialIcons name="edit-note" size={21} color="#2563EB" />
-        </View>
-        <View style={styles.solutionHeaderTextWrap}>
-          <Text style={styles.solutionTitle}>我的做法（可选）</Text>
-          <Text style={styles.solutionDescription}>需要时拍，方便复盘错误过程</Text>
-        </View>
-      </View>
-
+    <View style={styles.solutionContent}>
       <View
         onLayout={handleImageLayout}
         style={[
@@ -1048,6 +899,7 @@ function ReviewSolutionImageCard({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="删除我的做法图片"
+              hitSlop={4}
               disabled={isBusy}
               onPress={onDelete}
               style={({ pressed }) => [
@@ -1062,8 +914,8 @@ function ReviewSolutionImageCard({
 
         {!hasImage ? (
           <View style={styles.solutionPlaceholder}>
-            <MaterialIcons name="photo-camera" size={28} color="#64748B" />
-            <Text style={styles.solutionPlaceholderText}>尚未选择图片</Text>
+            <MaterialIcons name="photo-camera" size={30} color={reviewPalette.textSecondary} />
+            <Text style={styles.solutionPlaceholderText}>添加解题过程</Text>
           </View>
         ) : null}
         {hasImage && imageFailed ? (
@@ -1079,11 +931,11 @@ function ReviewSolutionImageCard({
           onPress={onTakePhoto}
           style={({ pressed }) => [
             styles.solutionActionButton,
-            styles.solutionActionButtonPrimary,
             pressed && !isBusy && styles.solutionActionButtonPressed,
             isBusy && styles.disabledControl,
           ]}>
-          <Text numberOfLines={1} style={styles.solutionActionButtonPrimaryText}>{isBusy ? '处理中...' : '拍照'}</Text>
+          <MaterialIcons name="photo-camera" size={20} color={reviewPalette.green} />
+          <Text numberOfLines={1} style={styles.solutionActionButtonText}>{isBusy ? '处理中...' : '拍照'}</Text>
         </Pressable>
         <Pressable
           accessibilityRole="button"
@@ -1095,26 +947,25 @@ function ReviewSolutionImageCard({
             pressed && !isBusy && styles.solutionActionButtonPressed,
             isBusy && styles.disabledControl,
           ]}>
+          <MaterialIcons name="photo-library" size={20} color={reviewPalette.green} />
           <Text numberOfLines={1} style={styles.solutionActionButtonText}>{isBusy ? '处理中...' : '从相册选择'}</Text>
         </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="编辑我的做法"
-          disabled={!canEdit}
-          onPress={onEdit}
-          style={({ pressed }) => [
-            styles.solutionActionButton,
-            pressed && canEdit && styles.solutionActionButtonPressed,
-            !canEdit && styles.disabledControl,
-          ]}>
-          <Text numberOfLines={1} style={styles.solutionActionButtonText}>编辑</Text>
-        </Pressable>
+        {hasImage ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="编辑我的做法"
+            disabled={!canEdit}
+            onPress={onEdit}
+            style={({ pressed }) => [
+              styles.solutionEditButton,
+              pressed && canEdit && styles.solutionActionButtonPressed,
+              !canEdit && styles.disabledControl,
+            ]}>
+            <MaterialIcons name="edit" size={20} color={reviewPalette.textPrimary} />
+          </Pressable>
+        ) : null}
       </View>
-
-      {hasImage && typeof image?.fileSize === 'number' ? (
-        <Text style={styles.solutionFileSizeText}>大小：{formatFileSize(image.fileSize)}</Text>
-      ) : null}
-    </CardContainer>
+    </View>
   );
 }
 
@@ -1164,21 +1015,15 @@ export default function ReviewSessionPage() {
   const [reviewTextHighlights, setReviewTextHighlights] = useState<TextHighlightRange[]>([]);
   const [isReviewTextEditorVisible, setIsReviewTextEditorVisible] = useState(false);
   const [musicSheetVisible, setMusicSheetVisible] = useState(false);
+  const [activeExplanationTab, setActiveExplanationTab] = useState<ExplanationTab>('solution');
   const [reviewSolutionImage, setReviewSolutionImage] = useState<LocalImage | null>(null);
   const [isReviewSolutionImageBusy, setIsReviewSolutionImageBusy] = useState(false);
   const [actionBarHeight, setActionBarHeight] = useState(0);
-  const [activeAnchorId, setActiveAnchorId] = useState<SessionAnchorId>('filter');
-  const [highlightedAnchorId, setHighlightedAnchorId] = useState<SessionAnchorId | null>(null);
-  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
-  const [isAnchorNavCollapsed, setIsAnchorNavCollapsed] = useState(true);
 
   const queueRequestIdRef = useRef(0);
   const currentRequestIdRef = useRef(0);
   const sessionScrollRef = useRef<ScrollView | null>(null);
-  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
-  const anchorLayoutsRef = useRef<Partial<Record<SessionAnchorId, number>>>({});
-  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const buttonsHintAnim = useRef(new Animated.Value(0)).current;
+  const sectionLayoutsRef = useRef<Partial<Record<'question' | 'explanation', number>>>({});
   const isScrollDraggingRef = useRef(false);
   const lastScrollYRef = useRef(0);
   const maxScrollYRef = useRef(0);
@@ -1194,6 +1039,7 @@ export default function ReviewSessionPage() {
   const voiceReplacePendingUriRef = useRef<string | null>(null);
   const voiceStopInProgressRef = useRef(false);
   const voiceMusicInterruptionActiveRef = useRef(false);
+  const submitLockRef = useRef(false);
   const allowNextLeaveRef = useRef(false);
   const pendingReviewSolutionEditIdRef = useRef<string | null>(null);
   const currentIndexRef = useRef(0);
@@ -1261,33 +1107,6 @@ export default function ReviewSessionPage() {
     return options;
   }, [queue, submittedMistakeIds]);
 
-  const inlineModuleFilterOptions = useMemo<ModuleFilterOption[]>(() => {
-    if (moduleFilterOptions.length <= INLINE_MODULE_FILTER_OPTION_LIMIT) {
-      return moduleFilterOptions;
-    }
-
-    const selectedOption = moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
-    const inlineOptions: ModuleFilterOption[] = [];
-    const addOption = (option: ModuleFilterOption | null | undefined) => {
-      if (!option || inlineOptions.some((item) => item.key === option.key)) {
-        return;
-      }
-      if (inlineOptions.length < INLINE_MODULE_FILTER_OPTION_LIMIT) {
-        inlineOptions.push(option);
-      }
-    };
-
-    addOption(moduleFilterOptions[0]);
-    addOption(selectedOption);
-    for (const option of moduleFilterOptions.slice(1)) {
-      addOption(option);
-    }
-
-    return inlineOptions;
-  }, [moduleFilterOptions, selectedModuleFilter]);
-
-  const shouldShowModuleFilterMore = moduleFilterOptions.length > inlineModuleFilterOptions.length;
-
   const currentFilterQueue = useMemo(
     () => queue.filter((item) => isQueueItemInModuleFilter(item, selectedModuleFilter)),
     [queue, selectedModuleFilter],
@@ -1299,12 +1118,6 @@ export default function ReviewSessionPage() {
     [currentFilterQueue, submittedMistakeIds],
   );
   const selectedModuleLabel = selectedModuleFilter ?? '全部';
-  const selectedModuleFilterOption =
-    moduleFilterOptions.find((option) => option.value === selectedModuleFilter) ?? null;
-  const moduleFilterHintText = formatModuleFilterHint(
-    selectedModuleFilterOption,
-    selectedModuleFilter,
-  );
   const currentFilterItemIndex = currentQueueItem
     ? currentFilterQueue.findIndex((item) => item.id === currentQueueItem.id)
     : -1;
@@ -1318,10 +1131,8 @@ export default function ReviewSessionPage() {
   }, [currentIndex]);
 
   useEffect(() => {
-    setActiveAnchorId('filter');
-    setHighlightedAnchorId(null);
-    setIsFloatingAnchorVisible(false);
-    setIsAnchorNavCollapsed(true);
+    setActiveExplanationTab('solution');
+    sectionLayoutsRef.current = {};
   }, [currentQueueItemId]);
 
   const resetEdgePullNavigationState = useCallback(() => {
@@ -1330,88 +1141,31 @@ export default function ReviewSessionPage() {
     bottomEdgePullDistanceRef.current = 0;
   }, []);
 
-  const handleAnchorLayout = useCallback((anchorId: SessionAnchorId, event: LayoutChangeEvent) => {
+  const handleSectionLayout = useCallback((section: 'question' | 'explanation', event: LayoutChangeEvent) => {
     const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
-    if (anchorLayoutsRef.current[anchorId] === nextY) {
+    if (sectionLayoutsRef.current[section] === nextY) {
       return;
     }
 
-    anchorLayoutsRef.current = {
-      ...anchorLayoutsRef.current,
-      [anchorId]: nextY,
+    sectionLayoutsRef.current = {
+      ...sectionLayoutsRef.current,
+      [section]: nextY,
     };
   }, []);
 
-  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    anchorNavLayoutRef.current = {
-      y: Math.max(0, Math.round(y)),
-      height: Math.max(0, Math.round(height)),
-    };
-  }, []);
-
-  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): SessionAnchorId => {
-    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
-      return 'text';
+  const handleQuickNavigate = useCallback((target: ReviewQuickTarget) => {
+    setModuleFilterSheetVisible(false);
+    if (target !== 'question') {
+      setActiveExplanationTab(target);
     }
-
-    const thresholdY = scrollY + SESSION_ANCHOR_ACTIVE_OFFSET;
-    let nextAnchorId: SessionAnchorId = 'filter';
-    for (const item of SESSION_ANCHOR_ITEMS) {
-      const anchorY = anchorLayoutsRef.current[item.id];
-      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
-        nextAnchorId = item.id;
-      }
-    }
-
-    return nextAnchorId;
-  }, []);
-
-  const handleAnchorPress = useCallback(
-    (anchorId: SessionAnchorId) => {
-      const targetY = anchorLayoutsRef.current[anchorId];
-      const label = SESSION_ANCHOR_LABELS[anchorId];
-      if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试。`, 'anchor', TOAST_DURATION_SHORT);
-        return;
-      }
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const floatingTriggerY = anchorNavLayout
-        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : Number.POSITIVE_INFINITY;
-      const willShowFloatingAnchor =
-        Math.max(0, targetY - SESSION_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
-
-      let scrollOffset: number = SESSION_ANCHOR_SCROLL_OFFSET;
-      if (isFloatingAnchorVisible || willShowFloatingAnchor) {
-        scrollOffset = isAnchorNavCollapsed
-          ? SESSION_ANCHOR_FLOATING_COLLAPSED_SCROLL_OFFSET
-          : SESSION_ANCHOR_FLOATING_EXPANDED_SCROLL_OFFSET;
-      }
-
+    const section = target === 'question' ? 'question' : 'explanation';
+    const targetY = sectionLayoutsRef.current[section];
+    if (typeof targetY === 'number') {
       sessionScrollRef.current?.scrollTo({
-        y: Math.max(0, targetY - scrollOffset),
+        y: Math.max(0, targetY - spacing.md),
         animated: true,
       });
-      setActiveAnchorId(anchorId);
-      setHighlightedAnchorId(anchorId);
-
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-      }
-      anchorHighlightTimerRef.current = setTimeout(() => {
-        setHighlightedAnchorId(null);
-        anchorHighlightTimerRef.current = null;
-      }, SESSION_ANCHOR_HIGHLIGHT_DURATION_MS);
-
-      showToast(`已跳转到 ${label}`, 'anchor', TOAST_DURATION_SHORT);
-    },
-    [isAnchorNavCollapsed, isFloatingAnchorVisible, showToast],
-  );
-
-  const handleToggleAnchorNavCollapsed = useCallback(() => {
-    setIsAnchorNavCollapsed((current) => !current);
+    }
   }, []);
 
   const handleTouchStart = useCallback((event: GestureResponderEvent) => {
@@ -1501,18 +1255,6 @@ export default function ReviewSessionPage() {
       const maxOffsetY = Math.max(0, contentSize.height - layoutMeasurement.height);
       lastScrollYRef.current = y;
       maxScrollYRef.current = maxOffsetY;
-      const nextAnchorId = resolveActiveAnchorId(y, maxOffsetY);
-      setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const nextFloatingAnchorVisible = anchorNavLayout
-        ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : false;
-      setIsFloatingAnchorVisible((current) =>
-        current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
-      if (!nextFloatingAnchorVisible) {
-        setIsAnchorNavCollapsed((current) => (current ? current : true));
-      }
 
       if (scrollBoundaryLockRef.current === 'top' && y > TOP_PULL_RELEASE_DISTANCE) {
         scrollBoundaryLockRef.current = null;
@@ -1524,7 +1266,7 @@ export default function ReviewSessionPage() {
         scrollBoundaryLockRef.current = null;
       }
     },
-    [resolveActiveAnchorId],
+    [],
   );
 
   const handleScrollEndDrag = useCallback(
@@ -2915,10 +2657,6 @@ export default function ReviewSessionPage() {
 
   useEffect(
     () => () => {
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-        anchorHighlightTimerRef.current = null;
-      }
       clearVoicePlaybackResetTimer();
       void VoiceNoteService.stopPlaying();
       void VoiceNoteService.stopAndDiscardRecording();
@@ -3146,6 +2884,7 @@ export default function ReviewSessionPage() {
         !currentMeta ||
         isLoadingCurrent ||
         isSubmitting ||
+        submitLockRef.current ||
         isCompleted ||
         isVoiceBusy ||
         isReviewSolutionImageBusy
@@ -3158,13 +2897,14 @@ export default function ReviewSessionPage() {
         return;
       }
 
-      if (isVoicePlaying) {
-        await stopVoicePlayback(false);
-      }
-
+      submitLockRef.current = true;
       Keyboard.dismiss();
       setIsSubmitting(true);
       try {
+        if (isVoicePlaying) {
+          await stopVoicePlayback(false);
+        }
+
         const existingSubmittedEntry = submittedReviewEntries[currentQueueItem.id] ?? null;
         if (existingSubmittedEntry) {
           const updateResult = await ReviewSessionService.updateTodayReviewResult({
@@ -3286,7 +3026,7 @@ export default function ReviewSessionPage() {
             'success',
           );
         }
-        setCurrentIndex(nextPendingIndex ?? currentIndex);
+        setCurrentIndex(nextPendingIndex ?? (isAllSubmitted ? totalCount : currentIndex));
         if (nextPendingIndex !== null) {
           setReviewSolutionImage(null);
           setVoiceNote(null);
@@ -3309,6 +3049,7 @@ export default function ReviewSessionPage() {
         });
         showToast('保存失败，请稍后重试', 'error', TOAST_DURATION_LONG);
       } finally {
+        submitLockRef.current = false;
         setIsSubmitting(false);
       }
     },
@@ -3381,14 +3122,13 @@ export default function ReviewSessionPage() {
     && hasActiveReviewItem
     && !isLoadingCurrent
     && !currentErrorMessage;
-  const actionBarBottomOffset = Math.max(insets.bottom + spacing.xs, spacing.xs);
-  const fallbackActionBarHeight = 112;
+  const fallbackActionBarHeight = 118 + insets.bottom;
   const effectiveActionBarHeight = actionBarHeight > 0 ? actionBarHeight : fallbackActionBarHeight;
   const contentBottomPadding = showResultActions
-    ? actionBarBottomOffset + effectiveActionBarHeight + spacing.lg
+    ? effectiveActionBarHeight + spacing.xl
     : spacing.xl;
   const toastBottomOffset = showResultActions
-    ? actionBarBottomOffset + effectiveActionBarHeight + spacing.sm
+    ? effectiveActionBarHeight + spacing.sm
     : insets.bottom + spacing.lg;
   const voiceIconName = isVoiceRecordingPaused ? 'pause' : isVoiceRecording ? 'mic' : 'record-voice-over';
   const voiceTitleText = isVoiceRecordingPaused ? '录音已暂停' : isVoiceRecording ? '正在录音' : '语音讲解';
@@ -3396,17 +3136,18 @@ export default function ReviewSessionPage() {
     ? '已暂停，想好后点继续，当前录音不会丢'
     : '说出关键条件、解题思路和容易错的地方';
   const voiceRecordingToggleText = isVoiceBusy ? '处理中...' : isVoiceRecordingPaused ? '继续' : '暂停';
-  const shouldShowSessionAnchorNav = sessionState === 'ready' && !isCompleted;
-  const shouldShowFloatingAnchorNav = shouldShowSessionAnchorNav && isFloatingAnchorVisible;
-  const floatingAnchorTop = Math.max(insets.top + spacing.sm, spacing.md);
+  const currentModule = currentMeta?.module ?? currentQueueItem?.module ?? '';
 
   return (
     <View style={styles.pageRoot}>
-      <View pointerEvents="none" style={styles.pageGlowTop} />
-      <View pointerEvents="none" style={styles.pageGlowBottom} />
+      <ReviewHeader
+        onExit={handleRequestExit}
+        onOpenFilter={() => setModuleFilterSheetVisible(true)}
+      />
       <ScreenContainer
         scroll
         scrollRef={sessionScrollRef}
+        safeAreaEdges={['bottom']}
         style={styles.screenSafeArea}
         contentStyle={[styles.screenContent, { paddingBottom: contentBottomPadding }]}
         onScroll={handleScroll}
@@ -3415,32 +3156,6 @@ export default function ReviewSessionPage() {
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}>
-        <Pressable style={styles.exitButton} onPress={handleRequestExit}>
-          <Text style={styles.exitButtonText}>退出今日复做</Text>
-        </Pressable>
-
-        <View style={styles.headerRow}>
-          <BrandHeader
-            title="今日复做"
-            subtitle=""
-            style={styles.brandHeader}
-            titleStyle={styles.brandHeaderTitle}
-            subtitleStyle={styles.brandHeaderSubtitleHidden}
-          />
-          <MusicEntryButton onPress={() => setMusicSheetVisible(true)} />
-        </View>
-
-        {shouldShowSessionAnchorNav ? (
-          <View onLayout={handleAnchorNavLayout}>
-            <QuickAnchorNav
-              items={SESSION_ANCHOR_ITEMS}
-              activeAnchorId={activeAnchorId}
-              horizontalCompact
-              onAnchorPress={handleAnchorPress}
-            />
-          </View>
-        ) : null}
-
         {sessionState === 'loading' ? (
           <CardContainer style={styles.stateCard} padding={spacing.lg}>
             <ActivityIndicator size="small" color={colors.textPrimary} />
@@ -3496,118 +3211,14 @@ export default function ReviewSessionPage() {
 
         {sessionState === 'ready' && !isCompleted ? (
           <>
-            <View onLayout={(event) => handleAnchorLayout('filter', event)}>
-              <CardContainer
-                style={[
-                  styles.moduleFilterCard,
-                  highlightedAnchorId === 'filter' ? styles.anchorTargetHighlighted : null,
-                ]}
-                padding={spacing.md}>
-                <View style={styles.moduleFilterHeaderRow}>
-                  <MaterialIcons name="filter-list" size={20} color="#334155" />
-                  <Text style={styles.moduleFilterTitle}>模块筛选</Text>
-                </View>
-                <View style={styles.moduleFilterOptions}>
-                  {inlineModuleFilterOptions.map((option) => {
-                    const selected = selectedModuleFilter === option.value;
-                    return (
-                      <Pressable
-                        key={option.key}
-                        accessibilityRole="button"
-                        accessibilityLabel={formatModuleFilterAccessibilityLabel(option)}
-                        onPress={() => handleSelectModuleFilter(option.value)}
-                        style={({ pressed }) => [
-                          styles.moduleFilterChip,
-                          selected ? styles.moduleFilterChipSelected : null,
-                          pressed ? styles.moduleFilterChipPressed : null,
-                        ]}>
-                        <Text
-                          numberOfLines={1}
-                          maxFontSizeMultiplier={1.1}
-                          style={[
-                            styles.moduleFilterChipText,
-                            selected ? styles.moduleFilterChipTextSelected : null,
-                          ]}>
-                          {formatModuleFilterOptionText(option)}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                  {shouldShowModuleFilterMore ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="查看更多模块"
-                      onPress={() => setModuleFilterSheetVisible(true)}
-                      style={({ pressed }) => [
-                        styles.moduleFilterMoreButton,
-                        pressed ? styles.moduleFilterChipPressed : null,
-                      ]}>
-                      <MaterialIcons name="more-horiz" size={18} color="#334155" />
-                      <Text numberOfLines={1} style={styles.moduleFilterMoreText}>更多</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-                <Text style={styles.moduleFilterHint}>{moduleFilterHintText}</Text>
-              </CardContainer>
-            </View>
-
-
             {canShowCurrentReviewContent ? (
-              <View onLayout={(event) => handleAnchorLayout('progress', event)}>
-                <CardContainer
-                  style={[
-                    styles.progressCard,
-                    highlightedAnchorId === 'progress' ? styles.anchorTargetHighlighted : null,
-                  ]}
-                  padding={spacing.lg}>
-                  <View style={styles.progressMainRow}>
-                    <View style={styles.progressNumberRow}>
-                      <Text style={styles.progressNumberCurrent}>{progressCurrent}</Text>
-                      <Text style={styles.progressNumberSlash}> / </Text>
-                      <Text style={styles.progressNumberTotal}>{progressTotal}</Text>
-                    </View>
-                    <View style={styles.progressActionRow}>
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="打开今日题单"
-                        onPress={() => setQuestionListVisible(true)}
-                        style={({ pressed }) => [
-                          styles.questionListEntryButton,
-                          pressed ? styles.questionListEntryButtonPressed : null,
-                        ]}>
-                        <MaterialIcons name="format-list-bulleted" size={16} color="#334155" />
-                        <Text style={styles.questionListEntryText}>题单</Text>
-                      </Pressable>
-                      <View style={styles.reviewPill}>
-                        <Text style={styles.reviewPillText}>{`第 ${reviewRound} 刷`}</Text>
-                      </View>
-                    </View>
-                  </View>
-                  <View style={styles.progressDivider} />
-                  <Text style={styles.progressTitle} numberOfLines={2}>
-                    {currentDisplayTitle}
-                  </Text>
-                  <View style={styles.progressMetaRow}>
-                    <Text style={styles.progressModule} numberOfLines={1}>
-                      {currentMeta?.module ?? currentQueueItem?.module ?? ''}
-                    </Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="进入当前错题详情页"
-                      onPress={handleOpenCurrentDetail}
-                      style={({ pressed }) => [
-                        styles.detailEntryButton,
-                        pressed ? styles.detailEntryButtonPressed : null,
-                      ]}>
-                      <Text style={styles.detailEntryText} numberOfLines={1}>进入详情页</Text>
-                      <MaterialIcons name="chevron-right" size={18} color="#64748B" />
-                    </Pressable>
-                  </View>
-                </CardContainer>
-              </View>
+              <ReviewProgress
+                current={progressCurrent}
+                total={progressTotal}
+                round={reviewRound}
+                module={currentModule}
+              />
             ) : null}
-
-
             {canShowCurrentReviewContent && isLoadingCurrent ? (
               <CardContainer style={styles.stateCard} padding={spacing.lg}>
                 <ActivityIndicator size="small" color={colors.textPrimary} />
@@ -3640,189 +3251,192 @@ export default function ReviewSessionPage() {
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
               <View
-                style={highlightedAnchorId === 'question' ? styles.anchorSectionHighlighted : null}
-                onLayout={(event) => handleAnchorLayout('question', event)}>
-                <QuestionImageCard slot={currentQuestionSlot} onPreview={handleOpenQuestionPreview} />
+                onLayout={(event) => handleSectionLayout('question', event)}>
+                <QuestionImageCard
+                  slot={currentQuestionSlot}
+                  title={currentDisplayTitle}
+                  module={currentModule}
+                  onPreview={handleOpenQuestionPreview}
+                  onOpenDetail={handleOpenCurrentDetail}
+                />
               </View>
             ) : null}
 
             {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
               <View
-                style={highlightedAnchorId === 'solution' ? styles.anchorSectionHighlighted : null}
-                onLayout={(event) => handleAnchorLayout('solution', event)}>
-                <ReviewSolutionImageCard
-                  image={reviewSolutionImage}
-                  isBusy={isReviewSolutionImageBusy || isSubmitting || isVoiceRecording || isVoiceBusy}
-                  onTakePhoto={() => {
-                    void saveReviewSolutionImage('camera');
-                  }}
-                  onPickImage={() => {
-                    void saveReviewSolutionImage('album');
-                  }}
-                  onEdit={handleEditReviewSolutionImage}
-                  onDelete={() => {
-                    void deleteReviewSolutionImage();
-                  }}
-                  onPreview={handleOpenReviewSolutionPreview}
-                />
-              </View>
-            ) : null}
+                onLayout={(event) => handleSectionLayout('explanation', event)}>
+                <ExplanationTabs
+                  activeTab={activeExplanationTab}
+                  onChange={setActiveExplanationTab}>
+                  {activeExplanationTab === 'solution' ? (
+                    <ReviewSolutionImageCard
+                      image={reviewSolutionImage}
+                      isBusy={isReviewSolutionImageBusy || isSubmitting || isVoiceRecording || isVoiceBusy}
+                      onTakePhoto={() => {
+                        void saveReviewSolutionImage('camera');
+                      }}
+                      onPickImage={() => {
+                        void saveReviewSolutionImage('album');
+                      }}
+                      onEdit={handleEditReviewSolutionImage}
+                      onDelete={() => {
+                        void deleteReviewSolutionImage();
+                      }}
+                      onPreview={handleOpenReviewSolutionPreview}
+                    />
+                  ) : null}
 
-            {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
-              <View onLayout={(event) => handleAnchorLayout('voice', event)}>
-              <CardContainer
-                style={[
-                  styles.voiceCard,
-                  highlightedAnchorId === 'voice' ? styles.anchorTargetHighlighted : null,
-                ]}
-                padding={spacing.lg}>
-                <View style={styles.voiceHeaderRow}>
-                  <View style={styles.voiceIconWrap}>
-                    <MaterialIcons name={voiceIconName} size={19} color="#0F766E" />
-                  </View>
-                  <View style={styles.voiceHeaderTextWrap}>
-                    <Text style={styles.voiceTitle}>{voiceTitleText}</Text>
-                    {!isVoiceRecording && !voiceNote ? (
-                      <Text style={styles.voiceDescription}>
-                        {'讲一遍你的思路，下次更容易想起来'}
-                      </Text>
-                    ) : null}
-                  </View>
-                </View>
+                  {activeExplanationTab === 'voice' ? (
+                    <View style={styles.voiceContent}>
+                      {isVoiceRecording ? (
+                        <View style={styles.voiceRecordingPanel}>
+                          <View style={styles.voiceStatusRow}>
+                            <View style={styles.voiceIconWrap}>
+                              <MaterialIcons name={voiceIconName} size={20} color={reviewPalette.green} />
+                            </View>
+                            <View style={styles.voiceHeaderTextWrap}>
+                              <Text style={styles.voiceTitle}>{voiceTitleText}</Text>
+                              <Text style={styles.voiceHintText}>{voiceRecordingHintText}</Text>
+                            </View>
+                            <Text style={styles.voiceTimerText}>{formatDurationMs(recordingElapsedMs)}</Text>
+                          </View>
+                          <View style={styles.voiceActionRow}>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isVoiceBusy}
+                              onPress={() => {
+                                if (isVoiceRecordingPaused) {
+                                  void resumeVoiceRecording();
+                                  return;
+                                }
+                                void pauseVoiceRecording();
+                              }}
+                              style={({ pressed }) => [
+                                styles.voiceActionButton,
+                                styles.voiceActionButtonPlay,
+                                (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                              ]}>
+                              <Text style={styles.voiceActionButtonText}>{voiceRecordingToggleText}</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isVoiceBusy}
+                              onPress={() => {
+                                void stopAndSaveVoiceRecording();
+                              }}
+                              style={({ pressed }) => [
+                                styles.voiceActionButton,
+                                styles.voiceActionButtonPrimary,
+                                (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                              ]}>
+                              <Text style={styles.voiceActionButtonPrimaryText}>
+                                {isVoiceBusy ? '处理中...' : '停止并保存'}
+                              </Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      ) : null}
 
-                {isVoiceRecording ? (
-                  <>
-                    <Text style={styles.voiceTimerText}>{formatDurationMs(recordingElapsedMs)}</Text>
-                    <Text style={styles.voiceHintText}>{voiceRecordingHintText}</Text>
-                    <View style={styles.voiceActionRow}>
-                      <Pressable
-                        disabled={isVoiceBusy}
-                        onPress={() => {
-                          if (isVoiceRecordingPaused) {
-                            void resumeVoiceRecording();
-                            return;
-                          }
-                          void pauseVoiceRecording();
-                        }}
-                        style={({ pressed }) => [
-                          styles.voiceActionButton,
-                          styles.voiceActionButtonPlay,
-                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                        ]}>
-                        <Text style={styles.voiceActionButtonText}>{voiceRecordingToggleText}</Text>
-                      </Pressable>
-                      <Pressable
-                        disabled={isVoiceBusy}
-                        onPress={() => {
-                          void stopAndSaveVoiceRecording();
-                        }}
-                        style={({ pressed }) => [
-                          styles.voiceActionButton,
-                          styles.voiceActionButtonDanger,
-                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                        ]}>
-                        <Text style={styles.voiceActionButtonDangerText}>
-                          {isVoiceBusy ? '处理中...' : '停止并保存'}
-                        </Text>
-                      </Pressable>
+                      {!isVoiceRecording && !voiceNote ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="录制语音讲解"
+                          disabled={isVoiceBusy}
+                          onPress={() => {
+                            void startVoiceRecording(false);
+                          }}
+                          style={({ pressed }) => [
+                            styles.voiceEmptyButton,
+                            (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                          ]}>
+                          <View style={styles.voiceEmptyIcon}>
+                            <MaterialIcons name="mic-none" size={25} color={reviewPalette.green} />
+                          </View>
+                          <View style={styles.voiceEmptyTextWrap}>
+                            <Text style={styles.voiceEmptyTitle}>
+                              {isVoiceBusy ? '准备中...' : '录制讲解'}
+                            </Text>
+                            <Text style={styles.voiceDescription}>讲一遍思路，下次更容易想起来</Text>
+                          </View>
+                          <MaterialIcons name="chevron-right" size={21} color={reviewPalette.textMuted} />
+                        </Pressable>
+                      ) : null}
+
+                      {!isVoiceRecording && voiceNote ? (
+                        <>
+                          <View style={styles.voiceSavedRow}>
+                            <View style={styles.voiceSavedIcon}>
+                              <MaterialIcons name="graphic-eq" size={22} color={reviewPalette.green} />
+                            </View>
+                            <View style={styles.voiceSavedTextWrap}>
+                              <Text style={styles.voiceSavedTitle}>已录制讲解</Text>
+                              <Text style={styles.voiceDurationText}>{formatDurationMs(voiceNote.durationMs)}</Text>
+                            </View>
+                          </View>
+                          <View style={styles.voiceActionRow}>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isVoiceBusy}
+                              onPress={() => {
+                                void playVoiceNote();
+                              }}
+                              style={({ pressed }) => [
+                                styles.voiceActionButton,
+                                styles.voiceActionButtonPlay,
+                                (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                              ]}>
+                              <MaterialIcons
+                                name={isVoicePlaying ? 'stop' : 'play-arrow'}
+                                size={19}
+                                color={reviewPalette.green}
+                              />
+                              <Text style={styles.voiceActionButtonText}>
+                                {isVoicePlaying ? '停止' : '播放'}
+                              </Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isVoiceBusy}
+                              onPress={confirmRerecordVoiceNote}
+                              style={({ pressed }) => [
+                                styles.voiceActionButton,
+                                (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                              ]}>
+                              <Text style={styles.voiceActionButtonText}>重录</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isVoiceBusy}
+                              onPress={confirmDeleteVoiceNote}
+                              style={({ pressed }) => [
+                                styles.voiceDeleteButton,
+                                (pressed || isVoiceBusy) && styles.voiceButtonPressed,
+                              ]}>
+                              <MaterialIcons name="delete-outline" size={20} color={reviewPalette.red} />
+                            </Pressable>
+                          </View>
+                        </>
+                      ) : null}
                     </View>
-                  </>
-                ) : null}
+                  ) : null}
 
-                {!isVoiceRecording && !voiceNote ? (
-                  <Pressable
-                    disabled={isVoiceBusy}
-                    onPress={() => {
-                      void startVoiceRecording(false);
-                    }}
-                    style={({ pressed }) => [
-                      styles.voiceMainButton,
-                      (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                    ]}>
-                    <Text style={styles.voiceMainButtonText}>
-                      {isVoiceBusy ? '准备中...' : '录制讲解'}
-                    </Text>
-                  </Pressable>
-                ) : null}
-
-                {!isVoiceRecording && voiceNote ? (
-                  <>
-                    <Text style={styles.voiceDurationText}>
-                      {`时长 ${formatDurationMs(voiceNote.durationMs)}`}
-                    </Text>
-                    <View style={styles.voiceActionRow}>
-                      <Pressable
-                        disabled={isVoiceBusy}
-                        onPress={() => {
-                          void playVoiceNote();
-                        }}
-                        style={({ pressed }) => [
-                          styles.voiceActionButton,
-                          styles.voiceActionButtonPlay,
-                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                        ]}>
-                        <Text style={styles.voiceActionButtonText}>
-                          {isVoicePlaying ? '停止播放' : '播放'}
-                        </Text>
-                      </Pressable>
-                      <Pressable
-                        disabled={isVoiceBusy}
-                        onPress={confirmRerecordVoiceNote}
-                        style={({ pressed }) => [
-                          styles.voiceActionButton,
-                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                        ]}>
-                        <Text style={styles.voiceActionButtonText}>重录</Text>
-                      </Pressable>
-                      <Pressable
-                        disabled={isVoiceBusy}
-                        onPress={confirmDeleteVoiceNote}
-                        style={({ pressed }) => [
-                          styles.voiceActionButton,
-                          styles.voiceActionButtonDanger,
-                          (pressed || isVoiceBusy) && styles.voiceButtonPressed,
-                        ]}>
-                        <Text style={styles.voiceActionButtonDangerText}>删除</Text>
-                      </Pressable>
-                    </View>
-                  </>
-                ) : null}
-              </CardContainer>
-              </View>
-            ) : null}
-
-            {canShowCurrentReviewContent && !isLoadingCurrent && !currentErrorMessage && currentQueueItem ? (
-              <View onLayout={(event) => handleAnchorLayout('text', event)}>
-              <CardContainer
-                style={[
-                  styles.reviewTextCard,
-                  highlightedAnchorId === 'text' ? styles.anchorTargetHighlighted : null,
-                ]}
-                padding={spacing.lg}>
-                <View style={styles.reviewTextHeaderRow}>
-                  <View style={styles.reviewTextIconWrap}>
-                    <MaterialIcons name="edit-note" size={21} color="#7C3AED" />
-                  </View>
-                  <View style={styles.reviewTextHeaderTextWrap}>
-                    <Text style={styles.reviewTextTitle}>文字讲解</Text>
-                    <Text style={styles.reviewTextDescription}>
-                      写下关键条件、解题思路和容易错的地方
-                    </Text>
-                  </View>
-                </View>
-
-                <TextNotePreview
-                  value={reviewTextNote}
-                  emptyText="尚未添加文字讲解"
-                  maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
-                  accessibilityLabel={`第 ${currentMeta?.nextReviewIndex ?? currentQueueItem.nextReviewIndex} 刷文字讲解`}
-                  disabled={isSubmitting || isVoiceRecording || isVoiceBusy}
-                  onOpen={handleOpenReviewTextEditor}
-                  highlights={reviewTextHighlights}
-                  style={styles.reviewTextPreview}
-                  textStyle={styles.reviewTextPreviewText}
-                />
-              </CardContainer>
+                  {activeExplanationTab === 'text' ? (
+                    <TextNotePreview
+                      value={reviewTextNote}
+                      emptyText="点击添加文字讲解"
+                      maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
+                      accessibilityLabel={`第 ${currentMeta?.nextReviewIndex ?? currentQueueItem.nextReviewIndex} 刷文字讲解`}
+                      disabled={isSubmitting || isVoiceRecording || isVoiceBusy}
+                      onOpen={handleOpenReviewTextEditor}
+                      openOnSinglePress
+                      hintText="点击查看和编辑"
+                      numberOfLines={5}
+                      highlights={reviewTextHighlights}
+                      style={styles.reviewTextPreview}
+                      textStyle={styles.reviewTextPreviewText}
+                    />
+                  ) : null}
+                </ExplanationTabs>
               </View>
             ) : null}
 
@@ -3833,25 +3447,6 @@ export default function ReviewSessionPage() {
           </>
         ) : null}
       </ScreenContainer>
-
-      {shouldShowFloatingAnchorNav ? (
-        <View
-          pointerEvents="box-none"
-          style={[
-            styles.floatingAnchorWrap,
-            { top: floatingAnchorTop },
-          ]}>
-          <QuickAnchorNav
-            items={SESSION_ANCHOR_ITEMS}
-            activeAnchorId={activeAnchorId}
-            collapsed={isAnchorNavCollapsed}
-            floating
-            horizontalCompact
-            onToggleCollapsed={handleToggleAnchorNavCollapsed}
-            onAnchorPress={handleAnchorPress}
-          />
-        </View>
-      ) : null}
 
       <TodayQuestionListSheet
         visible={questionListVisible}
@@ -3864,14 +3459,19 @@ export default function ReviewSessionPage() {
         onSelectItem={handleSelectQuestionListItem}
       />
 
-      <ModuleFilterSheet
+      <ReviewFilterSheet
         visible={moduleFilterSheetVisible}
         options={moduleFilterOptions}
         selectedValue={selectedModuleFilter}
         onClose={() => setModuleFilterSheetVisible(false)}
-        onSelectOption={(value) => {
+        onSelectModule={(value) => {
           setModuleFilterSheetVisible(false);
           handleSelectModuleFilter(value);
+        }}
+        onNavigate={handleQuickNavigate}
+        onOpenQuestionList={() => {
+          setModuleFilterSheetVisible(false);
+          setQuestionListVisible(true);
         }}
       />
 
@@ -3910,54 +3510,21 @@ export default function ReviewSessionPage() {
       />
 
       {showResultActions ? (
-        <FloatingBottomCta
-          bottom={actionBarBottomOffset}
-          hintText="顶部下拉上一题 · 底部上拉下一题 · 选择结果保存"
+        <ReviewResultBar
+          bottomInset={insets.bottom}
+          actions={REVIEW_ACTIONS}
+          disabled={isSubmitting || isReviewSolutionImageBusy || isVoiceBusy}
+          busy={isSubmitting || isReviewSolutionImageBusy}
+          onSelect={(value) => {
+            const action = REVIEW_ACTIONS.find((item) => item.value === value);
+            if (action) {
+              void handleSelectResult(action.value, action.statsKey);
+            }
+          }}
           onHeightChange={(nextHeight) => {
             setActionBarHeight((prev) => (prev === nextHeight ? prev : nextHeight));
-          }}>
-          <Animated.View
-            style={[
-              styles.actionRowAnimated,
-              {
-                transform: [
-                  {
-                    translateY: buttonsHintAnim.interpolate({
-                      inputRange: [0, 1],
-                      outputRange: [0, -BUTTON_HINT_LIFT_DISTANCE],
-                    }),
-                  },
-                ],
-              },
-            ]}>
-            <View style={styles.actionRow}>
-              {REVIEW_ACTIONS.map((action) => (
-                <Pressable
-                  key={action.value}
-                  onPress={() => void handleSelectResult(action.value, action.statsKey)}
-                  disabled={isSubmitting || isReviewSolutionImageBusy}
-                  style={[
-                    styles.resultButton,
-                    action.tone === 'known'
-                      ? styles.resultButtonKnown
-                      : action.tone === 'fuzzy'
-                        ? styles.resultButtonFuzzy
-                        : styles.resultButtonUnknown,
-                    (isSubmitting || isReviewSolutionImageBusy) ? styles.disabledControl : null,
-                  ]}>
-                  <View style={styles.resultButtonContent}>
-                    {isSubmitting || isReviewSolutionImageBusy ? null : (
-                      <Text style={styles.resultButtonIcon}>{getReviewActionSymbol(action.tone)}</Text>
-                    )}
-                    <Text numberOfLines={1} style={styles.resultButtonText}>
-                      {isSubmitting ? '记录中...' : isReviewSolutionImageBusy ? '图片中...' : action.label}
-                    </Text>
-                  </View>
-                </Pressable>
-              ))}
-            </View>
-          </Animated.View>
-        </FloatingBottomCta>
+          }}
+        />
       ) : null}
 
       <AppToast
@@ -3971,7 +3538,7 @@ export default function ReviewSessionPage() {
 const styles = StyleSheet.create({
   pageRoot: {
     flex: 1,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: reviewPalette.background,
   },
   pageGlowTop: {
     position: 'absolute',
@@ -3992,12 +3559,12 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(14, 165, 233, 0.07)',
   },
   screenSafeArea: {
-    backgroundColor: 'transparent',
+    backgroundColor: reviewPalette.background,
   },
   screenContent: {
-    paddingTop: spacing.md,
-    gap: spacing.md,
-    backgroundColor: 'transparent',
+    paddingTop: 0,
+    gap: spacing.lg,
+    backgroundColor: reviewPalette.background,
   },
   floatingAnchorWrap: {
     position: 'absolute',
@@ -4293,8 +3860,55 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   questionCard: {
-    borderRadius: radius.xl,
+    borderRadius: 22,
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.surface,
+    overflow: 'hidden',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  questionHeading: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: 20,
+    paddingBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  questionMainTitle: {
+    fontSize: 25,
+    lineHeight: 32,
+    color: reviewPalette.textPrimary,
+    fontWeight: '800',
+  },
+  questionMetaRow: {
+    minHeight: 28,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: spacing.sm,
+  },
+  questionModule: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: 15,
+    lineHeight: 21,
+    color: reviewPalette.textSecondary,
+    fontWeight: '500',
+  },
+  questionDetailButton: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: spacing.sm,
+  },
+  questionDetailButtonPressed: {
+    opacity: 0.65,
+  },
+  questionDetailText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: reviewPalette.textSecondary,
+    fontWeight: '600',
   },
   questionTitle: {
     ...typography.sectionTitle,
@@ -4303,26 +3917,28 @@ const styles = StyleSheet.create({
     color: '#1F2937',
   },
   questionImageWrap: {
-    width: '100%',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#EEF2F7',
-    padding: spacing.sm,
+    alignSelf: 'stretch',
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.background,
+    padding: spacing.xs,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   questionImageWrapEmpty: {
     borderStyle: 'dashed',
-    borderColor: '#CBD5E1',
+    borderColor: '#C7C7CC',
   },
   questionImageFrame: {
     width: '100%',
     height: '100%',
     borderRadius: radius.lg,
     overflow: 'hidden',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: reviewPalette.background,
   },
   questionImage: {
     width: '100%',
@@ -4342,18 +3958,18 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: spacing.sm,
     bottom: spacing.sm,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: 'rgba(248, 250, 252, 0.92)',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
+    minHeight: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   questionPreviewButtonText: {
     ...typography.caption,
-    color: '#475569',
-    fontSize: 11,
-    lineHeight: 14,
+    color: reviewPalette.green,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
   },
   questionPreviewHint: {
@@ -4363,19 +3979,18 @@ const styles = StyleSheet.create({
   },
   questionPlaceholderText: {
     ...typography.body,
-    color: '#94A3B8',
+    color: reviewPalette.textMuted,
     textAlign: 'center',
     fontWeight: '600',
   },
   questionErrorText: {
     ...typography.body,
-    color: '#DC2626',
+    color: reviewPalette.red,
     textAlign: 'center',
     fontWeight: '600',
   },
-  solutionCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
+  solutionContent: {
+    gap: spacing.md,
   },
   solutionIconWrap: {
     width: 32,
@@ -4405,28 +4020,29 @@ const styles = StyleSheet.create({
   },
   solutionImageWrap: {
     width: '100%',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    backgroundColor: '#EEF2F7',
-    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.background,
+    padding: spacing.xs,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   solutionImageWrapEmpty: {
     borderStyle: 'dashed',
-    borderColor: '#CBD5E1',
-    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#C7C7CC',
+    backgroundColor: reviewPalette.surface,
   },
   solutionPlaceholder: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.xs,
+    gap: spacing.sm,
   },
   solutionPlaceholderText: {
     ...typography.bodySmall,
-    color: '#64748B',
+    color: reviewPalette.textSecondary,
     fontWeight: '700',
   },
   solutionActionRow: {
@@ -4435,13 +4051,15 @@ const styles = StyleSheet.create({
   },
   solutionActionButton: {
     flex: 1,
-    minHeight: 42,
-    borderRadius: radius.lg,
+    minHeight: 48,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: colors.surface,
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.surface,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.xs,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
   },
@@ -4454,10 +4072,20 @@ const styles = StyleSheet.create({
   },
   solutionActionButtonText: {
     ...typography.bodySmall,
-    color: '#1F2937',
-    fontWeight: '800',
+    color: reviewPalette.green,
+    fontWeight: '700',
     textAlign: 'center',
     flexShrink: 1,
+  },
+  solutionEditButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   solutionActionButtonPrimaryText: {
     ...typography.bodySmall,
@@ -4470,12 +4098,12 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: spacing.sm,
     right: spacing.sm,
-    width: 30,
-    height: 30,
+    width: 36,
+    height: 36,
     borderRadius: radius.pill,
     borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: 'rgba(248, 250, 252, 0.92)',
+    borderColor: reviewPalette.separator,
+    backgroundColor: 'rgba(255, 255, 255, 0.94)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -4487,22 +4115,27 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontWeight: '700',
   },
-  voiceCard: {
-    borderRadius: radius.xl,
-    gap: spacing.sm,
+  voiceContent: {
+    minHeight: 136,
+    justifyContent: 'center',
+    gap: spacing.md,
   },
-  voiceHeaderRow: {
+  voiceRecordingPanel: {
+    gap: spacing.lg,
+  },
+  voiceStatusRow: {
+    minHeight: 52,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: spacing.sm,
   },
   voiceIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: radius.md,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#CCFBF1',
+    backgroundColor: reviewPalette.greenSoft,
   },
   voiceHeaderTextWrap: {
     flex: 1,
@@ -4510,58 +4143,38 @@ const styles = StyleSheet.create({
   },
   voiceTitle: {
     ...typography.sectionTitle,
-    fontSize: 20,
-    lineHeight: 27,
-    color: '#0F172A',
+    fontSize: 16,
+    lineHeight: 22,
+    color: reviewPalette.textPrimary,
     fontWeight: '700',
   },
   voiceDescription: {
     ...typography.bodySmall,
-    fontSize: 14,
-    lineHeight: 19,
-    color: '#64748B',
+    fontSize: 13,
+    lineHeight: 18,
+    color: reviewPalette.textSecondary,
     fontWeight: '500',
   },
   voiceTimerText: {
     ...typography.titleMedium,
-    fontSize: 28,
-    lineHeight: 34,
-    color: '#0F172A',
+    fontSize: 20,
+    lineHeight: 26,
+    color: reviewPalette.textPrimary,
     fontWeight: '800',
   },
   voiceHintText: {
     ...typography.bodySmall,
-    color: '#64748B',
-    fontSize: 14,
-    lineHeight: 20,
+    color: reviewPalette.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
     fontWeight: '500',
-  },
-  voiceMainButton: {
-    minHeight: 44,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: '#F8FAFC',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  voiceMainButtonDanger: {
-    borderColor: '#FCA5A5',
-    backgroundColor: '#FEF2F2',
-  },
-  voiceMainButtonText: {
-    ...typography.bodySmall,
-    color: '#1F2937',
-    fontWeight: '700',
   },
   voiceDurationText: {
     ...typography.bodySmall,
-    color: '#334155',
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '700',
+    color: reviewPalette.textSecondary,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '500',
   },
   voiceActionRow: {
     flexDirection: 'row',
@@ -4569,33 +4182,99 @@ const styles = StyleSheet.create({
   },
   voiceActionButton: {
     flex: 1,
-    minHeight: 40,
-    borderRadius: radius.lg,
+    minHeight: 48,
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#D1D5DB',
-    backgroundColor: '#FFFFFF',
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.surface,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
+    gap: spacing.xs,
   },
   voiceActionButtonPlay: {
-    borderColor: '#99F6E4',
-    backgroundColor: '#F0FDFA',
+    borderColor: reviewPalette.greenBorder,
+    backgroundColor: reviewPalette.greenSoft,
   },
-  voiceActionButtonDanger: {
-    borderColor: '#FECACA',
-    backgroundColor: '#FEF2F2',
+  voiceActionButtonPrimary: {
+    borderColor: reviewPalette.green,
+    backgroundColor: reviewPalette.green,
   },
   voiceActionButtonText: {
     ...typography.bodySmall,
-    color: '#334155',
+    color: reviewPalette.textPrimary,
     fontWeight: '700',
   },
-  voiceActionButtonDangerText: {
+  voiceActionButtonPrimaryText: {
     ...typography.bodySmall,
-    color: '#B91C1C',
+    color: reviewPalette.surface,
     fontWeight: '700',
+  },
+  voiceEmptyButton: {
+    minHeight: 82,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#C7C7CC',
+    paddingHorizontal: spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  voiceEmptyIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: reviewPalette.greenSoft,
+  },
+  voiceEmptyTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  voiceEmptyTitle: {
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: reviewPalette.textPrimary,
+  },
+  voiceSavedRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  voiceSavedIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: reviewPalette.greenSoft,
+  },
+  voiceSavedTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  voiceSavedTitle: {
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+    color: reviewPalette.textPrimary,
+  },
+  voiceDeleteButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#FFD2D4',
+    backgroundColor: reviewPalette.redSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   voiceButtonPressed: {
     opacity: 0.78,
@@ -4636,17 +4315,17 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   reviewTextPreview: {
-    minHeight: 104,
-    borderRadius: radius.lg,
+    minHeight: 142,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#DDD6FE',
-    backgroundColor: '#FAFAFF',
+    borderColor: reviewPalette.separator,
+    backgroundColor: reviewPalette.background,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
   reviewTextPreviewText: {
     ...typography.body,
-    color: '#1E293B',
+    color: reviewPalette.textPrimary,
     lineHeight: 24,
   },
   actionRow: {

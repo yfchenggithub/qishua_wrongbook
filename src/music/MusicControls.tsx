@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, radius, shadows, spacing, typography } from '@/src/styles/tokens';
+import { reviewSessionColors as reviewPalette } from '@/src/styles/reviewSessionTokens';
 
 import type { MusicActionResult, MusicTrack } from './musicTypes';
 import { useMusic } from './useMusic';
@@ -432,14 +433,9 @@ export function MusicMiniPlayer({ onOpen }: { onOpen: () => void }) {
     currentTrack,
     isPlaying,
     isBuffering,
-    loopMode,
     togglePlay,
     next,
-    previous,
   } = useMusic();
-  if (!currentTrack) {
-    return null;
-  }
 
   return (
     <Pressable
@@ -448,33 +444,23 @@ export function MusicMiniPlayer({ onOpen }: { onOpen: () => void }) {
       onPress={onOpen}
       style={({ pressed }) => [styles.miniPlayer, pressed && styles.modeRowPressed]}>
       <View style={styles.miniCover}>
-        <MaterialIcons name="music-note" size={22} color={colors.success} />
+        <MaterialIcons name="music-note" size={22} color={reviewPalette.green} />
       </View>
       <View style={styles.miniTextWrap}>
         <Text numberOfLines={1} style={styles.miniTitle}>
-          {getTrackTitle(currentTrack)}
-        </Text>
-        <Text numberOfLines={1} style={styles.miniSubtitle}>
-          本地音频{loopMode === 'one' ? ' · 单曲循环' : ''}
+          {currentTrack ? getTrackTitle(currentTrack) : '选择本地音乐'}
         </Text>
       </View>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel="上一首"
-        onPress={(event) => {
-          event.stopPropagation();
-          void previous().then(showActionError);
-        }}
-        hitSlop={8}
-        style={styles.miniControl}>
-        <MaterialIcons name="skip-previous" size={23} color={colors.textPrimary} />
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={isPlaying ? '暂停' : '播放'}
+        accessibilityLabel={currentTrack ? (isPlaying ? '暂停' : '播放') : '选择本地音乐'}
         disabled={isBuffering}
         onPress={(event) => {
           event.stopPropagation();
+          if (!currentTrack) {
+            onOpen();
+            return;
+          }
           void togglePlay().then(showActionError);
         }}
         style={({ pressed }) => [
@@ -496,11 +482,15 @@ export function MusicMiniPlayer({ onOpen }: { onOpen: () => void }) {
         accessibilityLabel="下一首"
         onPress={(event) => {
           event.stopPropagation();
+          if (!currentTrack) {
+            onOpen();
+            return;
+          }
           void next().then(showActionError);
         }}
         hitSlop={8}
         style={styles.miniControl}>
-        <MaterialIcons name="skip-next" size={23} color={colors.textPrimary} />
+        <MaterialIcons name="skip-next" size={23} color={reviewPalette.textPrimary} />
       </Pressable>
     </Pressable>
   );
@@ -779,24 +769,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   miniPlayer: {
-    minHeight: 68,
-    borderRadius: radius.xl,
+    minHeight: 60,
+    borderRadius: radius.lg,
     backgroundColor: '#FFFFFF',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: spacing.sm,
-    gap: spacing.xs,
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
     borderWidth: 1,
-    borderColor: '#E6F4EB',
-    ...shadows.card,
+    borderColor: reviewPalette.separator,
   },
   miniCover: {
-    width: 44,
-    height: 44,
-    borderRadius: radius.md,
+    width: 40,
+    height: 40,
+    borderRadius: radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#EAFBF0',
+    backgroundColor: reviewPalette.greenSoft,
   },
   miniTextWrap: {
     flex: 1,
@@ -805,26 +794,21 @@ const styles = StyleSheet.create({
   },
   miniTitle: {
     ...typography.bodySmall,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  miniSubtitle: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: colors.textSecondary,
+    color: reviewPalette.textPrimary,
+    fontWeight: '700',
   },
   miniControl: {
-    width: 28,
-    height: 38,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
   miniPlayButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.success,
+    backgroundColor: reviewPalette.green,
   },
 });
