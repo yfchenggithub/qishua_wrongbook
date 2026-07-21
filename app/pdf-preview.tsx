@@ -1,8 +1,9 @@
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { HeaderBackButton } from '@react-navigation/elements';
+import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Print from 'expo-print';
 import { File } from 'expo-file-system';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import Pdf from 'react-native-pdf';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -135,6 +136,27 @@ export default function PdfPreviewScreen() {
   const [isSharing, setIsSharing] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
   const [isOpeningExternally, setIsOpeningExternally] = useState(false);
+
+  const handleBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+
+    Logger.info(PAGE_SCOPE, 'pdf_preview_back_fallback_to_home');
+    router.replace('/(tabs)' as never);
+  }, [router]);
+
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        handleBack();
+        return true;
+      });
+
+      return () => subscription.remove();
+    }, [handleBack]),
+  );
 
   useEffect(() => {
     if (selectedPdfIndex >= pdfUris.length && pdfUris.length > 0) {
@@ -305,7 +327,20 @@ export default function PdfPreviewScreen() {
   }, [isPrinting, isSharing, pdfPartCount, pdfUri, selectedPdfIndex]);
 
   return (
-    <SafeAreaView edges={['bottom']} style={styles.pageRoot}>
+    <>
+      <Stack.Screen
+        options={{
+          headerLeft: ({ tintColor }) => (
+            <HeaderBackButton
+              accessibilityLabel="返回"
+              displayMode="minimal"
+              onPress={handleBack}
+              tintColor={tintColor}
+            />
+          ),
+        }}
+      />
+      <SafeAreaView edges={['bottom']} style={styles.pageRoot}>
       <View style={styles.viewerArea}>
         {source ? (
           <Pdf
@@ -403,7 +438,7 @@ export default function PdfPreviewScreen() {
         ) : null}
         {!loadError ? (
           isLoading ? (
-            <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
+            <Pressable onPress={handleBack} style={styles.secondaryButton}>
               <Text style={styles.secondaryButtonText}>{'返回'}</Text>
             </Pressable>
           ) : (
@@ -430,7 +465,7 @@ export default function PdfPreviewScreen() {
                   </Text>
                 </Pressable>
               </View>
-              <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
+              <Pressable onPress={handleBack} style={styles.secondaryButton}>
                 <Text style={styles.secondaryButtonText}>{'返回'}</Text>
               </Pressable>
             </>
@@ -469,7 +504,7 @@ export default function PdfPreviewScreen() {
               </Pressable>
             </View>
             <View style={styles.rowButtons}>
-              <Pressable onPress={() => router.back()} style={styles.secondaryWideButton}>
+              <Pressable onPress={handleBack} style={styles.secondaryWideButton}>
                 <Text style={styles.secondaryButtonText}>{'返回'}</Text>
               </Pressable>
             </View>
@@ -481,7 +516,8 @@ export default function PdfPreviewScreen() {
           </Text>
         ) : null}
       </View>
-    </SafeAreaView>
+      </SafeAreaView>
+    </>
   );
 }
 

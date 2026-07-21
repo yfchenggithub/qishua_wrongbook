@@ -7,7 +7,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class QishuaPrintImageEnhancePackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
-    return listOf(QishuaPrintImageEnhanceModule(reactContext))
+    return listOf(
+      QishuaFileShareModule(reactContext),
+      QishuaPrintImageEnhanceModule(reactContext),
+    )
   }
 
   override fun createViewManagers(

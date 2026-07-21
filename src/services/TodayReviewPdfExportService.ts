@@ -6,6 +6,7 @@ import { Image, Platform } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
+import * as AndroidFileShareService from '@/src/services/AndroidFileShareService';
 import { getCachedPrintEnhancedImageForPdf, type PrintEnhanceCacheStatus } from '@/src/services/export/PrintEnhanceCacheService';
 import {
   cleanupPrintEnhancedTempFiles,
@@ -1993,10 +1994,17 @@ export async function shareTodayReviewPdf(fileUri: string): Promise<ShareTodayRe
   }
 
   try {
-    await Sharing.shareAsync(normalizedUri, {
-      mimeType: PDF_MIME_TYPE,
-      dialogTitle: SHARE_DIALOG_TITLE,
-    });
+    const sharedWithAndroidNativeModule = await AndroidFileShareService.shareFile(
+      normalizedUri,
+      PDF_MIME_TYPE,
+      SHARE_DIALOG_TITLE,
+    );
+    if (!sharedWithAndroidNativeModule) {
+      await Sharing.shareAsync(normalizedUri, {
+        mimeType: PDF_MIME_TYPE,
+        dialogTitle: SHARE_DIALOG_TITLE,
+      });
+    }
     return {
       success: true,
     };
