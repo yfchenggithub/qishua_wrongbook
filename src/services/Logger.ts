@@ -1,7 +1,7 @@
 type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 type RuntimeLogLevel = "debug" | "info" | "warn" | "error";
 
-const RUNTIME_LOG_LIMIT = 300;
+const RUNTIME_LOG_LIMIT = 1000;
 const RUNTIME_METADATA_STRING_LIMIT = 1000;
 const RUNTIME_METADATA_ITEM_LIMIT = 60;
 
@@ -201,6 +201,8 @@ function appendRuntimeLog(
   });
 
   if (runtimeLogs.length > RUNTIME_LOG_LIMIT) {
+    // Runtime logs are append-only, so insertion order is their usage recency.
+    // Evict the least-recently-written entries and retain the newest 1000.
     runtimeLogs.splice(0, runtimeLogs.length - RUNTIME_LOG_LIMIT);
   }
 
