@@ -42,6 +42,7 @@ export type TodayWorksheetExportResult = {
   exportedCount: number;
   fileUri?: string;
   fileUris?: string[];
+  pdfPageCounts?: number[];
   pdfPartCount?: number;
 };
 
@@ -250,6 +251,7 @@ export async function exportTodayWorksheet(
         exportedCount,
         fileUri: result.fileUri,
         fileUris: result.fileUris,
+        pdfPageCounts: result.pdfPageCounts,
         pdfPartCount: result.pdfPartCount,
       };
     }

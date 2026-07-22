@@ -161,12 +161,13 @@ export default function TodayScreen() {
     dueToday: dueTodayCount,
     longToastDurationMs: TOAST_DURATION_LONG,
     showToast,
-    onSuccess: (pdfUri: string, pdfUris: string[]) => {
+    onSuccess: (pdfUri: string, pdfUris: string[], pdfPageCounts: number[]) => {
       router.push({
         pathname: '/pdf-preview',
         params: {
           pdfUri,
           pdfUris: JSON.stringify(pdfUris),
+          pdfPageCounts: JSON.stringify(pdfPageCounts),
         },
       } as never);
     },

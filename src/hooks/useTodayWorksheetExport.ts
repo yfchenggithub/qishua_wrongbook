@@ -44,7 +44,7 @@ export type UseTodayWorksheetExportOptions = {
   printEnhanceConcurrency?: PrintEnhanceConcurrency;
   printEnhancePerformanceProfile?: PrintEnhancePerformanceProfile;
   showToast: (message: string, type?: ExportToastType, duration?: number) => void;
-  onSuccess: (fileUri: string, fileUris: string[]) => void;
+  onSuccess: (fileUri: string, fileUris: string[], pdfPageCounts: number[]) => void;
   onEmpty?: () => void;
 };
 
@@ -94,6 +94,14 @@ function normalizeFileUris(fileUri: string, fileUris: string[] | null | undefine
     return normalizedList;
   }
   return normalizedPrimary ? [normalizedPrimary] : [];
+}
+
+function normalizePdfPageCounts(value: number[] | null | undefined, fileCount: number): number[] {
+  if (!Array.isArray(value) || value.length !== fileCount) {
+    return [];
+  }
+  const normalized = value.map(toSafeCount);
+  return normalized.every((pageCount) => pageCount > 0) ? normalized : [];
 }
 
 async function resolvePrintEnhanceSettings(
@@ -325,6 +333,7 @@ export function useTodayWorksheetExport(
       if (result.outcome === 'success') {
         const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
         const pdfUris = normalizeFileUris(pdfUri, result.fileUris);
+        const pdfPageCounts = normalizePdfPageCounts(result.pdfPageCounts, pdfUris.length);
         if (!pdfUri) {
           Logger.warn(scope, 'export_pdf_failed', {
             errorName: 'EmptyPdfUri',
@@ -342,6 +351,7 @@ export function useTodayWorksheetExport(
           durationMs,
           filePath: pdfUri,
           fileCount: pdfUris.length,
+          pdfPageCounts,
         });
         if (isMountedRef.current) {
           setProgress((prev) => ({
@@ -350,7 +360,7 @@ export function useTodayWorksheetExport(
             current: prev.total > 0 ? prev.total : prev.current,
           }));
         }
-        onSuccess(pdfUri, pdfUris);
+        onSuccess(pdfUri, pdfUris, pdfPageCounts);
         return;
       }
 

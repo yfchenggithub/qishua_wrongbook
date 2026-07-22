@@ -16,6 +16,7 @@ import {
 import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import * as ReviewSheetService from '@/src/services/ReviewSheetService';
+import { createOrderedPdfZip } from '@/src/services/TodayReviewPdfBundleService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
@@ -37,6 +38,7 @@ const SERVICE_SCOPE = 'TodayReviewPdfExportService';
 const EXPORT_DIR_NAME = 'qishua_wrongbook';
 const EXPORT_SUB_DIR_NAME = 'exports';
 const PDF_MIME_TYPE = 'application/pdf';
+const ZIP_MIME_TYPE = 'application/zip';
 const PDF_FILE_PREFIX = 'qishua_today_review';
 const DEFAULT_EXPORT_PRINT_ENHANCE_MODE: PrintEnhanceMode = DEFAULT_PRINT_ENHANCE_MODE;
 const SUSPICIOUS_PDF_SIZE_BYTES = 4 * 1024;
@@ -62,6 +64,7 @@ const INVALID_PDF_URI_MESSAGE = 'Invalid PDF file path. Please generate the work
 const MISSING_PDF_FILE_MESSAGE = 'PDF file does not exist. Please generate it again.';
 const OPEN_WITH_OTHER_APP_FAILED_MESSAGE = 'Unable to open PDF. Try sharing it and opening from another app.';
 const SHARE_DIALOG_TITLE = 'Share Today Practice PDF';
+const SHARE_SET_DIALOG_TITLE = '分享今日练习卷';
 const OPEN_WITH_OTHER_APP_DIALOG_TITLE = 'Open PDF with another app';
 const FALLBACK_EXPORT_ERROR_MESSAGE = '导出失败，请稍后重试';
 const SHARE_UNAVAILABLE_MESSAGE = '当前设备暂不支持分享，请在文件管理中查看已导出的练习卷';
@@ -96,6 +99,7 @@ export type ExportTodayReviewPdfResult =
       success: true;
       fileUri: string;
       fileUris: string[];
+      pdfPageCounts: number[];
       exportedCount: number;
       pdfPartCount: number;
     }
@@ -106,6 +110,7 @@ export type ExportTodayReviewPdfResult =
       exportedCount?: number;
       fileUri?: string;
       fileUris?: string[];
+      pdfPageCounts?: number[];
       pdfPartCount?: number;
     };
 
@@ -116,6 +121,17 @@ export type ShareTodayReviewPdfResult =
   | {
       success: false;
       reason: 'invalid_uri' | 'file_missing' | 'share_unavailable' | 'busy' | 'cancelled' | 'unknown';
+      message: string;
+    };
+
+export type ShareTodayReviewPdfSetResult =
+  | {
+      success: true;
+      mode: 'single_pdf' | 'multiple_pdf' | 'zip';
+    }
+  | {
+      success: false;
+      reason: 'invalid_uri' | 'file_missing' | 'share_unavailable' | 'busy' | 'cancelled' | 'prepare_failed' | 'unknown';
       message: string;
     };
 
@@ -1674,6 +1690,7 @@ export async function exportTodayReviewPdf(
     const pdfPartCount = pdfItemChunks.length;
     const exportRunStartedAt = new Date();
     const exportedFileUris: string[] = [];
+    const exportedPdfPageCounts: number[] = [];
     const exportedPdfSizeBytesList: (number | null)[] = [];
     let processedItemOffset = 0;
     Logger.info(SERVICE_SCOPE, 'export_pdf_batch_plan', {
@@ -1764,6 +1781,7 @@ export async function exportTodayReviewPdf(
       });
 
       let generatedPdfUri = '';
+      let generatedPdfPageCount = 0;
       try {
         reportExportProgress(onProgress, {
           stage: 'generate_pdf',
@@ -1781,6 +1799,7 @@ export async function exportTodayReviewPdf(
           height: 842,
         });
         generatedPdfUri = printResult.uri;
+        generatedPdfPageCount = toSafeProgressCounter(printResult.numberOfPages);
         stageTiming.printPdfMs += Math.max(0, Date.now() - printStartedAt);
         const generatedPdfSizeBytes = getFileSizeBytes(generatedPdfUri);
         Logger.info(SERVICE_SCOPE, 'export_pdf_generated_file', {
@@ -1818,6 +1837,7 @@ export async function exportTodayReviewPdf(
             height: 842,
           });
           generatedPdfUri = fallbackPrintResult.uri;
+          generatedPdfPageCount = toSafeProgressCounter(fallbackPrintResult.numberOfPages);
           stageTiming.printPdfMs += Math.max(0, Date.now() - fallbackPrintStartedAt);
           Logger.info(SERVICE_SCOPE, 'export_pdf_fallback_generated_file', {
             partNumber,
@@ -1845,6 +1865,7 @@ export async function exportTodayReviewPdf(
           exportedCount: processedItemOffset,
           fileUri: exportedFileUris[0],
           fileUris: exportedFileUris,
+          pdfPageCounts: exportedPdfPageCounts,
           pdfPartCount,
         };
       }
@@ -1863,6 +1884,7 @@ export async function exportTodayReviewPdf(
       const exportedFileUri = await persistPdfToDocumentDirectory(generatedPdfUri, exportFileName);
       stageTiming.savePdfMs += Math.max(0, Date.now() - saveStartedAt);
       exportedFileUris.push(exportedFileUri);
+      exportedPdfPageCounts.push(generatedPdfPageCount);
       exportFileUriPreview = toSafeUriPreview(exportedFileUri);
       const exportedPdfSizeBytes = getFileSizeBytes(exportedFileUri);
       exportedPdfSizeBytesList.push(exportedPdfSizeBytes);
@@ -1873,6 +1895,7 @@ export async function exportTodayReviewPdf(
         questionNumberEnd: processedItemOffset + partItems.length,
         fileUriPreview: exportFileUriPreview,
         exportedPdfSizeBytes,
+        pageCount: generatedPdfPageCount,
       });
       processedItemOffset += partItems.length;
       await yieldToUiFrame();
@@ -1887,6 +1910,8 @@ export async function exportTodayReviewPdf(
       itemsPerPdfFile,
       fileUriPreview: toSafeUriPreview(exportedFileUri),
       fileUriPreviews: exportedFileUris.map(toSafeUriPreview),
+      pdfPageCounts: exportedPdfPageCounts,
+      totalPdfPageCount: exportedPdfPageCounts.reduce((sum, pageCount) => sum + pageCount, 0),
       exportedPdfSizeBytesList,
       printEnhanceMode: activePrintEnhanceMode,
       clearPrintStrength: activeClearPrintStrength,
@@ -1900,6 +1925,7 @@ export async function exportTodayReviewPdf(
       success: true,
       fileUri: exportedFileUri,
       fileUris: exportedFileUris,
+      pdfPageCounts: exportedPdfPageCounts,
       exportedCount: exportItems.length,
       pdfPartCount,
     };
@@ -2033,6 +2059,137 @@ export async function shareTodayReviewPdf(fileUri: string): Promise<ShareTodayRe
       success: false,
       reason: 'unknown',
       message: FALLBACK_EXPORT_ERROR_MESSAGE,
+    };
+  }
+}
+
+export async function shareTodayReviewPdfSet(
+  fileUris: string[],
+): Promise<ShareTodayReviewPdfSetResult> {
+  const normalizedUris = fileUris
+    .map((fileUri) => normalizeOptionalText(fileUri))
+    .filter((fileUri): fileUri is string => fileUri !== null);
+  if (normalizedUris.length <= 0) {
+    return {
+      success: false,
+      reason: 'invalid_uri',
+      message: '未找到可分享的练习卷 PDF，请重新生成。',
+    };
+  }
+
+  const missingFileIndex = normalizedUris.findIndex((fileUri) => !new File(fileUri).exists);
+  if (missingFileIndex >= 0) {
+    Logger.warn(SERVICE_SCOPE, 'A PDF file is missing before sharing the worksheet set.', {
+      missingPartNumber: missingFileIndex + 1,
+      pdfPartCount: normalizedUris.length,
+      fileUriPreview: toSafeUriPreview(normalizedUris[missingFileIndex]),
+    });
+    return {
+      success: false,
+      reason: 'file_missing',
+      message: `第 ${missingFileIndex + 1} 份练习卷文件已不存在，请重新生成整套练习卷。`,
+    };
+  }
+
+  const isShareAvailable = await Sharing.isAvailableAsync();
+  if (!isShareAvailable) {
+    return {
+      success: false,
+      reason: 'share_unavailable',
+      message: SHARE_UNAVAILABLE_MESSAGE,
+    };
+  }
+
+  if (normalizedUris.length === 1) {
+    const result = await shareTodayReviewPdf(normalizedUris[0]);
+    return result.success
+      ? { success: true, mode: 'single_pdf' }
+      : result;
+  }
+
+  try {
+    const sharedAsMultipleFiles = await AndroidFileShareService.shareFiles(
+      normalizedUris,
+      PDF_MIME_TYPE,
+      SHARE_SET_DIALOG_TITLE,
+    );
+    if (sharedAsMultipleFiles) {
+      Logger.info(SERVICE_SCOPE, 'Opened one Android share sheet for the complete PDF set.', {
+        pdfPartCount: normalizedUris.length,
+        shareMode: 'multiple_pdf',
+      });
+      return {
+        success: true,
+        mode: 'multiple_pdf',
+      };
+    }
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Multiple PDF sharing is unavailable; falling back to ZIP.', {
+      pdfPartCount: normalizedUris.length,
+      error,
+    });
+  }
+
+  let zipUri: string;
+  try {
+    zipUri = await createOrderedPdfZip(normalizedUris);
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to prepare ZIP fallback for the PDF set.', {
+      pdfPartCount: normalizedUris.length,
+      error,
+    });
+    return {
+      success: false,
+      reason: 'prepare_failed',
+      message: '无法生成整套练习卷分享文件，请确认存储空间后重试。',
+    };
+  }
+
+  try {
+    const sharedZipWithAndroidNativeModule = await AndroidFileShareService.shareFile(
+      zipUri,
+      ZIP_MIME_TYPE,
+      SHARE_SET_DIALOG_TITLE,
+    );
+    if (!sharedZipWithAndroidNativeModule) {
+      await Sharing.shareAsync(zipUri, {
+        mimeType: ZIP_MIME_TYPE,
+        dialogTitle: SHARE_SET_DIALOG_TITLE,
+      });
+    }
+    Logger.info(SERVICE_SCOPE, 'Opened one share sheet for the PDF set ZIP fallback.', {
+      pdfPartCount: normalizedUris.length,
+      shareMode: 'zip',
+      zipUriPreview: toSafeUriPreview(zipUri),
+    });
+    return {
+      success: true,
+      mode: 'zip',
+    };
+  } catch (error) {
+    if (isShareBusyError(error)) {
+      return {
+        success: false,
+        reason: 'busy',
+        message: EXPORT_BUSY_MESSAGE,
+      };
+    }
+    if (isUserCancelledShare(error)) {
+      return {
+        success: false,
+        reason: 'cancelled',
+        message: '',
+      };
+    }
+    Logger.error(SERVICE_SCOPE, 'Failed to share the complete PDF set.', {
+      pdfPartCount: normalizedUris.length,
+      zipUriPreview: toSafeUriPreview(zipUri),
+      error,
+    });
+    return {
+      success: false,
+      reason: 'unknown',
+      message: '整套练习卷分享失败，请稍后重试。',
     };
   }
 }

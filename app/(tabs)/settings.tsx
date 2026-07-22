@@ -540,7 +540,7 @@ export default function SettingsScreen() {
     printEnhanceConcurrency: exportEnhanceConcurrency,
     printEnhancePerformanceProfile: exportEnhancePerformanceProfile,
     showToast,
-    onSuccess: (pdfUri: string, pdfUris: string[]) => {
+    onSuccess: (pdfUri: string, pdfUris: string[], pdfPageCounts: number[]) => {
       Logger.info(PAGE_SCOPE, 'navigate_to_pdf_preview', {
         pdfUri,
         pdfFileCount: pdfUris.length,
@@ -550,6 +550,7 @@ export default function SettingsScreen() {
         params: {
           pdfUri,
           pdfUris: JSON.stringify(pdfUris),
+          pdfPageCounts: JSON.stringify(pdfPageCounts),
         },
       } as never);
     },

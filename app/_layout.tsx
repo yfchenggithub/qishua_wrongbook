@@ -128,7 +128,7 @@ export default function RootLayout() {
               <Stack.Screen name="review/session" options={{ headerShown: false }} />
               <Stack.Screen name="review-sheet/scan" options={{ headerShown: false }} />
               <Stack.Screen name="review-sheet/[sheetId]" options={{ headerShown: false }} />
-              <Stack.Screen name="pdf-preview" options={{ title: '今日练习卷 PDF' }} />
+              <Stack.Screen name="pdf-preview" options={{ title: '今日练习卷' }} />
               <Stack.Screen name="about-support" options={{ headerShown: false }} />
               <Stack.Screen name="official-account" options={{ headerShown: false }} />
               <Stack.Screen name="image-combiner" options={{ headerShown: false }} />
