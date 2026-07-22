@@ -14,3 +14,4 @@ export const IMAGE_FILE_EXTENSION = 'jpg';
 export const IMAGE_QUALITY = 0.85;
 export const IMAGE_MAX_WIDTH = 1800;
 export const IMAGE_MAX_HEIGHT = 2400;
+export const IMAGE_BATCH_CONCURRENCY = 2;

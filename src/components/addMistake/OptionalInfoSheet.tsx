@@ -20,7 +20,7 @@ import {
   SUPPLEMENT_TEXT_MAX_LENGTH,
 } from '@/src/constants/mistakeOptions';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
-import type { LocalImage, LocalImageType } from '@/src/models/LocalImage';
+import type { ImageBatchProgress, LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import { MAX_CUSTOM_ERROR_REASON_NAME_LENGTH } from '@/src/services/CustomErrorReasonService';
 import { colors } from '@/src/styles/tokens';
 import { PhotoPickerSection } from './PhotoPickerSection';
@@ -49,6 +49,7 @@ export interface OptionalInfoSheetProps {
   draft: AddMistakeDraft;
   reasonOptions: ErrorReasonOption[];
   imageBusy: boolean;
+  imageProgress?: ImageBatchProgress | null;
   onTakePhoto: (type: LocalImageType, index: number) => Promise<LocalImage | null>;
   onPickImages: (type: LocalImageType, index: number) => Promise<ImageActionResult>;
   onCreateCustomReason: (name: string) => Promise<ErrorReasonOption | null>;
@@ -72,6 +73,7 @@ export function OptionalInfoSheet({
   draft,
   reasonOptions,
   imageBusy,
+  imageProgress = null,
   onTakePhoto,
   onPickImages,
   onCreateCustomReason,
@@ -213,6 +215,7 @@ export function OptionalInfoSheet({
               images={working.mySolutionImages}
               text={working.mySolutionText}
               busy={imageBusy}
+              processingProgress={imageProgress}
               onChangeText={(value) => updateWorking({ mySolutionText: value })}
               onTakePhoto={() => void addPhoto('my_solution', 'mySolutionImages')}
               onPickImages={() => void addFromAlbum('my_solution', 'mySolutionImages')}
@@ -230,6 +233,7 @@ export function OptionalInfoSheet({
               images={working.answerImages}
               text={working.answerText}
               busy={imageBusy}
+              processingProgress={imageProgress}
               onChangeText={(value) => updateWorking({ answerText: value })}
               onTakePhoto={() => void addPhoto('answer', 'answerImages')}
               onPickImages={() => void addFromAlbum('answer', 'answerImages')}
@@ -329,12 +333,56 @@ function OverviewRow({ icon, title, status, onPress, border = false, statusActiv
   );
 }
 
-export function SupplementContentEditor({ title, helpText, imageSectionTitle, emptyTitle, textSectionTitle, placeholder, images, text, busy, onChangeText, onTakePhoto, onPickImages, onDelete, onMove }: { title: string; helpText: string; imageSectionTitle: string; emptyTitle: string; textSectionTitle: string; placeholder: string; images: LocalImage[]; text: string; busy: boolean; onChangeText: (value: string) => void; onTakePhoto: () => void; onPickImages: () => void; onDelete: (image: LocalImage) => void; onMove: (from: number, to: number) => void }) {
+interface SupplementContentEditorProps {
+  title: string;
+  helpText: string;
+  imageSectionTitle: string;
+  emptyTitle: string;
+  textSectionTitle: string;
+  placeholder: string;
+  images: LocalImage[];
+  text: string;
+  busy: boolean;
+  processingProgress?: ImageBatchProgress | null;
+  onChangeText: (value: string) => void;
+  onTakePhoto: () => void;
+  onPickImages: () => void;
+  onDelete: (image: LocalImage) => void;
+  onMove: (from: number, to: number) => void;
+}
+
+export function SupplementContentEditor({
+  title,
+  helpText,
+  imageSectionTitle,
+  emptyTitle,
+  textSectionTitle,
+  placeholder,
+  images,
+  text,
+  busy,
+  processingProgress,
+  onChangeText,
+  onTakePhoto,
+  onPickImages,
+  onDelete,
+  onMove,
+}: SupplementContentEditorProps) {
   return (
     <ScrollView style={styles.flex} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.editorContent}>
       <Text style={styles.screenHelp}>{helpText}</Text>
       <Text style={styles.fieldLabel}>{imageSectionTitle}</Text>
-      <PhotoPickerSection compact busy={busy} images={images} emptyTitle={emptyTitle} onTakePhoto={onTakePhoto} onPickImages={onPickImages} onDelete={onDelete} onMove={onMove} />
+      <PhotoPickerSection
+        compact
+        busy={busy}
+        images={images}
+        processingProgress={processingProgress}
+        emptyTitle={emptyTitle}
+        onTakePhoto={onTakePhoto}
+        onPickImages={onPickImages}
+        onDelete={onDelete}
+        onMove={onMove}
+      />
       <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>{textSectionTitle}</Text>
       <View style={styles.textAreaWrap}>
         <TextInput multiline maxLength={SUPPLEMENT_TEXT_MAX_LENGTH} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor={SECONDARY} style={styles.textArea} textAlignVertical="top" value={text} />

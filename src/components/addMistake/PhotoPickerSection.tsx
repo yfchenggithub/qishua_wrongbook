@@ -1,7 +1,8 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image } from 'expo-image';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import type { LocalImage } from '@/src/models/LocalImage';
+import type { ImageBatchProgress, LocalImage } from '@/src/models/LocalImage';
 import { SurfaceCard } from '@/src/components/ui/CardContainer';
 import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
@@ -12,6 +13,7 @@ export interface PhotoPickerSectionProps {
   emptySubtitle?: string;
   icon?: keyof typeof MaterialIcons.glyphMap;
   compact?: boolean;
+  processingProgress?: ImageBatchProgress | null;
   onTakePhoto: () => void;
   onPickImages: () => void;
   onDelete: (image: LocalImage) => void;
@@ -26,6 +28,7 @@ export function PhotoPickerSection({
   emptySubtitle = '支持多张，可调整顺序',
   icon = 'photo-camera',
   compact = false,
+  processingProgress = null,
   onTakePhoto,
   onPickImages,
   onDelete,
@@ -41,17 +44,32 @@ export function PhotoPickerSection({
           <Text style={styles.emptySubtitle}>{emptySubtitle}</Text>
         </View>
       ) : (
-        <ScrollView
+        <FlatList
+          data={images}
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.thumbnails}>
-          {images.map((image, index) => (
+          initialNumToRender={4}
+          maxToRenderPerBatch={4}
+          windowSize={3}
+          removeClippedSubviews
+          keyExtractor={(image) => image.id}
+          getItemLayout={(_data, index) => ({ length: 138, offset: 138 * index, index })}
+          contentContainerStyle={styles.thumbnails}
+          ItemSeparatorComponent={() => <View style={styles.thumbnailSeparator} />}
+          renderItem={({ item: image, index }) => (
             <View key={image.id} style={styles.thumbnailItem}>
               <Pressable
                 accessibilityLabel={`预览第 ${index + 1} 张图片`}
                 disabled={!onPreview}
                 onPress={() => onPreview?.(image, index)}>
-                <Image source={{ uri: image.uri }} resizeMode="cover" style={styles.thumbnail} />
+                <Image
+                  allowDownscaling
+                  cachePolicy="memory"
+                  contentFit="cover"
+                  recyclingKey={image.id}
+                  source={image.uri}
+                  style={styles.thumbnail}
+                />
                 <View style={styles.orderBadge}>
                   <Text style={styles.orderText}>{index + 1}</Text>
                 </View>
@@ -86,17 +104,28 @@ export function PhotoPickerSection({
                 </View>
               ) : null}
             </View>
-          ))}
-          <Pressable
-            accessibilityLabel="继续添加图片"
-            disabled={busy}
-            onPress={onTakePhoto}
-            style={({ pressed }) => [styles.addMore, pressed && styles.pressed, busy && styles.dimmed]}>
-            <MaterialIcons name="add-a-photo" size={28} color={colors.accent} />
-            <Text style={styles.addMoreText}>继续添加</Text>
-          </Pressable>
-        </ScrollView>
+          )}
+          ListFooterComponent={(
+            <Pressable
+              accessibilityLabel="继续添加图片"
+              disabled={busy}
+              onPress={onTakePhoto}
+              style={({ pressed }) => [styles.addMore, pressed && styles.pressed, busy && styles.dimmed]}>
+              <MaterialIcons name="add-a-photo" size={28} color={colors.accent} />
+              <Text style={styles.addMoreText}>继续添加</Text>
+            </Pressable>
+          )}
+        />
       )}
+
+      {busy && processingProgress ? (
+        <View accessibilityLiveRegion="polite" style={styles.processingRow}>
+          <ActivityIndicator color={colors.accent} size="small" />
+          <Text style={styles.processingText}>
+            正在处理 {processingProgress.completed}/{processingProgress.total} 张
+          </Text>
+        </View>
+      ) : null}
 
       <View style={styles.actions}>
         <Pressable
@@ -128,16 +157,19 @@ const styles = StyleSheet.create({
   emptyCompact: { minHeight: 170 },
   emptyTitle: { ...typography.cardTitle, marginTop: spacing.xs },
   emptySubtitle: { ...typography.body, color: colors.textSecondary, textAlign: 'center' },
-  thumbnails: { minHeight: 178, padding: 14, alignItems: 'flex-start', gap: 12 },
+  thumbnails: { minHeight: 178, padding: 14, alignItems: 'flex-start' },
   thumbnailItem: { width: 126 },
+  thumbnailSeparator: { width: 12 },
   thumbnail: { width: 126, height: 126, borderRadius: radius.md, backgroundColor: colors.surfaceMuted },
   orderBadge: { position: 'absolute', left: 7, bottom: 7, minWidth: 24, height: 24, borderRadius: 12, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,28,30,0.72)' },
   orderText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   deleteButton: { position: 'absolute', right: -7, top: -7, width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(28,28,30,0.82)' },
   reorderRow: { marginTop: 7, flexDirection: 'row', justifyContent: 'center', gap: 8 },
   reorderButton: { width: 44, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted },
-  addMore: { width: 112, height: 126, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.accentBorder, backgroundColor: colors.accentSoft },
+  addMore: { width: 112, height: 126, marginLeft: 12, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', gap: 7, borderWidth: 1, borderStyle: 'dashed', borderColor: colors.accentBorder, backgroundColor: colors.accentSoft },
   addMoreText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  processingRow: { minHeight: 42, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator, backgroundColor: colors.accentSoft },
+  processingText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
   actions: { minHeight: 58, flexDirection: 'row', alignItems: 'stretch', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.separator },
   action: { flex: 1, minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
   actionText: { color: colors.textPrimary, fontSize: 16, fontWeight: '600' },

@@ -3,7 +3,13 @@ import * as Sharing from 'expo-sharing';
 import { Platform } from 'react-native';
 import ReactNativeBlobUtil from 'react-native-blob-util';
 
-import type { LocalImage, LocalImageType, SavedImageResult } from '@/src/models/LocalImage';
+import { IMAGE_BATCH_CONCURRENCY } from '@/src/constants/image';
+import type {
+  ImageBatchProgress,
+  LocalImage,
+  LocalImageType,
+  SavedImageResult,
+} from '@/src/models/LocalImage';
 import { optimizeImageForStorage } from '@/src/services/ImageOptimizeService';
 import {
   pickImageFromLibrary,
@@ -16,6 +22,7 @@ import type { PermissionRequestResult } from '@/src/services/ImagePickerService'
 import {
   deleteLocalImage as deleteLocalImageFile,
   deleteMistakeImageFolder,
+  ensureMistakeImageDir,
   getImageInfo,
   listMistakeImageFiles,
   saveTempImageToMistakeFolder,
@@ -43,6 +50,7 @@ export interface SaveImagesParams {
   type: LocalImageType;
   index?: number;
   maxSelection?: number;
+  onProgress?: (progress: ImageBatchProgress) => void;
 }
 
 export interface SaveSharedImageParams extends SaveImageParams {
@@ -200,8 +208,14 @@ function canceledBatchResult(errorMessage: string): SavedImagesResult {
 async function prepareImageForStorage(
   tempUri: string,
   fallback: Omit<PreparedImagePayload, 'uri'>,
+  logSuccess = true,
 ): Promise<PreparedImagePayload> {
-  const optimized = await optimizeImageForStorage({ uri: tempUri });
+  const optimized = await optimizeImageForStorage({
+    uri: tempUri,
+    sourceWidth: fallback.width,
+    sourceHeight: fallback.height,
+    logSuccess,
+  });
   if (!optimized.ok || !optimized.uri) {
     Logger.error(
       SERVICE_SCOPE,
@@ -216,13 +230,15 @@ async function prepareImageForStorage(
     };
   }
 
-  Logger.info(SERVICE_SCOPE, 'Image optimization succeeded.', {
-    sourceUri: tempUri,
-    optimizedUri: optimized.uri,
-    optimizedWidth: optimized.width,
-    optimizedHeight: optimized.height,
-    optimizedFileSize: optimized.fileSize,
-  });
+  if (logSuccess) {
+    Logger.info(SERVICE_SCOPE, 'Image optimization succeeded.', {
+      sourceUri: tempUri,
+      optimizedUri: optimized.uri,
+      optimizedWidth: optimized.width,
+      optimizedHeight: optimized.height,
+      optimizedFileSize: optimized.fileSize,
+    });
+  }
 
   return {
     uri: optimized.uri,
@@ -230,6 +246,39 @@ async function prepareImageForStorage(
     height: optimized.height,
     fileSize: optimized.fileSize ?? null,
   };
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
+
+  async function runWorker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+  return results;
+}
+
+function notifyBatchProgress(
+  callback: SaveImagesParams['onProgress'],
+  progress: ImageBatchProgress,
+): void {
+  if (!callback) return;
+  try {
+    callback(progress);
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Image batch progress callback failed.', { progress, error });
+  }
 }
 
 export async function takePhotoAndSave(
@@ -452,54 +501,68 @@ export async function pickImagesAndSave(
       pickedCount: assets.length,
     });
 
-    const savedImages: LocalImage[] = [];
-    const startIndex = typeof params.index === 'number' ? params.index : undefined;
+    const startIndex = typeof params.index === 'number' && Number.isFinite(params.index)
+      ? Math.max(0, Math.floor(params.index)) + 1
+      : 1;
+    const processingStartedAt = Date.now();
+    let completed = 0;
+    notifyBatchProgress(params.onProgress, { completed, total: assets.length });
+    const directoryUri = await ensureMistakeImageDir(params.mistakeId);
 
-    for (let i = 0; i < assets.length; i += 1) {
-      const asset = assets[i];
-      const preparedImage = await prepareImageForStorage(asset.tempUri, {
-        width: asset.width,
-        height: asset.height,
-        fileSize: asset.fileSize ?? null,
-      });
+    const savedResults = await mapWithConcurrency(
+      assets,
+      IMAGE_BATCH_CONCURRENCY,
+      async (asset, index): Promise<SavedImageResult> => {
+        const preparedImage = await prepareImageForStorage(asset.tempUri, {
+          width: asset.width,
+          height: asset.height,
+          fileSize: asset.fileSize ?? null,
+        }, false);
 
-      const savedResult = await saveTempImageToMistakeFolder({
-        mistakeId: params.mistakeId,
-        type: params.type,
-        tempUri: preparedImage.uri,
-        width: preparedImage.width,
-        height: preparedImage.height,
-        fileSize: preparedImage.fileSize ?? null,
-        index: startIndex === undefined ? undefined : startIndex + i,
-      });
-
-      if (!savedResult.ok || !savedResult.image) {
-        Logger.error(SERVICE_SCOPE, 'Failed to save picked image in batch.', {
-          params,
-          savedCount: savedImages.length,
-          failedIndex: i,
-          savedResult,
+        const savedResult = await saveTempImageToMistakeFolder({
+          mistakeId: params.mistakeId,
+          type: params.type,
+          tempUri: preparedImage.uri,
+          width: preparedImage.width,
+          height: preparedImage.height,
+          fileSize: preparedImage.fileSize ?? null,
+          index: startIndex + index,
+          directoryUri,
+          logSuccess: false,
         });
-        return {
-          ok: false,
-          images: savedImages,
-          errorMessage: savedResult.errorMessage ?? 'Failed to save image.',
-        };
-      }
 
-      savedImages.push(savedResult.image);
-      Logger.info(SERVICE_SCOPE, 'Saved one picked image in batch successfully.', {
+        completed += 1;
+        notifyBatchProgress(params.onProgress, { completed, total: assets.length });
+        return savedResult;
+      },
+    );
+
+    const savedImages = savedResults.flatMap((result) => result.ok && result.image ? [result.image] : []);
+    const firstFailureIndex = savedResults.findIndex((result) => !result.ok || !result.image);
+    if (firstFailureIndex >= 0) {
+      const failedResult = savedResults[firstFailureIndex];
+      Logger.error(SERVICE_SCOPE, 'Failed to save picked image in batch.', {
         mistakeId: params.mistakeId,
         type: params.type,
-        batchIndex: i,
-        savedUriShort: toShortUri(savedResult.image.uri),
+        pickedCount: assets.length,
+        savedCount: savedImages.length,
+        failedIndex: firstFailureIndex,
+        processingDurationMs: Date.now() - processingStartedAt,
+        failedResult,
       });
+      return {
+        ok: false,
+        images: savedImages,
+        errorMessage: failedResult.errorMessage ?? 'Failed to save image.',
+      };
     }
 
     Logger.info(SERVICE_SCOPE, 'Saved picked images batch successfully.', {
       mistakeId: params.mistakeId,
       type: params.type,
       savedCount: savedImages.length,
+      concurrency: IMAGE_BATCH_CONCURRENCY,
+      processingDurationMs: Date.now() - processingStartedAt,
     });
 
     return {
@@ -508,7 +571,10 @@ export async function pickImagesAndSave(
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Unexpected error in pickImagesAndSave.', {
-      params,
+      mistakeId: params.mistakeId,
+      type: params.type,
+      index: params.index,
+      maxSelection: params.maxSelection,
       error,
     });
     return canceledBatchResult(error instanceof Error ? error.message : String(error));

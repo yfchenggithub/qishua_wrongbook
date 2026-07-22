@@ -16,6 +16,9 @@ export interface OptimizeImageParams {
   maxWidth?: number;
   maxHeight?: number;
   quality?: number;
+  sourceWidth?: number;
+  sourceHeight?: number;
+  logSuccess?: boolean;
 }
 
 export interface OptimizeImageResult {
@@ -57,6 +60,23 @@ function getImageDimensions(uri: string): Promise<{ width: number; height: numbe
   });
 }
 
+function getKnownImageDimensions(
+  width: number | undefined,
+  height: number | undefined,
+): { width: number; height: number } | null {
+  if (
+    typeof width !== 'number'
+    || !Number.isFinite(width)
+    || width <= 0
+    || typeof height !== 'number'
+    || !Number.isFinite(height)
+    || height <= 0
+  ) {
+    return null;
+  }
+  return { width, height };
+}
+
 function computeResizeSize(
   width: number,
   height: number,
@@ -94,7 +114,8 @@ export async function optimizeImageForStorage(
     const maxHeight = normalizeMaxSize(params.maxHeight, IMAGE_MAX_HEIGHT);
     const quality = normalizeQuality(params.quality);
 
-    const original = await getImageDimensions(params.uri);
+    const original = getKnownImageDimensions(params.sourceWidth, params.sourceHeight)
+      ?? await getImageDimensions(params.uri);
     const resize = computeResizeSize(
       original.width,
       original.height,
@@ -111,17 +132,19 @@ export async function optimizeImageForStorage(
 
     const fileSize = safeReadFileSize(optimized.uri);
 
-    Logger.info(SERVICE_SCOPE, 'Image optimized for storage.', {
-      sourceUri: params.uri,
-      optimizedUri: optimized.uri,
-      originalWidth: original.width,
-      originalHeight: original.height,
-      optimizedWidth: optimized.width,
-      optimizedHeight: optimized.height,
-      resized: Boolean(resize),
-      quality,
-      fileSize,
-    });
+    if (params.logSuccess !== false) {
+      Logger.info(SERVICE_SCOPE, 'Image optimized for storage.', {
+        sourceUri: params.uri,
+        optimizedUri: optimized.uri,
+        originalWidth: original.width,
+        originalHeight: original.height,
+        optimizedWidth: optimized.width,
+        optimizedHeight: optimized.height,
+        resized: Boolean(resize),
+        quality,
+        fileSize,
+      });
+    }
 
     return {
       ok: true,

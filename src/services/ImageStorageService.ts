@@ -1,4 +1,5 @@
 import { Directory, File, Paths } from 'expo-file-system';
+import { copyAsync, getInfoAsync } from 'expo-file-system/legacy';
 
 import { IMAGE_ROOT_DIR_NAME } from '@/src/constants/image';
 import type { LocalImage, LocalImageType, SavedImageResult } from '@/src/models/LocalImage';
@@ -21,6 +22,8 @@ type SaveTempImageParams = {
   height?: number;
   fileSize?: number | null;
   index?: number;
+  directoryUri?: string;
+  logSuccess?: boolean;
 };
 
 function toShortUri(uri: string | null | undefined): string | null {
@@ -146,7 +149,7 @@ export async function saveTempImageToMistakeFolder(
       };
     }
 
-    const directoryUri = await ensureMistakeImageDir(params.mistakeId);
+    const directoryUri = params.directoryUri ?? await ensureMistakeImageDir(params.mistakeId);
     const mistakeDir = new Directory(directoryUri);
     const { file: targetFile, fileName } = resolveTargetFile(
       mistakeDir,
@@ -154,16 +157,18 @@ export async function saveTempImageToMistakeFolder(
       normalizeStartIndex(params.index),
     );
 
-    Logger.info(SERVICE_SCOPE, 'Start copying image into local mistake folder.', {
-      mistakeId: params.mistakeId,
-      type: normalizedType,
-      tempUriShort: toShortUri(params.tempUri),
-      targetFileName: fileName,
-      targetDirShort: toShortUri(mistakeDir.uri),
-    });
-    sourceFile.copy(targetFile);
+    if (params.logSuccess !== false) {
+      Logger.info(SERVICE_SCOPE, 'Start copying image into local mistake folder.', {
+        mistakeId: params.mistakeId,
+        type: normalizedType,
+        tempUriShort: toShortUri(params.tempUri),
+        targetFileName: fileName,
+        targetDirShort: toShortUri(mistakeDir.uri),
+      });
+    }
+    await copyAsync({ from: sourceFile.uri, to: targetFile.uri });
 
-    const fileInfo = targetFile.info();
+    const fileInfo = params.fileSize == null ? await getInfoAsync(targetFile.uri) : null;
     const image: LocalImage = {
       id: createImageId(),
       mistakeId: params.mistakeId,
@@ -175,16 +180,18 @@ export async function saveTempImageToMistakeFolder(
       width: params.width,
       height: params.height,
       fileSize:
-        params.fileSize ?? (typeof fileInfo.size === 'number' ? fileInfo.size : null),
+        params.fileSize ?? (fileInfo?.exists && typeof fileInfo.size === 'number' ? fileInfo.size : null),
     };
 
-    Logger.info(SERVICE_SCOPE, 'Saved image file into local mistake folder.', {
-      mistakeId: params.mistakeId,
-      type: normalizedType,
-      targetUriShort: toShortUri(image.uri),
-      fileName: image.fileName,
-      fileSize: image.fileSize ?? null,
-    });
+    if (params.logSuccess !== false) {
+      Logger.info(SERVICE_SCOPE, 'Saved image file into local mistake folder.', {
+        mistakeId: params.mistakeId,
+        type: normalizedType,
+        targetUriShort: toShortUri(image.uri),
+        fileName: image.fileName,
+        fileSize: image.fileSize ?? null,
+      });
+    }
 
     return {
       ok: true,

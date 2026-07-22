@@ -33,7 +33,7 @@ import { ERROR_REASON_OPTIONS, MODULE_OPTIONS } from '@/src/constants/mistakeOpt
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { CustomErrorReason } from '@/src/models/CustomErrorReason';
 import type { CustomModule } from '@/src/models/CustomModule';
-import type { LocalImage, LocalImageType } from '@/src/models/LocalImage';
+import type { ImageBatchProgress, LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import { MistakeRepository } from '@/src/repositories/MistakeRepository';
 import { createEmptyAddMistakeDraft, validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
 import { createMistakesFromDraft } from '@/src/services/CreateMistakeService';
@@ -105,6 +105,7 @@ export default function AddScreen() {
   const [customReasons, setCustomReasons] = useState<CustomErrorReason[]>([]);
   const [recentModuleNames, setRecentModuleNames] = useState<string[]>([]);
   const [activeImageAction, setActiveImageAction] = useState<string | null>(null);
+  const [imageBatchProgress, setImageBatchProgress] = useState<ImageBatchProgress | null>(null);
   const [saving, setSaving] = useState(false);
   const [bottomBarHeight, setBottomBarHeight] = useState(
     layout.primaryButtonHeight + layout.minimumTouchSize,
@@ -228,11 +229,22 @@ export default function AddScreen() {
   }
 
   async function pickImages(type: LocalImageType, index: number, maxSelection: number, session = false): Promise<LocalImage[]> {
-    const result = await runImageAction(`pick-${type}`, () => pickImagesAndSave({ mistakeId: draft.draftId, type, index, maxSelection }));
-    if (!result) return [];
-    if (!result.ok) handleImageFailure(result.errorMessage, 'album');
-    if (session) result.images.forEach((image) => optionalSessionUrisRef.current.add(image.uri));
-    return result.images;
+    setImageBatchProgress(null);
+    try {
+      const result = await runImageAction(`pick-${type}`, () => pickImagesAndSave({
+        mistakeId: draft.draftId,
+        type,
+        index,
+        maxSelection,
+        onProgress: setImageBatchProgress,
+      }));
+      if (!result) return [];
+      if (!result.ok) handleImageFailure(result.errorMessage, 'album');
+      if (session) result.images.forEach((image) => optionalSessionUrisRef.current.add(image.uri));
+      return result.images;
+    } finally {
+      setImageBatchProgress(null);
+    }
   }
 
   async function handleTakeQuestion() {
@@ -434,6 +446,7 @@ export default function AddScreen() {
         <PhotoPickerSection
           busy={busy}
           images={draft.questionImages}
+          processingProgress={imageBatchProgress}
           emptyTitle="拍摄题目"
           emptySubtitle="支持多张，稍后可调整顺序"
           onTakePhoto={() => void handleTakeQuestion()}
@@ -513,6 +526,7 @@ export default function AddScreen() {
         draft={draft}
         reasonOptions={reasonOptions}
         imageBusy={imageBusy}
+        imageProgress={imageBatchProgress}
         onTakePhoto={(type, index) => takeImage(type, index, true)}
         onPickImages={async (type, index) => ({ images: await pickImages(type, index, MAX_IMAGES_PER_TYPE - index, true), ok: true })}
         onCreateCustomReason={handleCreateReason}

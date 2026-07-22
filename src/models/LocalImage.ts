@@ -37,6 +37,11 @@ export interface PickedImagesResult {
   errorMessage?: string;
 }
 
+export interface ImageBatchProgress {
+  completed: number;
+  total: number;
+}
+
 export interface SavedImageResult {
   ok: boolean;
   image?: LocalImage;
