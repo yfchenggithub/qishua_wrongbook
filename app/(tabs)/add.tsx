@@ -118,15 +118,12 @@ export default function AddScreen() {
   const imageBusy = activeImageAction !== null;
   const busy = imageBusy || saving;
   const hasQuestion = draft.questionImages.length > 0;
-  const hasModule = !!draft.module?.trim();
-  const canProceed = hasQuestion && hasModule && !busy;
+  const canProceed = hasQuestion && !busy;
   const validationHint = !hasQuestion
     ? '请先添加题目照片'
-    : !hasModule
-      ? '请选择所属模块'
-      : imageBusy
-        ? '图片处理中，请稍候'
-        : '数据仅保存在本机';
+    : imageBusy
+      ? '图片处理中，请稍候'
+      : '可直接保存，模块和其他信息可稍后补充';
 
   const moduleOptions = useMemo<ModulePickerOption[]>(() => [
     ...MODULE_OPTIONS.map((item) => ({ id: item.id, label: item.label })),
@@ -170,6 +167,12 @@ export default function AddScreen() {
   useEffect(() => {
     setAddScreenHasUnsavedPhotos(draft.questionImages.length > 0);
   }, [draft.questionImages.length]);
+
+  useEffect(() => {
+    if (!optionalSheetVisible) {
+      setStage(hasQuestion ? 'READY_TO_SAVE' : 'QUESTION');
+    }
+  }, [hasQuestion, optionalSheetVisible]);
 
   useEffect(() => () => setAddScreenHasUnsavedPhotos(false), []);
 
@@ -447,8 +450,8 @@ export default function AddScreen() {
         <SurfaceCard padding={0} style={styles.infoList}>
           <InfoRow
             icon="layers"
-            title="所属模块"
-            value={draft.module ?? '未选择'}
+            title="所属模块（可选）"
+            value={draft.module ?? '稍后补充'}
             active={!!draft.module}
             onPress={() => setModuleSheetVisible(true)}
           />
@@ -487,8 +490,8 @@ export default function AddScreen() {
         <Text style={[styles.saveHint, !canProceed && styles.saveHintWarning]}>{validationHint}</Text>
         <PrimaryButton
           disabled={!canProceed}
-          onPress={() => stage === 'READY_TO_SAVE' ? void handleSave() : openOptionalSheet()}
-          title={saving ? '正在保存…' : stage === 'READY_TO_SAVE' ? '保存到题库' : '下一步'}
+          onPress={() => void handleSave()}
+          title={saving ? '正在保存…' : '保存到题库'}
         />
       </View>
 

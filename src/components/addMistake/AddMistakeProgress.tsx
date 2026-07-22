@@ -6,7 +6,7 @@ export type AddMistakeStage = 'QUESTION' | 'SUPPLEMENT' | 'READY_TO_SAVE';
 
 const STEPS = [
   { number: 1, label: '题目' },
-  { number: 2, label: '补充' },
+  { number: 2, label: '可选' },
   { number: 3, label: '保存' },
 ] as const;
 

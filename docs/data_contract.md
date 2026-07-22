@@ -9,7 +9,7 @@
 | --- | --- | --- | --- |
 | id | string | 主键，必填 | 错题 ID |
 | subject | string | 默认 `math` | 科目 |
-| module | string | 必填 | 模块：`函数/数列/导数/圆锥曲线/立体几何/概率统计/其他`，也可保存用户自定义模块 |
+| module | string | 必填，新增时未选择则写入 `未分类` | 模块：`函数/数列/导数/圆锥曲线/立体几何/概率统计/其他`，也可保存用户自定义模块；用户可在详情页后续补充 |
 | module_id | string | 可空 | 模块稳定 ID；内置模块使用 `builtin:*`，自定义模块使用 `custom:{custom_modules.id}`。旧数据可仅有 `module` |
 | title | string | 可空 | 错题标题 |
 | error_reason | string | 可空 | 错因：`粗心/不会/思路卡住/计算错误/概念不清/其他`，也可保存自定义文本 |
@@ -157,6 +157,7 @@
 - `MAX_REVIEW_COUNT = 7`。
 - `REVIEW_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60]`。
 - 新增页直接保存的错题默认 `status = collected`，`review_count = 0`，`next_review_at = null`，不进入今日复做。
+- 新增页仅题目照片为必填项；未选择模块时由业务层写入 `未分类`，`module_id = null`，其余补充信息可在保存前填写或在详情页后续补充。
 - 用户明确选择“加入七刷”后，错题从 `collected` 变为 `active`，`next_review_at` 设置为加入时间。
 - 当 `review_count >= 7` 时，`status = mastered`。
 - 当 `status = mastered` 时，`next_review_at = null`。

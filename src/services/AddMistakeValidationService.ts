@@ -14,10 +14,6 @@ const DEFAULT_DIFFICULTY = 3;
 const MIN_DIFFICULTY = DIFFICULTY_OPTIONS[0]?.value ?? 1;
 const MAX_DIFFICULTY = DIFFICULTY_OPTIONS[DIFFICULTY_OPTIONS.length - 1]?.value ?? 5;
 
-function hasValue(value: string | null | undefined): boolean {
-  return typeof value === 'string' && value.trim().length > 0;
-}
-
 export function createEmptyAddMistakeDraft(): AddMistakeDraft {
   return {
     draftId: createMistakeId(),
@@ -48,10 +44,6 @@ export function validateAddMistakeDraft(draft: AddMistakeDraft): AddMistakeValid
 
   if (draft.questionImages.length === 0 && !draft.questionImage) {
     errors.push('题目照片必填，请先拍摄或选择题目照片。');
-  }
-
-  if (!hasValue(draft.module)) {
-    errors.push('模块必填，请先选择模块。');
   }
 
   if (

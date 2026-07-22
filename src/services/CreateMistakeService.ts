@@ -1,5 +1,6 @@
 import { withDatabaseTransaction } from '@/src/db';
 import { REVIEW_STATUS } from '@/src/constants/review';
+import { UNCLASSIFIED_MODULE } from '@/src/constants/mistakeOptions';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { ImageType } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
@@ -53,6 +54,17 @@ function normalizeOptionalText(value: string | null | undefined): string | undef
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function resolveDraftModule(draft: AddMistakeDraft): { moduleName: string; moduleId: string | null } {
+  const moduleName = normalizeOptionalText(draft.module);
+  if (!moduleName) {
+    return { moduleName: UNCLASSIFIED_MODULE, moduleId: null };
+  }
+  return {
+    moduleName,
+    moduleId: normalizeOptionalText(draft.moduleId) ?? null,
+  };
 }
 
 function normalizeQuestionNo(questionNo: number | undefined): number {
@@ -164,10 +176,7 @@ async function persistDraft(
   joinReviewPlan: boolean,
   onMistakeCreated?: () => void,
 ): Promise<number> {
-  const moduleName = draft.module?.trim();
-  if (!moduleName) {
-    throw new Error('模块不能为空。');
-  }
+  const { moduleName, moduleId } = resolveDraftModule(draft);
 
   const questionImageUri = getImages(draft.questionImages, draft.questionImage)[0]?.uri?.trim();
   if (!questionImageUri) {
@@ -192,7 +201,7 @@ async function persistDraft(
     id: mistakeId,
     subject: draft.subject?.trim() || DEFAULT_SUBJECT,
     module: moduleName,
-    module_id: normalizeOptionalText(draft.moduleId) ?? null,
+    module_id: moduleId,
     title: normalizeOptionalText(draft.title) ?? buildCanonicalQuestionTitle(moduleName, questionNo),
     error_reason: buildDisplayErrorReason(draft),
     error_reason_ids: serializeIds(draft.errorReasonIds) ?? null,
@@ -230,10 +239,7 @@ async function resolveQuestionNoForDraft(
     return normalizeQuestionNo(options.questionNo);
   }
 
-  const moduleName = draft.module?.trim();
-  if (!moduleName) {
-    throw new Error('模块不能为空。');
-  }
+  const { moduleName } = resolveDraftModule(draft);
 
   const reservedQuestionNumbers = await MistakeRepository.reserveNextQuestionNumbersByModuleInTransaction(
     db,
@@ -363,10 +369,7 @@ export async function createMistakesFromDraft(
     return { ok: false, errorMessage: validation.errors.join('\n') };
   }
 
-  const moduleName = draft.module?.trim();
-  if (!moduleName) {
-    return { ok: false, errorMessage: '模块不能为空。' };
-  }
+  const { moduleName } = resolveDraftModule(draft);
 
   const mistakeIds = questionImages.map((_, index) =>
     index === 0 ? draft.draftId : createMistakeId(),

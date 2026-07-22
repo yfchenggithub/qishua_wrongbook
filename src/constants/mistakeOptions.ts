@@ -8,6 +8,7 @@ export const MISTAKE_NOTE_MAX_LENGTH = 5000;
 export const MISTAKE_TITLE_MAX_LENGTH = 30;
 export const ADD_MISTAKE_NOTE_MAX_LENGTH = 200;
 export const SUPPLEMENT_TEXT_MAX_LENGTH = 500;
+export const UNCLASSIFIED_MODULE = '未分类';
 
 export const SUBJECT_OPTIONS = [
   { id: 'subject:math', value: 'math', label: '高中数学' },
