@@ -12,6 +12,7 @@ import { initDatabase } from '@/src/db';
 import { MusicProvider } from '@/src/music';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
+import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -20,6 +21,16 @@ export const unstable_settings = {
 const LAYOUT_SCOPE = 'RootLayout';
 let appDatabaseInitPromise: Promise<void> | null = null;
 let hasConfiguredNotificationHandler = false;
+let hasLoggedRuntimeContext = false;
+
+function logRuntimeContextOnce(): void {
+  if (hasLoggedRuntimeContext) {
+    return;
+  }
+
+  hasLoggedRuntimeContext = true;
+  Logger.info('RuntimeContext', 'Runtime context initialized.', getRuntimeLogContext());
+}
 
 function configureNotificationHandlerOnce(): void {
   if (hasConfiguredNotificationHandler) {
@@ -57,6 +68,7 @@ export default function RootLayout() {
   const router = useRouter();
 
   useEffect(() => {
+    logRuntimeContextOnce();
     configureNotificationHandlerOnce();
 
     void initializeDatabaseOnce()

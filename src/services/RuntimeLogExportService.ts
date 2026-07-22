@@ -1,10 +1,9 @@
-import Constants from 'expo-constants';
 import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { Platform } from 'react-native';
 
 import { shareFile as shareFileWithNativeModule } from '@/src/services/AndroidFileShareService';
 import type { RuntimeLogItem } from '@/src/services/Logger';
+import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
 
 const EXPORT_CACHE_DIRECTORY = 'runtime-log-exports';
 const EXPORT_FILE_PREFIX = 'qishua-runtime-logs';
@@ -28,12 +27,6 @@ export interface RuntimeLogExportInput {
 export interface RuntimeLogExportResult {
   fileName: string;
   fileUri: string;
-}
-
-interface RuntimeEnvironmentInfo {
-  appVersion: string | null;
-  buildVersion: string | null;
-  operatingSystem: string;
 }
 
 function pad2(value: number): string {
@@ -158,43 +151,11 @@ export function formatRuntimeLogEntry(log: RuntimeLogItem): string {
   return lines.join('\n');
 }
 
-function getRuntimeEnvironmentInfo(): RuntimeEnvironmentInfo {
-  const configuredVersion = Constants.expoConfig?.version;
-  const appVersion = typeof configuredVersion === 'string' && configuredVersion.trim()
-    ? configuredVersion.trim()
-    : null;
-
-  let buildVersion: string | null = null;
-  if (Platform.OS === 'android') {
-    const versionCode = Constants.platform?.android?.versionCode;
-    if (typeof versionCode === 'number' && Number.isFinite(versionCode)) {
-      buildVersion = String(versionCode);
-    }
-  } else if (Platform.OS === 'ios') {
-    const buildNumber = Constants.platform?.ios?.buildNumber;
-    if (typeof buildNumber === 'string' && buildNumber.trim()) {
-      buildVersion = buildNumber.trim();
-    }
-  }
-
-  const osName = Platform.OS === 'android'
-    ? 'Android'
-    : Platform.OS === 'ios'
-      ? 'iOS'
-      : Platform.OS;
-
-  return {
-    appVersion,
-    buildVersion,
-    operatingSystem: `${osName} ${String(Platform.Version)}`,
-  };
-}
-
 export function buildRuntimeLogsTxt(
   input: RuntimeLogExportInput,
   exportedAt: Date = new Date(),
 ): string {
-  const environment = getRuntimeEnvironmentInfo();
+  const context = getRuntimeLogContext();
   const header = [
     `导出时间：${formatExportTimestamp(exportedAt)}`,
     `原始日志：${input.totalLogCount} 条`,
@@ -205,14 +166,42 @@ export function buildRuntimeLogsTxt(
     `时间顺序：${input.filters.timeOrderLabel}`,
   ];
 
-  if (environment.appVersion) {
-    header.push(`App 版本号：${environment.appVersion}`);
+  if (context.app.version) {
+    header.push(`App 版本号：${context.app.version}`);
   }
-  if (environment.buildVersion) {
-    header.push(`build 版本：${environment.buildVersion}`);
+  if (context.app.buildVersion) {
+    header.push(`build 版本：${context.app.buildVersion}`);
   }
-  if (environment.operatingSystem) {
-    header.push(`操作系统：${environment.operatingSystem}`);
+  header.push(`操作系统：${context.system.name} ${context.system.version}`);
+  if (context.system.brand) {
+    header.push(`手机品牌：${context.system.brand}`);
+  }
+  if (context.system.model) {
+    header.push(`手机型号：${context.system.model}`);
+  }
+  header.push(`运行环境：${context.app.executionEnvironment} / ${context.app.buildMode}`);
+  if (context.session.id) {
+    header.push(`会话 ID：${context.session.id}`);
+  }
+  header.push(`会话开始：${formatRuntimeLogTimestamp(context.session.startedAt)}`);
+  if (context.system.locale) {
+    header.push(`语言地区：${context.system.locale}`);
+  }
+  if (context.system.timeZone) {
+    header.push(`时区：${context.system.timeZone}`);
+  }
+  header.push(`界面模式：${context.system.colorScheme}`);
+  header.push(
+    `屏幕环境：${context.display.width}×${context.display.height} @${context.display.scale}，字体缩放 ${context.display.fontScale}`,
+  );
+  if (context.promotion?.source) {
+    header.push(`推广来源：${context.promotion.source}`);
+  }
+  if (context.promotion?.channel) {
+    header.push(`推广渠道：${context.promotion.channel}`);
+  }
+  if (context.promotion?.campaign) {
+    header.push(`推广活动：${context.promotion.campaign}`);
   }
 
   const body = input.logs.map(formatRuntimeLogEntry).join(`\n\n${LOG_SEPARATOR}\n\n`);
