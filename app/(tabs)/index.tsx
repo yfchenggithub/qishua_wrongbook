@@ -153,6 +153,7 @@ export default function TodayScreen() {
 
   const {
     isExporting: isExportingPdf,
+    hasCachedWorksheet,
     progress: exportPdfProgress,
     progressPercent: exportPdfProgressPercent,
     exportTodayWorksheet,
@@ -257,7 +258,7 @@ export default function TodayScreen() {
         : completedCount > 0
           ? '今日复做已完成'
           : '今日暂无复做';
-  const exportDisabled = isExportingPdf || dueTodayCount <= 0;
+  const exportDisabled = isExportingPdf || (dueTodayCount <= 0 && !hasCachedWorksheet);
   const exportProgressLabel = isExportingPdf
     ? `${exportPdfProgress.message || '正在生成练习卷…'}${
         exportPdfProgress.total > 0
@@ -320,7 +321,13 @@ export default function TodayScreen() {
         <TodaySummaryCard
           completed={summary.todayCompletedStats}
           exportDisabled={exportDisabled}
-          exportLabel={isExportingPdf ? '正在生成今日练习卷…' : '导出今日练习卷'}
+          exportLabel={
+            isExportingPdf
+              ? '正在生成今日练习卷…'
+              : hasCachedWorksheet
+                ? '打开今日练习卷'
+                : '导出今日练习卷'
+          }
           exportProgress={exportPdfProgressPercent}
           exportProgressLabel={exportProgressLabel}
           hint={summaryHint}

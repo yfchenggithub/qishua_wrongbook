@@ -413,7 +413,9 @@ function buildFallbackPdfHtml(
       const title = escapeHtml(toDisplayText(item.raw.title, '-'));
       const progress = escapeHtml(formatProgressText(item.raw));
       const dueDate = escapeHtml(formatDueDateText(item.raw.dueDate));
-      const questionImageSrc = item.questionImageSrc ? escapeHtml(item.questionImageSrc) : null;
+      // Generated internally as a Base64 data URI; escaping it would scan/copy the full image
+      // string several times and can exhaust the JS heap near the end of a 40-question part.
+      const questionImageSrc = item.questionImageSrc;
       const questionImageBlock = questionImageSrc
         ? `<img class="question-image" src="${questionImageSrc}" alt="题目图片" />`
         : '<div class="question-placeholder">题目图片暂时无法加载</div>';
@@ -748,7 +750,7 @@ function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): s
   const progressText = escapeHtml(formatProgressText(item.raw));
   const difficultyText = escapeHtml(formatDifficultyText(item.raw.difficulty));
   const dueDate = escapeHtml(formatDueDateText(item.raw.dueDate));
-  const questionImageSrc = item.questionImageSrc ? escapeHtml(item.questionImageSrc) : null;
+  const questionImageSrc = item.questionImageSrc;
   const questionImageBlock = questionImageSrc
     ? `<img class="problem-image" src="${questionImageSrc}" alt="题目图片" />`
     : `<div class="image-fallback">题目图片暂时无法加载</div>`;
@@ -914,7 +916,8 @@ function buildAutoQuestionMetaHtml(
 }
 
 function buildAutoQuestionImageHtml(item: TodayReviewPdfRenderItem, layout: QuestionPrintLayout): string {
-  const questionImageSrc = item.questionImageSrc ? escapeHtml(item.questionImageSrc) : null;
+  // The data URI only contains a trusted MIME prefix and Base64 characters.
+  const questionImageSrc = item.questionImageSrc;
   const imageWidthMm = getFittedImageWidthMm(layout);
   const imageMaxHeightMm = Math.min(layout.imageMaxHeightMm, imageWidthMm * layout.ratio);
   const imageStyle = [
@@ -1406,6 +1409,64 @@ async function yieldToUiFrame(): Promise<void> {
   });
 }
 
+type NativePrintVariant = 'primary' | 'fallback';
+
+async function printHtmlToFileWithDiagnostics(options: {
+  html: string;
+  partNumber: number;
+  pdfPartCount: number;
+  variant: NativePrintVariant;
+}): Promise<Awaited<ReturnType<typeof Print.printToFileAsync>>> {
+  const { html, partNumber, pdfPartCount, variant } = options;
+  const startedAt = Date.now();
+  const diagnosticContext = {
+    partNumber,
+    pdfPartCount,
+    variant,
+    htmlLength: html.length,
+    approximateHtmlUtf16Bytes: html.length * 2,
+  };
+
+  Logger.info(SERVICE_SCOPE, 'export_pdf_native_print_invoke_start', diagnosticContext);
+  const waitingTimer = setInterval(() => {
+    Logger.warn(SERVICE_SCOPE, 'export_pdf_native_print_waiting', {
+      ...diagnosticContext,
+      waitingMs: Math.max(0, Date.now() - startedAt),
+    });
+  }, 10_000);
+
+  try {
+    const invokeStartedAt = Date.now();
+    const printPromise = Print.printToFileAsync({
+      html,
+      width: 595,
+      height: 842,
+    });
+    Logger.info(SERVICE_SCOPE, 'export_pdf_native_print_promise_created', {
+      ...diagnosticContext,
+      synchronousInvokeMs: Math.max(0, Date.now() - invokeStartedAt),
+    });
+
+    const result = await printPromise;
+    Logger.info(SERVICE_SCOPE, 'export_pdf_native_print_resolved', {
+      ...diagnosticContext,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      numberOfPages: toSafeProgressCounter(result.numberOfPages),
+      resultUriPreview: toSafeUriPreview(result.uri),
+    });
+    return result;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'export_pdf_native_print_rejected', {
+      ...diagnosticContext,
+      durationMs: Math.max(0, Date.now() - startedAt),
+      error,
+    });
+    throw error;
+  } finally {
+    clearInterval(waitingTimer);
+  }
+}
+
 async function buildSingleRenderItem(
   item: TodayReviewExportItem,
   printEnhanceMode: PrintEnhanceMode,
@@ -1793,10 +1854,11 @@ export async function exportTodayReviewPdf(
             : '正在生成练习卷 PDF...',
         });
         const printStartedAt = Date.now();
-        const printResult = await Print.printToFileAsync({
+        const printResult = await printHtmlToFileWithDiagnostics({
           html,
-          width: 595,
-          height: 842,
+          partNumber,
+          pdfPartCount,
+          variant: 'primary',
         });
         generatedPdfUri = printResult.uri;
         generatedPdfPageCount = toSafeProgressCounter(printResult.numberOfPages);
@@ -1831,10 +1893,11 @@ export async function exportTodayReviewPdf(
             processedItemOffset,
           );
           const fallbackPrintStartedAt = Date.now();
-          const fallbackPrintResult = await Print.printToFileAsync({
+          const fallbackPrintResult = await printHtmlToFileWithDiagnostics({
             html: fallbackHtml,
-            width: 595,
-            height: 842,
+            partNumber,
+            pdfPartCount,
+            variant: 'fallback',
           });
           generatedPdfUri = fallbackPrintResult.uri;
           generatedPdfPageCount = toSafeProgressCounter(fallbackPrintResult.numberOfPages);

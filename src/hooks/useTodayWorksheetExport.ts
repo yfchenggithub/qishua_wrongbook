@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert } from 'react-native';
 
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import type { TodayWorksheetExportStage } from '@/src/services/TodayWorksheetExportService';
@@ -50,10 +51,15 @@ export type UseTodayWorksheetExportOptions = {
 
 export type UseTodayWorksheetExportResult = {
   isExporting: boolean;
+  hasCachedWorksheet: boolean;
   exportStage: TodayWorksheetExportStage | null;
   progress: ExportPdfProgressState;
   progressPercent: number;
   exportTodayWorksheet: () => Promise<void>;
+};
+
+type RunTodayWorksheetExportOptions = {
+  forceRegenerate?: boolean;
 };
 
 type ResolvedPrintEnhanceSettings = {
@@ -207,6 +213,7 @@ export function useTodayWorksheetExport(
   } = options;
 
   const [isExporting, setIsExporting] = useState(false);
+  const [hasCachedWorksheet, setHasCachedWorksheet] = useState(false);
   const [exportStage, setExportStage] = useState<TodayWorksheetExportStage | null>(null);
   const [progress, setProgress] = useState<ExportPdfProgressState>(INITIAL_PROGRESS);
 
@@ -234,11 +241,25 @@ export function useTodayWorksheetExport(
     progressRef.current = progress;
   }, [progress]);
 
+  useEffect(() => {
+    let isActive = true;
+    void TodayWorksheetExportService.getCachedTodayWorksheet().then((cached) => {
+      if (isActive) {
+        setHasCachedWorksheet(cached !== null);
+      }
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [dueToday]);
+
   const progressPercent = progress.total > 0 && Number.isFinite(progress.current / progress.total)
     ? Math.max(0, Math.min(1, progress.current / progress.total))
     : 0;
 
-  const exportTodayWorksheet = useCallback(async () => {
+  const runTodayWorksheetExport = useCallback(async (
+    runOptions?: RunTodayWorksheetExportOptions,
+  ) => {
     if (isExporting) {
       return;
     }
@@ -298,6 +319,7 @@ export function useTodayWorksheetExport(
     try {
       const result = await TodayWorksheetExportService.exportTodayWorksheet({
         expectedPendingCount: safeDueToday,
+        forceRegenerate: runOptions?.forceRegenerate,
         printEnhanceMode: resolvedEnhanceSettings.mode,
         printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
         printEnhanceConcurrency: resolvedEnhanceSettings.concurrency,
@@ -354,6 +376,7 @@ export function useTodayWorksheetExport(
           pdfPageCounts,
         });
         if (isMountedRef.current) {
+          setHasCachedWorksheet(true);
           setProgress((prev) => ({
             ...prev,
             phase: 'done',
@@ -427,8 +450,60 @@ export function useTodayWorksheetExport(
     showToast,
   ]);
 
+  const exportTodayWorksheet = useCallback(async () => {
+    if (isExporting) {
+      return;
+    }
+
+    const cached = await TodayWorksheetExportService.getCachedTodayWorksheet();
+    if (!cached) {
+      if (isMountedRef.current) {
+        setHasCachedWorksheet(false);
+      }
+      await runTodayWorksheetExport();
+      return;
+    }
+
+    if (isMountedRef.current) {
+      setHasCachedWorksheet(true);
+    }
+
+    Logger.info(scope, 'export_pdf_cache_choice_shown', {
+      generatedAt: cached.generatedAt,
+      exportedCount: cached.exportedCount,
+      pdfPartCount: cached.pdfPartCount,
+    });
+    Alert.alert(
+      '今日练习卷已生成',
+      `今天已生成过一份练习卷（${cached.exportedCount}题）。默认打开已有 PDF；如果题目或导出设置有变化，也可以重新生成。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '重新生成',
+          style: 'destructive',
+          onPress: () => {
+            void runTodayWorksheetExport({ forceRegenerate: true });
+          },
+        },
+        {
+          text: '打开已有 PDF',
+          isPreferred: true,
+          onPress: () => {
+            Logger.info(scope, 'export_pdf_cache_reused_by_user', {
+              generatedAt: cached.generatedAt,
+              exportedCount: cached.exportedCount,
+              pdfPartCount: cached.pdfPartCount,
+            });
+            onSuccess(cached.fileUri, cached.fileUris, cached.pdfPageCounts);
+          },
+        },
+      ],
+    );
+  }, [isExporting, onSuccess, runTodayWorksheetExport, scope]);
+
   return {
     isExporting,
+    hasCachedWorksheet,
     exportStage,
     progress,
     progressPercent,

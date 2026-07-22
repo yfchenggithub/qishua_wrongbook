@@ -527,6 +527,7 @@ export default function SettingsScreen() {
   const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
   const {
     isExporting: isExportingWorksheet,
+    hasCachedWorksheet,
     exportStage: worksheetExportStage,
     progress: worksheetExportProgress,
     progressPercent: worksheetExportProgressPercent,
@@ -1610,16 +1611,20 @@ export default function SettingsScreen() {
   const displayStorageText = shouldMaskStats
     ? STATS_PLACEHOLDER
     : formatStorageSize(dataOverview.storageBytes);
-  const canExportTodayWorksheet = worksheetPendingCount > 0;
+  const canExportTodayWorksheet = worksheetPendingCount > 0 || hasCachedWorksheet;
   const worksheetExportButtonText = isExportingWorksheet
     ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
         worksheetExportStage ?? 'preparing',
         worksheetPendingCount,
       )
-    : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(worksheetPendingCount);
+    : hasCachedWorksheet
+      ? '打开今日练习卷'
+      : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(worksheetPendingCount);
   const worksheetExportHintText = isExportingWorksheet
     ? worksheetExportButtonText
-    : canExportTodayWorksheet
+    : hasCachedWorksheet
+      ? '今日练习卷已生成，可直接打开已有 PDF，或选择重新生成。'
+      : canExportTodayWorksheet
       ? `将导出今日待复做的 ${worksheetPendingCount} 题，便于打印。`
       : '今日没有待复做错题，暂不可导出。';
   const worksheetExportProgressHeadline = isExportingWorksheet

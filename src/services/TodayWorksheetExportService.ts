@@ -1,6 +1,7 @@
 import { Logger } from '@/src/services/Logger';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExportService';
+import * as TodayWorksheetPdfCacheService from '@/src/services/TodayWorksheetPdfCacheService';
 import type {
   PrintEnhanceConcurrency,
   PrintEnhancePerformanceProfile,
@@ -44,10 +45,21 @@ export type TodayWorksheetExportResult = {
   fileUris?: string[];
   pdfPageCounts?: number[];
   pdfPartCount?: number;
+  fromCache?: boolean;
+};
+
+export type TodayWorksheetCachedExport = {
+  fileUri: string;
+  fileUris: string[];
+  pdfPageCounts: number[];
+  exportedCount: number;
+  pdfPartCount: number;
+  generatedAt: string;
 };
 
 export type ExportTodayWorksheetOptions = {
   expectedPendingCount?: number;
+  forceRegenerate?: boolean;
   printEnhanceMode?: PrintEnhanceMode;
   printEnhanceClearPrintStrength?: PrintEnhanceClearPrintStrength;
   printEnhanceConcurrency?: PrintEnhanceConcurrency;
@@ -73,6 +85,14 @@ function buildSuccessMessage(count: number, pdfPartCount?: number): string {
     return `今日练习卷已生成（${formatCountSuffix(count)}，${safePdfPartCount}个 PDF）`;
   }
   return `今日练习卷已生成（${formatCountSuffix(count)}）`;
+}
+
+function buildCachedMessage(count: number, pdfPartCount?: number): string {
+  const safePdfPartCount = toSafeCount(pdfPartCount);
+  if (safePdfPartCount > 1) {
+    return `已打开今日生成的练习卷（${formatCountSuffix(count)}，${safePdfPartCount}个 PDF）`;
+  }
+  return `已打开今日生成的练习卷（${formatCountSuffix(count)}）`;
 }
 
 function buildShareUnavailableMessage(count: number, pdfPartCount?: number): string {
@@ -203,9 +223,40 @@ export async function getTodayWorksheetPendingCount(): Promise<number> {
   }
 }
 
+export async function getCachedTodayWorksheet(): Promise<TodayWorksheetCachedExport | null> {
+  const cache = await TodayWorksheetPdfCacheService.loadTodayWorksheetPdfCache();
+  if (!cache) {
+    return null;
+  }
+  return {
+    fileUri: cache.fileUri,
+    fileUris: cache.fileUris,
+    pdfPageCounts: cache.pdfPageCounts,
+    exportedCount: cache.exportedCount,
+    pdfPartCount: cache.pdfPartCount,
+    generatedAt: cache.generatedAt,
+  };
+}
+
 export async function exportTodayWorksheet(
   options?: ExportTodayWorksheetOptions,
 ): Promise<TodayWorksheetExportResult> {
+  if (options?.forceRegenerate !== true) {
+    const cached = await getCachedTodayWorksheet();
+    if (cached) {
+      return {
+        outcome: 'success',
+        message: buildCachedMessage(cached.exportedCount, cached.pdfPartCount),
+        exportedCount: cached.exportedCount,
+        fileUri: cached.fileUri,
+        fileUris: cached.fileUris,
+        pdfPageCounts: cached.pdfPageCounts,
+        pdfPartCount: cached.pdfPartCount,
+        fromCache: true,
+      };
+    }
+  }
+
   const expectedPendingCount = toSafeCount(options?.expectedPendingCount);
   const pendingCount =
     expectedPendingCount > 0 ? expectedPendingCount : await getTodayWorksheetPendingCount();
@@ -245,6 +296,19 @@ export async function exportTodayWorksheet(
 
     if (result.success) {
       const exportedCount = toSafeCount(result.exportedCount);
+      try {
+        await TodayWorksheetPdfCacheService.saveTodayWorksheetPdfCache({
+          fileUris: result.fileUris,
+          pdfPageCounts: result.pdfPageCounts,
+          exportedCount,
+        });
+      } catch (error) {
+        Logger.warn(SERVICE_SCOPE, 'Worksheet PDF generated but cache metadata could not be saved.', {
+          exportedCount,
+          pdfPartCount: result.pdfPartCount,
+          error,
+        });
+      }
       return {
         outcome: 'success',
         message: buildSuccessMessage(exportedCount, result.pdfPartCount),
@@ -253,6 +317,7 @@ export async function exportTodayWorksheet(
         fileUris: result.fileUris,
         pdfPageCounts: result.pdfPageCounts,
         pdfPartCount: result.pdfPartCount,
+        fromCache: false,
       };
     }
 
