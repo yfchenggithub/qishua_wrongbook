@@ -32,7 +32,12 @@ import { clearPrintEnhanceImageCache } from '@/src/services/export/PrintEnhanceC
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { loadSettingsStats, type SettingsStats } from '@/src/services/SettingsStatsService';
-import { cleanupOrphanImageFiles, scanOrphanImageFiles } from '@/src/services/StorageMaintenanceService';
+import {
+  cleanupOrphanImageFiles,
+  scanOrphanImageFiles,
+  scanStorageUsage,
+  type StorageUsageScanResult,
+} from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import {
@@ -504,6 +509,9 @@ export default function SettingsScreen() {
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
   const [isCleaningOrphanImages, setIsCleaningOrphanImages] = useState(false);
   const [isClearingPrintEnhanceCache, setIsClearingPrintEnhanceCache] = useState(false);
+  const [storageUsageScan, setStorageUsageScan] = useState<StorageUsageScanResult | null>(null);
+  const [isStorageUsageScanning, setIsStorageUsageScanning] = useState(false);
+  const [storageUsageErrorMessage, setStorageUsageErrorMessage] = useState<string | null>(null);
   const [reminderSettings, setReminderSettings] =
     useState<ReviewReminderSettings>(DEFAULT_REMINDER_SETTINGS);
   const [isReminderLoading, setIsReminderLoading] = useState(true);
@@ -665,6 +673,47 @@ export default function SettingsScreen() {
       setIsOverviewRefreshing(false);
     }
   }, [showToast]);
+
+  const loadCategorizedStorageUsage = useCallback(async (showFailureToast = false) => {
+    if (isStorageUsageScanning) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    setIsStorageUsageScanning(true);
+    setStorageUsageErrorMessage(null);
+    Logger.info(PAGE_SCOPE, 'Start loading categorized storage usage.');
+    try {
+      const result = await scanStorageUsage();
+      setStorageUsageScan(result);
+      Logger.info(PAGE_SCOPE, 'Loaded categorized storage usage successfully.', {
+        elapsedMs: Date.now() - startedAt,
+        persistentFileCount: result.persistentFileCount,
+        persistentBytes: result.persistentBytes,
+        cacheFileCount: result.cacheFileCount,
+        cacheBytes: result.cacheBytes,
+        unreadableEntryCount: result.unreadableEntryCount,
+      });
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to load categorized storage usage.', {
+        elapsedMs: Date.now() - startedAt,
+        error,
+      });
+      setStorageUsageErrorMessage('分类存储读取失败，请稍后重试');
+      if (showFailureToast) {
+        showToast('分类存储读取失败，请稍后重试', 'warning', TOAST_DURATION_LONG);
+      }
+    } finally {
+      setIsStorageUsageScanning(false);
+    }
+  }, [isStorageUsageScanning, showToast]);
+
+  const handleOpenStorageSheet = useCallback(() => {
+    setActiveSheet('storage');
+    if (!storageUsageScan && !isStorageUsageScanning) {
+      void loadCategorizedStorageUsage();
+    }
+  }, [isStorageUsageScanning, loadCategorizedStorageUsage, storageUsageScan]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1611,6 +1660,9 @@ export default function SettingsScreen() {
   const displayStorageText = shouldMaskStats
     ? STATS_PLACEHOLDER
     : formatStorageSize(dataOverview.storageBytes);
+  const storageRowSummary = storageUsageScan
+    ? `数据 ${formatStorageSize(storageUsageScan.persistentBytes)}`
+    : `图片 ${displayStorageText}`;
   const canExportTodayWorksheet = worksheetPendingCount > 0 || hasCachedWorksheet;
   const worksheetExportButtonText = isExportingWorksheet
     ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
@@ -1837,7 +1889,11 @@ export default function SettingsScreen() {
     ],
     [dataOverview, displayNumber],
   );
-  const isStorageBusy = isScanningOrphanImages || isCleaningOrphanImages || isClearingPrintEnhanceCache;
+  const isStorageBusy =
+    isScanningOrphanImages
+    || isCleaningOrphanImages
+    || isClearingPrintEnhanceCache
+    || isStorageUsageScanning;
   const isRestoreBusy = isInspectingBackup || isRestoring;
   const isBackupBusy = isBackingUp || isRestoreBusy || isResavingBackup;
   const isExportImageModeBusy =
@@ -1986,9 +2042,9 @@ export default function SettingsScreen() {
         <SettingsSection title="存储">
           <SettingsRow
             icon="storage"
-            onPress={() => setActiveSheet('storage')}
+            onPress={handleOpenStorageSheet}
             right={<Text numberOfLines={1} style={styles.rowValueText}>
-              {displayNumber(dataOverview.imageCount)} 张 · {displayStorageText}
+              {storageRowSummary}
             </Text>}
             showChevron
             title="本机存储"
@@ -2326,10 +2382,106 @@ export default function SettingsScreen() {
                       </View>
                       <View style={styles.metricDivider} />
                       <View style={styles.storageMetricRow}>
-                        <Text style={styles.storageMetricLabel}>占用空间</Text>
+                        <Text style={styles.storageMetricLabel}>当前图片占用</Text>
                         <Text style={styles.storageMetricValue}>{displayStorageText}</Text>
                       </View>
                     </View>
+                  </View>
+
+                  <View style={styles.sheetSection}>
+                    <View style={styles.storageScanTitleRow}>
+                      <Text style={styles.sheetSectionTitle}>分类存储扫描</Text>
+                      <Text style={styles.readOnlyBadge}>只读</Text>
+                    </View>
+                    <Text style={styles.sheetBodyText}>
+                      读取 App 可访问的私有文件并按目录分类，不会修改或删除任何数据。持久数据可用于和系统“数据”占用对比。
+                    </Text>
+
+                    {isStorageUsageScanning && !storageUsageScan ? (
+                      <View style={styles.storageScanLoadingRow}>
+                        <ActivityIndicator color={colors.accent} size="small" />
+                        <Text style={styles.storageScanStatusText}>正在扫描本机文件…</Text>
+                      </View>
+                    ) : null}
+
+                    {storageUsageScan ? (
+                      <>
+                        <View style={styles.storageMetrics}>
+                          <View style={styles.storageMetricRow}>
+                            <Text style={styles.storageMetricLabel}>持久数据</Text>
+                            <Text style={styles.storageMetricValue}>
+                              {formatStorageSize(storageUsageScan.persistentBytes)}
+                            </Text>
+                          </View>
+                          <View style={styles.metricDivider} />
+                          <View style={styles.storageMetricRow}>
+                            <Text style={styles.storageMetricLabel}>缓存数据</Text>
+                            <Text style={styles.storageMetricValue}>
+                              {formatStorageSize(storageUsageScan.cacheBytes)}
+                            </Text>
+                          </View>
+                          <View style={styles.metricDivider} />
+                          <View style={styles.storageMetricRow}>
+                            <Text style={styles.storageMetricLabel}>扫描合计</Text>
+                            <Text style={styles.storageMetricValue}>
+                              {formatStorageSize(storageUsageScan.totalBytes)}
+                            </Text>
+                          </View>
+                        </View>
+
+                        <Text style={styles.storageCategoryHeading}>分类明细</Text>
+                        <View style={styles.storageMetrics}>
+                          {storageUsageScan.categories.map((category, index) => (
+                            <View key={category.id}>
+                              {index > 0 ? <View style={styles.metricDivider} /> : null}
+                              <View style={styles.storageMetricRow}>
+                                <Text style={styles.storageMetricLabel}>{category.label}</Text>
+                                <Text numberOfLines={1} style={styles.storageCategoryValue}>
+                                  {formatStorageSize(category.totalBytes)} · {category.fileCount} 个
+                                </Text>
+                              </View>
+                            </View>
+                          ))}
+                        </View>
+
+                        <Text style={styles.storageScanFootnote}>
+                          共扫描 {storageUsageScan.totalFileCount} 个文件。不含安装包；系统内部元数据可能造成少量差异。
+                        </Text>
+                        {storageUsageScan.unreadableEntryCount > 0 ? (
+                          <Text style={styles.storageScanWarning}>
+                            有 {storageUsageScan.unreadableEntryCount} 个项目无法读取，当前结果可能偏小。
+                          </Text>
+                        ) : null}
+                      </>
+                    ) : null}
+
+                    {storageUsageErrorMessage ? (
+                      <Text style={styles.storageScanWarning}>{storageUsageErrorMessage}</Text>
+                    ) : null}
+
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{ busy: isStorageUsageScanning, disabled: isStorageBusy }}
+                      disabled={isStorageBusy}
+                      onPress={() => {
+                        void loadCategorizedStorageUsage(true);
+                      }}
+                      style={({ pressed }) => [
+                        styles.secondarySheetButton,
+                        pressed && !isStorageBusy ? styles.settingsRowPressed : null,
+                        isStorageBusy ? styles.disabledButton : null,
+                      ]}>
+                      {isStorageUsageScanning
+                        ? <ActivityIndicator color={colors.accent} size="small" />
+                        : <MaterialIcons color={colors.accent} name="refresh" size={20} />}
+                      <Text style={styles.secondarySheetButtonText}>
+                        {isStorageUsageScanning
+                          ? '正在扫描…'
+                          : storageUsageScan
+                            ? '重新扫描'
+                            : '开始扫描'}
+                      </Text>
+                    </Pressable>
                   </View>
 
                   <View style={styles.sheetSection}>
@@ -2687,7 +2839,38 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: '700',
   },
+  storageScanTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  readOnlyBadge: {
+    borderRadius: 10,
+    backgroundColor: '#EAF7EE',
+    color: colors.accent,
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
   sheetBodyText: {
+    color: '#6E6E73',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  storageScanLoadingRow: {
+    minHeight: 48,
+    borderRadius: 12,
+    backgroundColor: '#F7F7F9',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  storageScanStatusText: {
     color: '#6E6E73',
     fontSize: 13,
     lineHeight: 19,
@@ -2860,6 +3043,30 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '700',
     textAlign: 'right',
+  },
+  storageCategoryHeading: {
+    color: '#3A3A3C',
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+  },
+  storageCategoryValue: {
+    flexShrink: 1,
+    color: colors.accent,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  storageScanFootnote: {
+    color: '#8E8E93',
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  storageScanWarning: {
+    color: '#B36B00',
+    fontSize: 12,
+    lineHeight: 18,
   },
   metricDivider: {
     height: StyleSheet.hairlineWidth,
