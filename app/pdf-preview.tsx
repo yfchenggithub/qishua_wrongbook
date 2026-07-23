@@ -398,7 +398,7 @@ export default function PdfPreviewScreen() {
   }, [isBusy, pdfPartCount, pdfUri, selectedPdfIndex]);
 
   const shareButtonTitle = isSharingWholeSet
-    ? '正在生成整套 PDF…'
+    ? '正在打开分享面板…'
     : shareSetStatus === 'error'
       ? '重新分享整套 PDF'
       : shareSetStatus === 'success'

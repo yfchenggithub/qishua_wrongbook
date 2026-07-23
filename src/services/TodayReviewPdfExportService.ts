@@ -16,7 +16,7 @@ import {
 import { Logger } from '@/src/services/Logger';
 import { getTodayReviewExportItems } from '@/src/services/MistakeListService';
 import * as ReviewSheetService from '@/src/services/ReviewSheetService';
-import { createOrderedPdfZip } from '@/src/services/TodayReviewPdfBundleService';
+import { prepareCachedTodayReviewPdfZip } from '@/src/services/TodayReviewPdfBundleService';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
@@ -2195,7 +2195,7 @@ export async function shareTodayReviewPdfSet(
 
   let zipUri: string;
   try {
-    zipUri = await createOrderedPdfZip(normalizedUris);
+    zipUri = await prepareCachedTodayReviewPdfZip(normalizedUris);
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'Failed to prepare ZIP fallback for the PDF set.', {
       pdfPartCount: normalizedUris.length,

@@ -265,7 +265,11 @@ export default function TodayScreen() {
           ? ` · ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
           : ''
       }`
-    : undefined;
+    : hasCachedWorksheet
+      ? `${exportPdfProgress.message || '今日练习卷已缓存'} · 可快速打开`
+      : dueTodayCount > 0
+        ? `等待生成今日练习卷 · 0 / ${dueTodayCount} 题`
+        : '今日没有可生成的练习卷';
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
   return (

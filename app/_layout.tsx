@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -13,12 +14,16 @@ import { MusicProvider } from '@/src/music';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
+import { registerTodayWorksheetBackgroundTask } from '@/src/services/TodayWorksheetBackgroundTaskService';
+import { ensureTodayWorksheet } from '@/src/services/TodayWorksheetGenerationCoordinator';
 
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
 const LAYOUT_SCOPE = 'RootLayout';
+const WORKSHEET_STARTUP_DELAY_MS = 800;
+const DATE_ROLLOVER_DELAY_MS = 1000;
 let appDatabaseInitPromise: Promise<void> | null = null;
 let hasConfiguredNotificationHandler = false;
 let hasLoggedRuntimeContext = false;
@@ -63,6 +68,35 @@ function initializeDatabaseOnce(): Promise<void> {
   return appDatabaseInitPromise;
 }
 
+async function prepareTodayWorksheet(reason: string): Promise<void> {
+  try {
+    await initializeDatabaseOnce();
+    const result = await ensureTodayWorksheet();
+    Logger.info(LAYOUT_SCOPE, 'Today worksheet preparation finished.', {
+      reason,
+      outcome: result.outcome,
+      exportedCount: result.exportedCount,
+      fromCache: result.fromCache ?? false,
+    });
+  } catch (error) {
+    Logger.warn(LAYOUT_SCOPE, 'Today worksheet preparation failed.', { reason, error });
+  }
+}
+
+function getMillisecondsUntilNextLocalDay(): number {
+  const now = new Date();
+  const nextDay = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+    0,
+    0,
+    0,
+    DATE_ROLLOVER_DELAY_MS,
+  );
+  return Math.max(DATE_ROLLOVER_DELAY_MS, nextDay.getTime() - now.getTime());
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const router = useRouter();
@@ -82,6 +116,43 @@ export default function RootLayout() {
         // Database initialization errors are already logged in initializeDatabaseOnce.
         Logger.warn(LAYOUT_SCOPE, 'Reminder schedule refresh on app start failed.', { error });
       });
+  }, []);
+
+  useEffect(() => {
+    let dateRolloverTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleDateRollover = () => {
+      if (dateRolloverTimer) {
+        clearTimeout(dateRolloverTimer);
+      }
+      dateRolloverTimer = setTimeout(() => {
+        void prepareTodayWorksheet('date_rollover');
+        scheduleDateRollover();
+      }, getMillisecondsUntilNextLocalDay());
+    };
+
+    const startupTimer = setTimeout(() => {
+      void prepareTodayWorksheet('app_start');
+    }, WORKSHEET_STARTUP_DELAY_MS);
+    void registerTodayWorksheetBackgroundTask().catch((error) => {
+      Logger.warn(LAYOUT_SCOPE, 'Today worksheet background task registration failed.', { error });
+    });
+    scheduleDateRollover();
+
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') {
+        return;
+      }
+      void prepareTodayWorksheet('app_foreground');
+      scheduleDateRollover();
+    });
+
+    return () => {
+      clearTimeout(startupTimer);
+      if (dateRolloverTimer) {
+        clearTimeout(dateRolloverTimer);
+      }
+      appStateSubscription.remove();
+    };
   }, []);
 
   useEffect(() => {

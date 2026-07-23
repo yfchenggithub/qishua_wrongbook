@@ -75,7 +75,7 @@ interface TodaySummaryCardProps {
   exportLabel: string;
   exportDisabled: boolean;
   onExportPress: () => void;
-  exportProgressLabel?: string;
+  exportProgressLabel: string;
   exportProgress?: number;
 }
 
@@ -162,14 +162,12 @@ export function TodaySummaryCard({
         </Text>
       </Pressable>
 
-      {exportProgressLabel ? (
-        <View style={styles.exportProgressWrap}>
-          <Text numberOfLines={2} style={styles.exportProgressText}>{exportProgressLabel}</Text>
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, { width: `${Math.round(Math.max(0, Math.min(1, exportProgress)) * 100)}%` }]} />
-          </View>
+      <View style={styles.exportProgressWrap}>
+        <Text numberOfLines={2} style={styles.exportProgressText}>{exportProgressLabel}</Text>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${Math.round(Math.max(0, Math.min(1, exportProgress)) * 100)}%` }]} />
         </View>
-      ) : null}
+      </View>
     </SurfaceCard>
   );
 }

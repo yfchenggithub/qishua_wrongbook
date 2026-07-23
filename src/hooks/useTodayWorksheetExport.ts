@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import * as ExportImageModeService from '@/src/services/ExportImageModeService';
-import type { TodayWorksheetExportStage } from '@/src/services/TodayWorksheetExportService';
-import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import { Logger } from '@/src/services/Logger';
-import type {
-  PrintEnhanceConcurrency,
-  PrintEnhancePerformanceProfile,
-  PrintEnhanceClearPrintStrength,
-  PrintEnhanceMode,
-} from '@/src/utils/image/printEnhanceConfig';
 import {
-  toActivePrintEnhanceConcurrency,
-  toActivePrintEnhancePerformanceProfile,
+  ensureTodayWorksheet,
+  getTodayWorksheetGenerationState,
+  inspectTodayWorksheetCache,
+  subscribeTodayWorksheetGeneration,
+  type TodayWorksheetGenerationState,
+} from '@/src/services/TodayWorksheetGenerationCoordinator';
+import type { TodayWorksheetExportStage } from '@/src/services/TodayWorksheetExportService';
+import type {
+  PrintEnhanceClearPrintStrength,
+  PrintEnhanceConcurrency,
+  PrintEnhanceMode,
+  PrintEnhancePerformanceProfile,
 } from '@/src/utils/image/printEnhanceConfig';
 
 type ExportToastType = 'success' | 'info' | 'error';
@@ -58,29 +58,8 @@ export type UseTodayWorksheetExportResult = {
   exportTodayWorksheet: () => Promise<void>;
 };
 
-type RunTodayWorksheetExportOptions = {
-  forceRegenerate?: boolean;
-};
-
-type ResolvedPrintEnhanceSettings = {
-  mode: PrintEnhanceMode;
-  clearPrintStrength: PrintEnhanceClearPrintStrength;
-  concurrency: PrintEnhanceConcurrency;
-  performanceProfile: PrintEnhancePerformanceProfile;
-  source: 'explicit' | 'saved' | 'mixed';
-};
-
 const EMPTY_MESSAGE = '今天暂无需要复做的错题';
-const GENERATING_MESSAGE = '正在生成练习卷 PDF...';
 const GENERIC_FAILED_MESSAGE = '导出失败，请稍后重试';
-
-const INITIAL_PROGRESS: ExportPdfProgressState = {
-  phase: 'idle',
-  current: 0,
-  total: 0,
-  elapsedSeconds: 0,
-  message: '',
-};
 
 function toSafeCount(value: number | null | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -110,83 +89,33 @@ function normalizePdfPageCounts(value: number[] | null | undefined, fileCount: n
   return normalized.every((pageCount) => pageCount > 0) ? normalized : [];
 }
 
-async function resolvePrintEnhanceSettings(
-  mode: PrintEnhanceMode | undefined,
-  clearPrintStrength: PrintEnhanceClearPrintStrength | undefined,
-  concurrency: PrintEnhanceConcurrency | undefined,
-  performanceProfile: PrintEnhancePerformanceProfile | undefined,
-): Promise<ResolvedPrintEnhanceSettings> {
-  const hasMode = typeof mode === 'string' && mode.trim().length > 0;
-  const hasStrength = typeof clearPrintStrength === 'string' && clearPrintStrength.trim().length > 0;
-  const hasConcurrency = typeof concurrency === 'number' && Number.isFinite(concurrency);
-  const hasPerformanceProfile =
-    typeof performanceProfile === 'string' && performanceProfile.trim().length > 0;
-  if (hasMode && hasStrength && hasConcurrency && hasPerformanceProfile) {
-    return {
-      mode: mode as PrintEnhanceMode,
-      clearPrintStrength: clearPrintStrength as PrintEnhanceClearPrintStrength,
-      concurrency: toActivePrintEnhanceConcurrency(concurrency),
-      performanceProfile: toActivePrintEnhancePerformanceProfile(performanceProfile),
-      source: 'explicit',
-    };
+function toProgressPhase(state: TodayWorksheetGenerationState): ExportPdfProgressPhase {
+  if (state.status === 'ready') {
+    return 'done';
   }
-
-  const savedSettings = await ExportImageModeService.loadExportImageSettings();
-  if (!hasMode && !hasStrength && !hasConcurrency && !hasPerformanceProfile) {
-    return {
-      mode: savedSettings.mode,
-      clearPrintStrength: savedSettings.clearPrintStrength,
-      concurrency: savedSettings.enhanceConcurrency,
-      performanceProfile: savedSettings.performanceProfile,
-      source: 'saved',
-    };
+  if (state.status === 'error') {
+    return 'error';
   }
-
-  return {
-    mode: hasMode ? (mode as PrintEnhanceMode) : savedSettings.mode,
-    clearPrintStrength: hasStrength
-      ? (clearPrintStrength as PrintEnhanceClearPrintStrength)
-      : savedSettings.clearPrintStrength,
-    concurrency: hasConcurrency
-      ? toActivePrintEnhanceConcurrency(concurrency)
-      : savedSettings.enhanceConcurrency,
-    performanceProfile: hasPerformanceProfile
-      ? toActivePrintEnhancePerformanceProfile(performanceProfile)
-      : savedSettings.performanceProfile,
-    source: 'mixed',
-  };
-}
-
-function toProgressPhase(stage: TodayWorksheetExportStage | null): ExportPdfProgressPhase {
-  if (!stage) {
+  if (!state.stage) {
     return 'idle';
   }
-  if (stage === 'preparing') {
+  if (state.stage === 'preparing') {
     return 'preparing';
   }
-  if (stage === 'processing_images') {
+  if (state.stage === 'processing_images') {
     return 'processing_images';
   }
-  if (stage === 'generating_pages') {
+  if (state.stage === 'generating_pages') {
     return 'generating_pages';
   }
-  if (stage === 'saving') {
+  if (state.stage === 'saving') {
     return 'saving';
   }
   return 'sharing';
 }
 
-function toErrorInfo(error: unknown): { name: string; message: string } {
-  if (error instanceof Error) {
-    return {
-      name: error.name || 'Error',
-      message: error.message || GENERIC_FAILED_MESSAGE,
-    };
-  }
-  return {
-    name: 'UnknownError',
-    message: typeof error === 'string' && error.trim() ? error.trim() : GENERIC_FAILED_MESSAGE,
-  };
+function buildIdleMessage(dueToday: number): string {
+  return dueToday > 0 ? '等待生成今日练习卷' : '今日没有待复做错题';
 }
 
 export function formatElapsedSeconds(seconds: number): string {
@@ -211,147 +140,78 @@ export function useTodayWorksheetExport(
     onSuccess,
     onEmpty,
   } = options;
+  const safeDueToday = toSafeCount(dueToday);
+  const [generationState, setGenerationState] = useState(getTodayWorksheetGenerationState);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
-  const [isExporting, setIsExporting] = useState(false);
-  const [hasCachedWorksheet, setHasCachedWorksheet] = useState(false);
-  const [exportStage, setExportStage] = useState<TodayWorksheetExportStage | null>(null);
-  const [progress, setProgress] = useState<ExportPdfProgressState>(INITIAL_PROGRESS);
+  useEffect(() => subscribeTodayWorksheetGeneration(() => {
+    setGenerationState(getTodayWorksheetGenerationState());
+  }), []);
 
-  const isMountedRef = useRef(true);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const progressRef = useRef<ExportPdfProgressState>(INITIAL_PROGRESS);
+  useEffect(() => {
+    void inspectTodayWorksheetCache();
+  }, [safeDueToday]);
 
-  const clearTimer = useCallback(() => {
-    if (!timerRef.current) {
-      return;
+  const isExporting =
+    generationState.status === 'checking_cache' || generationState.status === 'generating';
+  const hasCachedWorksheet = generationState.cachedWorksheet !== null;
+
+  useEffect(() => {
+    if (!isExporting || generationState.startedAt === null) {
+      setElapsedSeconds(0);
+      return undefined;
     }
-    clearInterval(timerRef.current);
-    timerRef.current = null;
-  }, []);
 
-  useEffect(
-    () => () => {
-      isMountedRef.current = false;
-      clearTimer();
-    },
-    [clearTimer],
-  );
-
-  useEffect(() => {
-    progressRef.current = progress;
-  }, [progress]);
-
-  useEffect(() => {
-    let isActive = true;
-    void TodayWorksheetExportService.getCachedTodayWorksheet().then((cached) => {
-      if (isActive) {
-        setHasCachedWorksheet(cached !== null);
-      }
-    });
-    return () => {
-      isActive = false;
+    const startedAt = generationState.startedAt;
+    const updateElapsed = () => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
     };
-  }, [dueToday]);
+    updateElapsed();
+    const timer = setInterval(updateElapsed, 1000);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [generationState.startedAt, isExporting]);
 
-  const progressPercent = progress.total > 0 && Number.isFinite(progress.current / progress.total)
-    ? Math.max(0, Math.min(1, progress.current / progress.total))
-    : 0;
+  const progress = useMemo<ExportPdfProgressState>(() => {
+    const fallbackTotal = generationState.status === 'idle' ? safeDueToday : 0;
+    const total = generationState.total > 0 ? generationState.total : fallbackTotal;
+    return {
+      phase: toProgressPhase(generationState),
+      current: total > 0 ? Math.min(total, generationState.current) : generationState.current,
+      total,
+      elapsedSeconds,
+      message: generationState.message || buildIdleMessage(safeDueToday),
+    };
+  }, [elapsedSeconds, generationState, safeDueToday]);
 
-  const runTodayWorksheetExport = useCallback(async (
-    runOptions?: RunTodayWorksheetExportOptions,
-  ) => {
+  const progressPercent = progress.phase === 'done'
+    ? 1
+    : progress.total > 0 && Number.isFinite(progress.current / progress.total)
+      ? Math.max(0, Math.min(1, progress.current / progress.total))
+      : 0;
+
+  const exportTodayWorksheet = useCallback(async () => {
     if (isExporting) {
       return;
     }
 
-    const safeDueToday = toSafeCount(dueToday);
-    if (safeDueToday <= 0) {
-      Logger.info(scope, 'export_today_practice_pdf_empty', {
-        dueToday: safeDueToday,
-      });
-      showToast(EMPTY_MESSAGE, 'info');
-      if (onEmpty) {
-        onEmpty();
-      }
-      return;
-    }
-
     const startedAt = Date.now();
-    const resolvedEnhanceSettings = await resolvePrintEnhanceSettings(
-      printEnhanceMode,
-      printEnhanceClearPrintStrength,
-      printEnhanceConcurrency,
-      printEnhancePerformanceProfile,
-    );
     Logger.info(scope, 'export_pdf_start', {
       total: safeDueToday,
-      printEnhanceMode: resolvedEnhanceSettings.mode,
-      printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
-      printEnhanceConcurrency: resolvedEnhanceSettings.concurrency,
-      printEnhancePerformanceProfile: resolvedEnhanceSettings.performanceProfile,
-      printEnhanceSettingsSource: resolvedEnhanceSettings.source,
+      cacheAware: true,
     });
 
-    if (isMountedRef.current) {
-      setIsExporting(true);
-      setExportStage('preparing');
-      setProgress({
-        phase: 'preparing',
-        current: 0,
-        total: safeDueToday,
-        elapsedSeconds: 0,
-        message: GENERATING_MESSAGE,
-      });
-    }
-
-    clearTimer();
-    timerRef.current = setInterval(() => {
-      if (!isMountedRef.current) {
-        return;
-      }
-      const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-      setProgress((prev) => ({
-        ...prev,
-        elapsedSeconds,
-      }));
-    }, 1000);
-
     try {
-      const result = await TodayWorksheetExportService.exportTodayWorksheet({
+      const result = await ensureTodayWorksheet({
         expectedPendingCount: safeDueToday,
-        forceRegenerate: runOptions?.forceRegenerate,
-        printEnhanceMode: resolvedEnhanceSettings.mode,
-        printEnhanceClearPrintStrength: resolvedEnhanceSettings.clearPrintStrength,
-        printEnhanceConcurrency: resolvedEnhanceSettings.concurrency,
-        printEnhancePerformanceProfile: resolvedEnhanceSettings.performanceProfile,
-        onProgress: (next) => {
-          const elapsedMs = Math.max(0, Date.now() - startedAt);
-          const total = toSafeCount(next.total ?? next.pendingCount ?? safeDueToday);
-          const currentRaw = toSafeCount(next.current);
-          const current = total > 0 ? Math.min(total, currentRaw) : currentRaw;
-
-          Logger.info(scope, 'export_pdf_progress', {
-            phase: next.stage,
-            current,
-            total,
-            elapsedMs,
-          });
-
-          if (!isMountedRef.current) {
-            return;
-          }
-          setExportStage(next.stage);
-          setProgress({
-            phase: toProgressPhase(next.stage),
-            current,
-            total,
-            elapsedSeconds: Math.floor(elapsedMs / 1000),
-            message: next.message || GENERATING_MESSAGE,
-          });
-        },
+        printEnhanceMode,
+        printEnhanceClearPrintStrength,
+        printEnhanceConcurrency,
+        printEnhancePerformanceProfile,
       });
-
       const durationMs = Math.max(0, Date.now() - startedAt);
+
       if (result.outcome === 'success') {
         const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
         const pdfUris = normalizeFileUris(pdfUri, result.fileUris);
@@ -361,42 +221,25 @@ export function useTodayWorksheetExport(
             errorName: 'EmptyPdfUri',
             errorMessage: 'Worksheet export succeeded but fileUri is empty.',
             durationMs,
-            current: progressRef.current.current,
-            total: progressRef.current.total,
           });
           showToast('导出成功但未找到 PDF 文件，请重试', 'error', longToastDurationMs);
           return;
         }
 
-        Logger.info(scope, 'export_pdf_success', {
+        Logger.info(scope, result.fromCache ? 'export_pdf_cache_reused' : 'export_pdf_success', {
           total: result.exportedCount,
           durationMs,
           filePath: pdfUri,
           fileCount: pdfUris.length,
           pdfPageCounts,
         });
-        if (isMountedRef.current) {
-          setHasCachedWorksheet(true);
-          setProgress((prev) => ({
-            ...prev,
-            phase: 'done',
-            current: prev.total > 0 ? prev.total : prev.current,
-          }));
-        }
         onSuccess(pdfUri, pdfUris, pdfPageCounts);
         return;
       }
 
       if (result.outcome === 'empty') {
         showToast(EMPTY_MESSAGE, 'info');
-        if (onEmpty) {
-          onEmpty();
-        }
-        return;
-      }
-
-      if (result.outcome === 'busy') {
-        showToast(result.message, 'info', longToastDurationMs);
+        onEmpty?.();
         return;
       }
 
@@ -405,106 +248,33 @@ export function useTodayWorksheetExport(
         errorName: result.outcome,
         errorMessage: result.message,
         durationMs,
-        current: progressRef.current.current,
-        total: progressRef.current.total,
       });
       showToast(result.message, failureType, longToastDurationMs);
     } catch (error) {
-      const durationMs = Math.max(0, Date.now() - startedAt);
-      const errorInfo = toErrorInfo(error);
       Logger.error(scope, 'export_pdf_failed', {
-        errorName: errorInfo.name,
-        errorMessage: errorInfo.message,
-        durationMs,
-        current: progressRef.current.current,
-        total: progressRef.current.total,
+        durationMs: Math.max(0, Date.now() - startedAt),
         error,
       });
       showToast(GENERIC_FAILED_MESSAGE, 'error', longToastDurationMs);
-      if (isMountedRef.current) {
-        setProgress((prev) => ({
-          ...prev,
-          phase: 'error',
-        }));
-      }
-    } finally {
-      clearTimer();
-      if (isMountedRef.current) {
-        setIsExporting(false);
-        setExportStage(null);
-        setProgress(INITIAL_PROGRESS);
-      }
     }
   }, [
-    clearTimer,
-    dueToday,
     isExporting,
     longToastDurationMs,
     onEmpty,
     onSuccess,
     printEnhanceClearPrintStrength,
     printEnhanceConcurrency,
-    printEnhancePerformanceProfile,
     printEnhanceMode,
+    printEnhancePerformanceProfile,
+    safeDueToday,
     scope,
     showToast,
   ]);
 
-  const exportTodayWorksheet = useCallback(async () => {
-    if (isExporting) {
-      return;
-    }
-
-    const cached = await TodayWorksheetExportService.getCachedTodayWorksheet();
-    if (!cached) {
-      if (isMountedRef.current) {
-        setHasCachedWorksheet(false);
-      }
-      await runTodayWorksheetExport();
-      return;
-    }
-
-    if (isMountedRef.current) {
-      setHasCachedWorksheet(true);
-    }
-
-    Logger.info(scope, 'export_pdf_cache_choice_shown', {
-      generatedAt: cached.generatedAt,
-      exportedCount: cached.exportedCount,
-      pdfPartCount: cached.pdfPartCount,
-    });
-    Alert.alert(
-      '今日练习卷已生成',
-      `今天已生成过一份练习卷（${cached.exportedCount}题）。默认打开已有 PDF；如果题目或导出设置有变化，也可以重新生成。`,
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '重新生成',
-          style: 'destructive',
-          onPress: () => {
-            void runTodayWorksheetExport({ forceRegenerate: true });
-          },
-        },
-        {
-          text: '打开已有 PDF',
-          isPreferred: true,
-          onPress: () => {
-            Logger.info(scope, 'export_pdf_cache_reused_by_user', {
-              generatedAt: cached.generatedAt,
-              exportedCount: cached.exportedCount,
-              pdfPartCount: cached.pdfPartCount,
-            });
-            onSuccess(cached.fileUri, cached.fileUris, cached.pdfPageCounts);
-          },
-        },
-      ],
-    );
-  }, [isExporting, onSuccess, runTodayWorksheetExport, scope]);
-
   return {
     isExporting,
     hasCachedWorksheet,
-    exportStage,
+    exportStage: generationState.stage,
     progress,
     progressPercent,
     exportTodayWorksheet,

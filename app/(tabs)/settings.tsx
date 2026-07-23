@@ -1681,13 +1681,15 @@ export default function SettingsScreen() {
   const worksheetExportHintText = isExportingWorksheet
     ? worksheetExportButtonText
     : hasCachedWorksheet
-      ? '今日练习卷已生成，可直接打开已有 PDF，或选择重新生成。'
+      ? '今日练习卷已缓存，点击后将快速读取并打开。'
       : canExportTodayWorksheet
       ? `将导出今日待复做的 ${worksheetPendingCount} 题，便于打印。`
       : '今日没有待复做错题，暂不可导出。';
   const worksheetExportProgressHeadline = isExportingWorksheet
     ? (worksheetExportProgress.message || worksheetExportButtonText)
-    : worksheetExportHintText;
+    : hasCachedWorksheet
+      ? (worksheetExportProgress.message || worksheetExportHintText)
+      : worksheetExportHintText;
   const worksheetExportProgressDetailText =
     isExportingWorksheet && worksheetExportProgress.total > 0
       ? `已处理 ${worksheetExportProgress.current} / ${worksheetExportProgress.total} 题 · 用时 ${formatElapsedSeconds(worksheetExportProgress.elapsedSeconds)}`
@@ -2456,12 +2458,10 @@ export default function SettingsScreen() {
                     {worksheetExportProgressDetailText ? (
                       <Text style={styles.exportProgressMeta}>{worksheetExportProgressDetailText}</Text>
                     ) : null}
-                    {isExportingWorksheet && worksheetExportProgress.total > 0 ? (
-                      <View style={styles.progressTrack}>
-                        <View style={[styles.progressFill, { flex: worksheetExportProgressPercent }]} />
-                        <View style={{ flex: Math.max(0, 1 - worksheetExportProgressPercent) }} />
-                      </View>
-                    ) : null}
+                    <View style={styles.progressTrack}>
+                      <View style={[styles.progressFill, { flex: worksheetExportProgressPercent }]} />
+                      <View style={{ flex: Math.max(0, 1 - worksheetExportProgressPercent) }} />
+                    </View>
                   </View>
                 </>
               ) : (

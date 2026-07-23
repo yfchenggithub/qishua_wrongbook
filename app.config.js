@@ -10,10 +10,22 @@ function getShanghaiBuildDate(date = new Date()) {
   return `${valueByType.year}.${valueByType.month}.${valueByType.day}`;
 }
 
-module.exports = ({ config }) => ({
-  ...config,
-  extra: {
-    ...config.extra,
-    buildDate: getShanghaiBuildDate(),
-  },
-});
+function hasPlugin(plugins, pluginName) {
+  return plugins.some((plugin) => (
+    plugin === pluginName || (Array.isArray(plugin) && plugin[0] === pluginName)
+  ));
+}
+
+module.exports = ({ config }) => {
+  const plugins = Array.isArray(config.plugins) ? config.plugins : [];
+  return {
+    ...config,
+    plugins: hasPlugin(plugins, 'expo-background-task')
+      ? plugins
+      : [...plugins, 'expo-background-task'],
+    extra: {
+      ...config.extra,
+      buildDate: getShanghaiBuildDate(),
+    },
+  };
+};
