@@ -1,6 +1,6 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { initDatabase } from '@/src/db';
 import { Logger } from '@/src/services/Logger';
@@ -8,7 +8,11 @@ import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBacku
 
 const SERVICE_SCOPE = 'AutomaticBackupBackgroundTaskService';
 const TASK_NAME = 'qishua-create-daily-automatic-backup';
-const MINIMUM_INTERVAL_MINUTES = 24 * 60;
+const MINIMUM_INTERVAL_MINUTES = 60;
+
+function isAppActive(): boolean {
+  return AppState.currentState === 'active';
+}
 
 if (!TaskManager.isTaskDefined(TASK_NAME)) {
   TaskManager.defineTask(TASK_NAME, async ({ error, executionInfo }) => {
@@ -22,7 +26,19 @@ if (!TaskManager.isTaskDefined(TASK_NAME)) {
     }
 
     try {
+      if (isAppActive()) {
+        Logger.info(SERVICE_SCOPE, 'Deferred automatic backup while the app is active.', {
+          eventId: executionInfo.eventId,
+        });
+        return BackgroundTask.BackgroundTaskResult.Success;
+      }
       await initDatabase();
+      if (isAppActive()) {
+        Logger.info(SERVICE_SCOPE, 'Deferred automatic backup because the app became active.', {
+          eventId: executionInfo.eventId,
+        });
+        return BackgroundTask.BackgroundTaskResult.Success;
+      }
       const result = await ensureDailyAutomaticBackup({ trigger: 'background' });
       Logger.info(SERVICE_SCOPE, 'Background automatic backup task finished.', {
         eventId: executionInfo.eventId,
@@ -61,7 +77,18 @@ export async function registerAutomaticBackupBackgroundTask(): Promise<boolean> 
     return false;
   }
 
-  const isRegistered = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+  let isRegistered = await TaskManager.isTaskRegisteredAsync(TASK_NAME);
+  let registrationUpdated = false;
+  if (isRegistered) {
+    const registeredOptions = await TaskManager.getTaskOptionsAsync<{
+      minimumInterval?: number;
+    }>(TASK_NAME);
+    if (registeredOptions?.minimumInterval !== MINIMUM_INTERVAL_MINUTES) {
+      await BackgroundTask.unregisterTaskAsync(TASK_NAME);
+      isRegistered = false;
+      registrationUpdated = true;
+    }
+  }
   if (!isRegistered) {
     await BackgroundTask.registerTaskAsync(TASK_NAME, {
       minimumInterval: MINIMUM_INTERVAL_MINUTES,
@@ -70,6 +97,7 @@ export async function registerAutomaticBackupBackgroundTask(): Promise<boolean> 
 
   Logger.info(SERVICE_SCOPE, 'Background automatic backup task is registered.', {
     alreadyRegistered: isRegistered,
+    registrationUpdated,
     minimumIntervalMinutes: MINIMUM_INTERVAL_MINUTES,
   });
   return true;

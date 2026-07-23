@@ -25,7 +25,7 @@ import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/servic
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
 import {
-  ensureDailyAutomaticBackup,
+  getTodayAutomaticBackup,
   type AutomaticBackupRecord,
 } from '@/src/services/backup/AutomaticBackupService';
 import * as BackupService from '@/src/services/backup/BackupService';
@@ -500,7 +500,7 @@ export default function SettingsScreen() {
   const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
   const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
   const [automaticBackup, setAutomaticBackup] = useState<AutomaticBackupRecord | null>(null);
-  const [isAutomaticBackupPreparing, setIsAutomaticBackupPreparing] = useState(true);
+  const [isAutomaticBackupLoading, setIsAutomaticBackupLoading] = useState(true);
   const [isSharingBackup, setIsSharingBackup] = useState(false);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -606,16 +606,15 @@ export default function SettingsScreen() {
   }, [showToast]);
 
   const loadAutomaticBackupState = useCallback(async () => {
-    setIsAutomaticBackupPreparing(true);
+    setIsAutomaticBackupLoading(true);
     try {
-      const result = await ensureDailyAutomaticBackup({ trigger: 'settings_focus' });
-      setAutomaticBackup(result.backup);
+      setAutomaticBackup(await getTodayAutomaticBackup());
     } catch (error) {
       setAutomaticBackup(null);
-      Logger.warn(PAGE_SCOPE, 'Failed to prepare today automatic backup in settings.', { error });
-      showToast('今日自动备份生成失败，稍后将自动重试', 'warning', TOAST_DURATION_LONG);
+      Logger.warn(PAGE_SCOPE, 'Failed to read today automatic backup in settings.', { error });
+      showToast('今日自动备份状态读取失败', 'warning', TOAST_DURATION_LONG);
     } finally {
-      setIsAutomaticBackupPreparing(false);
+      setIsAutomaticBackupLoading(false);
     }
   }, [showToast]);
 
@@ -847,7 +846,7 @@ export default function SettingsScreen() {
   const handleShareAutomaticBackup = useCallback(async () => {
     if (
       !automaticBackup
-      || isAutomaticBackupPreparing
+      || isAutomaticBackupLoading
       || isInspectingBackup
       || isRestoring
       || isSharingBackup
@@ -866,14 +865,14 @@ export default function SettingsScreen() {
         error,
       });
       setAutomaticBackup(null);
-      Alert.alert('分享或导出失败', '今天的备份文件暂时不可用，App 将自动重新生成，请稍后重试。');
+      Alert.alert('分享或导出失败', '今天的备份文件暂时不可用，后台任务稍后会重新生成。');
       void loadAutomaticBackupState();
     } finally {
       setIsSharingBackup(false);
     }
   }, [
     automaticBackup,
-    isAutomaticBackupPreparing,
+    isAutomaticBackupLoading,
     isInspectingBackup,
     isRestoring,
     isSharingBackup,
@@ -1011,7 +1010,7 @@ export default function SettingsScreen() {
   );
 
   const handleRestoreFromBackup = useCallback(() => {
-    if (isAutomaticBackupPreparing || isInspectingBackup || isRestoring || isSharingBackup) {
+    if (isAutomaticBackupLoading || isInspectingBackup || isRestoring || isSharingBackup) {
       return;
     }
 
@@ -1146,7 +1145,7 @@ export default function SettingsScreen() {
     );
   }, [
     handleConfirmRestore,
-    isAutomaticBackupPreparing,
+    isAutomaticBackupLoading,
     isInspectingBackup,
     isRestoring,
     isSharingBackup,
@@ -1611,9 +1610,9 @@ export default function SettingsScreen() {
   const backupButtonText = isSharingBackup ? '正在打开…' : '分享/导出';
   const automaticBackupSubtitle = automaticBackup
     ? `生成于 ${formatBackupCreatedAt(automaticBackup.createdAt)} · ${formatStorageSize(automaticBackup.fileSizeBytes)}`
-    : isAutomaticBackupPreparing
-      ? '正在生成今天的备份…'
-      : '今日备份暂不可用，将自动重试';
+    : isAutomaticBackupLoading
+      ? '正在读取今天的备份状态…'
+      : '今日备份将在 App 进入后台后生成';
   const selectedExportImageModeOption = useMemo(
     () =>
       EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)
@@ -1892,7 +1891,7 @@ export default function SettingsScreen() {
     || isCleaningHistoricalPdfs
     || isExportingWorksheet;
   const isRestoreBusy = isInspectingBackup || isRestoring;
-  const isBackupBusy = isAutomaticBackupPreparing || isSharingBackup || isRestoreBusy;
+  const isBackupBusy = isAutomaticBackupLoading || isSharingBackup || isRestoreBusy;
   const canShareAutomaticBackup = automaticBackup !== null && !isBackupBusy;
   const isExportImageModeBusy =
     isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving;

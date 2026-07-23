@@ -1,6 +1,6 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { initDatabase } from '@/src/db';
 import { Logger } from '@/src/services/Logger';
@@ -9,6 +9,10 @@ import { ensureTodayWorksheet } from '@/src/services/TodayWorksheetGenerationCoo
 const SERVICE_SCOPE = 'TodayWorksheetBackgroundTaskService';
 const TASK_NAME = 'qishua-prepare-today-worksheet';
 const MINIMUM_INTERVAL_MINUTES = 60;
+
+function isAppActive(): boolean {
+  return AppState.currentState === 'active';
+}
 
 if (!TaskManager.isTaskDefined(TASK_NAME)) {
   TaskManager.defineTask(TASK_NAME, async ({ error, executionInfo }) => {
@@ -22,7 +26,19 @@ if (!TaskManager.isTaskDefined(TASK_NAME)) {
     }
 
     try {
+      if (isAppActive()) {
+        Logger.info(SERVICE_SCOPE, 'Deferred worksheet generation while the app is active.', {
+          eventId: executionInfo.eventId,
+        });
+        return BackgroundTask.BackgroundTaskResult.Success;
+      }
       await initDatabase();
+      if (isAppActive()) {
+        Logger.info(SERVICE_SCOPE, 'Deferred worksheet generation because the app became active.', {
+          eventId: executionInfo.eventId,
+        });
+        return BackgroundTask.BackgroundTaskResult.Success;
+      }
       const result = await ensureTodayWorksheet();
       Logger.info(SERVICE_SCOPE, 'Background worksheet task finished.', {
         eventId: executionInfo.eventId,

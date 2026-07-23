@@ -14,7 +14,7 @@ import {
 } from '@/src/components/today';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
-import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
+import { getTodayAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
 import { Logger } from '@/src/services/Logger';
 import type { HomeStatus, HomeTaskSummary } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
@@ -62,7 +62,7 @@ function buildSummaryHint(status: HomeStatus): string {
 
 function formatBackupStatus(lastBackupAt: string | null): string {
   if (!lastBackupAt) {
-    return '数据仅保存在本机 · 正在生成今日备份';
+    return '数据仅保存在本机 · 今日备份等待后台生成';
   }
 
   const date = new Date(lastBackupAt);
@@ -127,8 +127,8 @@ export default function TodayScreen() {
 
   const loadAutomaticBackupStatus = useCallback(async () => {
     try {
-      const result = await ensureDailyAutomaticBackup({ trigger: 'app_foreground' });
-      setLastBackupAt(result.backup.createdAt);
+      const backup = await getTodayAutomaticBackup();
+      setLastBackupAt(backup?.createdAt ?? null);
     } catch (error) {
       Logger.warn(PAGE_SCOPE, 'Failed to load automatic backup status on home screen.', { error });
       setLastBackupAt(null);

@@ -12,12 +12,7 @@ const AUTOMATIC_BACKUP_DIR_NAME = 'automatic_backups';
 const AUTOMATIC_BACKUP_FILE_PATTERN =
   /^qishua-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.qsbk$/i;
 
-export type AutomaticBackupTrigger =
-  | 'app_start'
-  | 'app_foreground'
-  | 'date_rollover'
-  | 'background'
-  | 'settings_focus';
+export type AutomaticBackupTrigger = 'background';
 
 export type AutomaticBackupRecord = {
   date: string;
