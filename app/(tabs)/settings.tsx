@@ -39,6 +39,10 @@ import {
   type StorageUsageScanResult,
 } from '@/src/services/StorageMaintenanceService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
+import {
+  cleanupHistoricalWorksheetPdfFiles,
+  scanHistoricalWorksheetPdfFiles,
+} from '@/src/services/TodayWorksheetPdfCacheService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import {
   DEFAULT_PRINT_ENHANCE_CONCURRENCY,
@@ -512,6 +516,8 @@ export default function SettingsScreen() {
   const [storageUsageScan, setStorageUsageScan] = useState<StorageUsageScanResult | null>(null);
   const [isStorageUsageScanning, setIsStorageUsageScanning] = useState(false);
   const [storageUsageErrorMessage, setStorageUsageErrorMessage] = useState<string | null>(null);
+  const [isScanningHistoricalPdfs, setIsScanningHistoricalPdfs] = useState(false);
+  const [isCleaningHistoricalPdfs, setIsCleaningHistoricalPdfs] = useState(false);
   const [reminderSettings, setReminderSettings] =
     useState<ReviewReminderSettings>(DEFAULT_REMINDER_SETTINGS);
   const [isReminderLoading, setIsReminderLoading] = useState(true);
@@ -1841,6 +1847,106 @@ export default function SettingsScreen() {
     }
   }, [cleanupStorageOrphans, isCleaningOrphanImages, isScanningOrphanImages, showToast]);
 
+  const cleanupHistoricalPdfs = useCallback(
+    async (candidateUris: string[]) => {
+      if (isCleaningHistoricalPdfs) {
+        return;
+      }
+
+      Logger.info(PAGE_SCOPE, 'Start cleaning historical worksheet PDFs from settings.', {
+        targetCount: candidateUris.length,
+      });
+      setIsCleaningHistoricalPdfs(true);
+      try {
+        const result = await cleanupHistoricalWorksheetPdfFiles(candidateUris);
+        if (result.deletedCount <= 0 && result.failedCount <= 0) {
+          showToast(
+            result.skippedCount > 0 ? '文件状态已变化，未清理任何 PDF' : '没有可清理的历史 PDF',
+            'info',
+          );
+        } else if (result.failedCount > 0) {
+          showToast(
+            `已清理 ${result.deletedCount} 个历史文件，部分文件清理失败`,
+            'warning',
+            TOAST_DURATION_LONG,
+          );
+        } else {
+          showToast(
+            `已清理 ${result.deletedCount} 个历史文件，释放 ${formatStorageSize(result.releasedBytes)}`,
+            'success',
+            TOAST_DURATION_LONG,
+          );
+        }
+
+        Logger.info(PAGE_SCOPE, 'Finished cleaning historical worksheet PDFs from settings.', {
+          ...result,
+        });
+        await loadCategorizedStorageUsage();
+      } catch (error) {
+        Logger.error(PAGE_SCOPE, 'Failed to clean historical worksheet PDFs.', { error });
+        showToast('历史 PDF 清理失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+      } finally {
+        setIsCleaningHistoricalPdfs(false);
+      }
+    },
+    [isCleaningHistoricalPdfs, loadCategorizedStorageUsage, showToast],
+  );
+
+  const handleCleanHistoricalPdfs = useCallback(async () => {
+    if (isScanningHistoricalPdfs || isCleaningHistoricalPdfs || isExportingWorksheet) {
+      return;
+    }
+
+    Logger.info(PAGE_SCOPE, 'Start scanning historical worksheet PDFs from settings.');
+    setIsScanningHistoricalPdfs(true);
+    try {
+      const scanResult = await scanHistoricalWorksheetPdfFiles();
+      Logger.info(PAGE_SCOPE, 'Finished scanning historical worksheet PDFs from settings.', {
+        candidatePdfCount: scanResult.candidatePdfCount,
+        candidateIndexCount: scanResult.candidateIndexCount,
+        candidateBytes: scanResult.candidateBytes,
+        protectedFileCount: scanResult.protectedFileCount,
+        unreadableFileCount: scanResult.unreadableFileCount,
+      });
+
+      if (scanResult.candidates.length <= 0) {
+        showToast('没有可清理的历史 PDF', 'info');
+        return;
+      }
+
+      const unreadableHint = scanResult.unreadableFileCount > 0
+        ? `\n另有 ${scanResult.unreadableFileCount} 个文件无法读取，本次不会处理。`
+        : '';
+      Alert.alert(
+        '清理历史 PDF？',
+        `发现 ${scanResult.candidatePdfCount} 个历史 PDF 和 ${scanResult.candidateIndexCount} 个旧索引文件，预计释放 ${formatStorageSize(scanResult.candidateBytes)}。\n\n将保留今天仍有效的练习卷和最近 10 分钟生成的文件。${unreadableHint}`,
+        [
+          { text: '取消', style: 'cancel' },
+          {
+            text: '清理',
+            style: 'destructive',
+            onPress: () => {
+              void cleanupHistoricalPdfs(
+                scanResult.candidates.map((candidate) => candidate.uri),
+              );
+            },
+          },
+        ],
+      );
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to scan historical worksheet PDFs.', { error });
+      showToast('历史 PDF 扫描失败，请稍后重试', 'error', TOAST_DURATION_LONG);
+    } finally {
+      setIsScanningHistoricalPdfs(false);
+    }
+  }, [
+    cleanupHistoricalPdfs,
+    isCleaningHistoricalPdfs,
+    isExportingWorksheet,
+    isScanningHistoricalPdfs,
+    showToast,
+  ]);
+
   const handleClearPrintEnhanceCache = useCallback(async () => {
     if (isClearingPrintEnhanceCache) {
       return;
@@ -1893,7 +1999,10 @@ export default function SettingsScreen() {
     isScanningOrphanImages
     || isCleaningOrphanImages
     || isClearingPrintEnhanceCache
-    || isStorageUsageScanning;
+    || isStorageUsageScanning
+    || isScanningHistoricalPdfs
+    || isCleaningHistoricalPdfs
+    || isExportingWorksheet;
   const isRestoreBusy = isInspectingBackup || isRestoring;
   const isBackupBusy = isBackingUp || isRestoreBusy || isResavingBackup;
   const isExportImageModeBusy =
@@ -2480,6 +2589,39 @@ export default function SettingsScreen() {
                           : storageUsageScan
                             ? '重新扫描'
                             : '开始扫描'}
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  <View style={styles.sheetSection}>
+                    <Text style={styles.sheetSectionTitle}>PDF 维护</Text>
+                    <Text style={styles.sheetBodyText}>
+                      扫描并清理以前日期的练习卷、旧索引和生成失败后遗留的 PDF。今天仍有效的练习卷不会删除，清理前会再次确认。
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        busy: isScanningHistoricalPdfs || isCleaningHistoricalPdfs,
+                        disabled: isStorageBusy,
+                      }}
+                      disabled={isStorageBusy}
+                      onPress={() => {
+                        void handleCleanHistoricalPdfs();
+                      }}
+                      style={({ pressed }) => [
+                        styles.secondarySheetButton,
+                        pressed && !isStorageBusy ? styles.settingsRowPressed : null,
+                        isStorageBusy ? styles.disabledButton : null,
+                      ]}>
+                      {isScanningHistoricalPdfs || isCleaningHistoricalPdfs
+                        ? <ActivityIndicator color={colors.accent} size="small" />
+                        : <MaterialIcons color={colors.accent} name="delete-sweep" size={20} />}
+                      <Text style={styles.secondarySheetButtonText}>
+                        {isScanningHistoricalPdfs
+                          ? '正在扫描历史 PDF…'
+                          : isCleaningHistoricalPdfs
+                            ? '正在清理历史 PDF…'
+                            : '清理历史 PDF'}
                       </Text>
                     </Pressable>
                   </View>

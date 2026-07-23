@@ -7,7 +7,17 @@ const SERVICE_SCOPE = 'TodayWorksheetPdfCacheService';
 const EXPORT_DIR_NAME = 'qishua_wrongbook';
 const EXPORT_SUB_DIR_NAME = 'exports';
 const CACHE_FILE_PREFIX = 'qishua_today_review_cache';
+const PDF_FILE_PREFIX = 'qishua_today_review';
 const CACHE_VERSION = 1;
+const RECENT_EXPORT_PROTECTION_MS = 10 * 60 * 1000;
+const WORKSHEET_PDF_FILE_PATTERN = new RegExp(
+  `^${PDF_FILE_PREFIX}_\\d{4}-\\d{2}-\\d{2}(?:_part\\d+-of-\\d+)?_\\d+\\.pdf$`,
+  'i',
+);
+const WORKSHEET_CACHE_FILE_PATTERN = new RegExp(
+  `^${CACHE_FILE_PREFIX}_\\d{4}-\\d{2}-\\d{2}\\.json$`,
+  'i',
+);
 
 export type TodayWorksheetPdfCache = {
   version: typeof CACHE_VERSION;
@@ -25,6 +35,33 @@ export type SaveTodayWorksheetPdfCacheInput = {
   fileUris: string[];
   pdfPageCounts: number[];
   exportedCount: number;
+};
+
+export type HistoricalWorksheetPdfCleanupCandidate = {
+  uri: string;
+  fileName: string;
+  kind: 'pdf' | 'cache_index';
+  sizeBytes: number;
+};
+
+export type HistoricalWorksheetPdfScanResult = {
+  candidates: HistoricalWorksheetPdfCleanupCandidate[];
+  candidatePdfCount: number;
+  candidateIndexCount: number;
+  candidateBytes: number;
+  protectedFileCount: number;
+  scannedFileCount: number;
+  unreadableFileCount: number;
+  scannedAt: number;
+};
+
+export type HistoricalWorksheetPdfCleanupResult = {
+  requestedCount: number;
+  eligibleCount: number;
+  deletedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  releasedBytes: number;
 };
 
 function normalizeOptionalText(value: unknown): string | null {
@@ -128,6 +165,225 @@ export async function loadTodayWorksheetPdfCache(
     });
     return null;
   }
+}
+
+function normalizeFileUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+  const normalized = uri.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isFileInsideExportDirectory(file: File): boolean {
+  const fileUri = normalizeFileUri(file.uri);
+  const directoryUri = normalizeFileUri(getExportDirectory().uri);
+  if (!fileUri || !directoryUri) {
+    return false;
+  }
+  return fileUri.startsWith(`${directoryUri}/`);
+}
+
+function getManagedExportFileKind(fileName: string): 'pdf' | 'cache_index' | null {
+  if (WORKSHEET_PDF_FILE_PATTERN.test(fileName)) {
+    return 'pdf';
+  }
+  if (WORKSHEET_CACHE_FILE_PATTERN.test(fileName)) {
+    return 'cache_index';
+  }
+  return null;
+}
+
+function isRecentlyWrittenFile(
+  creationTime: number | null | undefined,
+  modificationTime: number | null | undefined,
+  now: number,
+): boolean {
+  const timestamps = [creationTime, modificationTime]
+    .filter((value): value is number => (
+      typeof value === 'number' && Number.isFinite(value) && value > 0
+    ));
+  if (timestamps.length <= 0) {
+    return false;
+  }
+  return Math.max(...timestamps) >= now - RECENT_EXPORT_PROTECTION_MS;
+}
+
+export async function scanHistoricalWorksheetPdfFiles(): Promise<HistoricalWorksheetPdfScanResult> {
+  const startedAt = Date.now();
+  const currentDate = resolveDateString();
+  Logger.info(SERVICE_SCOPE, 'Start scanning historical worksheet PDF files.', {
+    currentDate,
+  });
+
+  try {
+    const exportDirectory = getExportDirectory();
+    if (!exportDirectory.exists) {
+      return {
+        candidates: [],
+        candidatePdfCount: 0,
+        candidateIndexCount: 0,
+        candidateBytes: 0,
+        protectedFileCount: 0,
+        scannedFileCount: 0,
+        unreadableFileCount: 0,
+        scannedAt: Date.now(),
+      };
+    }
+
+    const currentCache = await loadTodayWorksheetPdfCache(currentDate);
+    const protectedUris = new Set<string>();
+    const currentCacheFileUri = normalizeFileUri(getCacheFile(currentDate).uri);
+    if (currentCacheFileUri) {
+      protectedUris.add(currentCacheFileUri);
+    }
+    for (const fileUri of currentCache?.fileUris ?? []) {
+      const normalizedUri = normalizeFileUri(fileUri);
+      if (normalizedUri) {
+        protectedUris.add(normalizedUri);
+      }
+    }
+
+    const candidates: HistoricalWorksheetPdfCleanupCandidate[] = [];
+    let protectedFileCount = 0;
+    let scannedFileCount = 0;
+    let unreadableFileCount = 0;
+
+    for (const entry of exportDirectory.list()) {
+      if (!(entry instanceof File)) {
+        continue;
+      }
+      scannedFileCount += 1;
+
+      const kind = getManagedExportFileKind(entry.name);
+      if (!kind || !isFileInsideExportDirectory(entry)) {
+        continue;
+      }
+
+      try {
+        const info = entry.info();
+        if (!info.exists) {
+          continue;
+        }
+        const normalizedUri = normalizeFileUri(entry.uri);
+        if (
+          !normalizedUri
+          || protectedUris.has(normalizedUri)
+          || isRecentlyWrittenFile(info.creationTime, info.modificationTime, startedAt)
+        ) {
+          protectedFileCount += 1;
+          continue;
+        }
+
+        candidates.push({
+          uri: entry.uri,
+          fileName: entry.name,
+          kind,
+          sizeBytes:
+            typeof info.size === 'number' && Number.isFinite(info.size) && info.size > 0
+              ? info.size
+              : 0,
+        });
+      } catch (error) {
+        unreadableFileCount += 1;
+        Logger.warn(SERVICE_SCOPE, 'Failed to inspect worksheet export file.', {
+          fileName: entry.name,
+          error,
+        });
+      }
+    }
+
+    candidates.sort((left, right) => left.fileName.localeCompare(right.fileName));
+    const result: HistoricalWorksheetPdfScanResult = {
+      candidates,
+      candidatePdfCount: candidates.filter((candidate) => candidate.kind === 'pdf').length,
+      candidateIndexCount: candidates.filter((candidate) => candidate.kind === 'cache_index').length,
+      candidateBytes: candidates.reduce((total, candidate) => total + candidate.sizeBytes, 0),
+      protectedFileCount,
+      scannedFileCount,
+      unreadableFileCount,
+      scannedAt: Date.now(),
+    };
+
+    Logger.info(SERVICE_SCOPE, 'Finished scanning historical worksheet PDF files.', {
+      elapsedMs: Date.now() - startedAt,
+      candidatePdfCount: result.candidatePdfCount,
+      candidateIndexCount: result.candidateIndexCount,
+      candidateBytes: result.candidateBytes,
+      protectedFileCount: result.protectedFileCount,
+      scannedFileCount: result.scannedFileCount,
+      unreadableFileCount: result.unreadableFileCount,
+    });
+    return result;
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to scan historical worksheet PDF files.', {
+      elapsedMs: Date.now() - startedAt,
+      error,
+    });
+    throw error;
+  }
+}
+
+export async function cleanupHistoricalWorksheetPdfFiles(
+  requestedUris: string[],
+): Promise<HistoricalWorksheetPdfCleanupResult> {
+  const startedAt = Date.now();
+  const requestedSet = new Set(
+    requestedUris
+      .map(normalizeFileUri)
+      .filter((uri): uri is string => uri !== null),
+  );
+  Logger.info(SERVICE_SCOPE, 'Start cleaning historical worksheet PDF files.', {
+    requestedCount: requestedSet.size,
+  });
+
+  const latestScan = await scanHistoricalWorksheetPdfFiles();
+  const eligibleCandidates = latestScan.candidates.filter((candidate) => {
+    const normalizedUri = normalizeFileUri(candidate.uri);
+    return normalizedUri ? requestedSet.has(normalizedUri) : false;
+  });
+  let deletedCount = 0;
+  let failedCount = 0;
+  let releasedBytes = 0;
+
+  for (const candidate of eligibleCandidates) {
+    try {
+      const file = new File(candidate.uri);
+      if (!isFileInsideExportDirectory(file) || !getManagedExportFileKind(file.name)) {
+        failedCount += 1;
+        Logger.warn(SERVICE_SCOPE, 'Rejected unsafe historical PDF cleanup target.', {
+          fileName: candidate.fileName,
+        });
+        continue;
+      }
+      if (!file.exists) {
+        continue;
+      }
+      file.delete();
+      deletedCount += 1;
+      releasedBytes += candidate.sizeBytes;
+    } catch (error) {
+      failedCount += 1;
+      Logger.warn(SERVICE_SCOPE, 'Failed to delete historical worksheet export file.', {
+        fileName: candidate.fileName,
+        error,
+      });
+    }
+  }
+
+  const result: HistoricalWorksheetPdfCleanupResult = {
+    requestedCount: requestedSet.size,
+    eligibleCount: eligibleCandidates.length,
+    deletedCount,
+    failedCount,
+    skippedCount: Math.max(0, requestedSet.size - eligibleCandidates.length),
+    releasedBytes,
+  };
+  Logger.info(SERVICE_SCOPE, 'Finished cleaning historical worksheet PDF files.', {
+    elapsedMs: Date.now() - startedAt,
+    ...result,
+  });
+  return result;
 }
 
 function cleanupReplacedFiles(
