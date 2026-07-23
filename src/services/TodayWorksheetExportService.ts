@@ -8,6 +8,7 @@ import type {
   PrintEnhanceClearPrintStrength,
   PrintEnhanceMode,
 } from '@/src/utils/image/printEnhanceConfig';
+import { toActivePrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
 
 const SERVICE_SCOPE = 'TodayWorksheetExportService';
 
@@ -49,6 +50,7 @@ export type TodayWorksheetExportResult = {
 };
 
 export type TodayWorksheetCachedExport = {
+  printEnhanceMode: PrintEnhanceMode;
   fileUri: string;
   fileUris: string[];
   pdfPageCounts: number[];
@@ -223,12 +225,16 @@ export async function getTodayWorksheetPendingCount(): Promise<number> {
   }
 }
 
-export async function getCachedTodayWorksheet(): Promise<TodayWorksheetCachedExport | null> {
-  const cache = await TodayWorksheetPdfCacheService.loadTodayWorksheetPdfCache();
+export async function getCachedTodayWorksheet(
+  printEnhanceMode: PrintEnhanceMode,
+): Promise<TodayWorksheetCachedExport | null> {
+  const activeMode = toActivePrintEnhanceMode(printEnhanceMode);
+  const cache = await TodayWorksheetPdfCacheService.loadTodayWorksheetPdfCache(activeMode);
   if (!cache) {
     return null;
   }
   return {
+    printEnhanceMode: cache.printEnhanceMode,
     fileUri: cache.fileUri,
     fileUris: cache.fileUris,
     pdfPageCounts: cache.pdfPageCounts,
@@ -241,8 +247,9 @@ export async function getCachedTodayWorksheet(): Promise<TodayWorksheetCachedExp
 export async function exportTodayWorksheet(
   options?: ExportTodayWorksheetOptions,
 ): Promise<TodayWorksheetExportResult> {
+  const activePrintEnhanceMode = toActivePrintEnhanceMode(options?.printEnhanceMode);
   if (options?.forceRegenerate !== true) {
-    const cached = await getCachedTodayWorksheet();
+    const cached = await getCachedTodayWorksheet(activePrintEnhanceMode);
     if (cached) {
       return {
         outcome: 'success',
@@ -272,7 +279,7 @@ export async function exportTodayWorksheet(
   emitProgress(options?.onProgress, 'preparing', pendingCount, 0, pendingCount);
   try {
     const result = await TodayReviewPdfExportService.exportTodayReviewPdf({
-      printEnhanceMode: options?.printEnhanceMode,
+      printEnhanceMode: activePrintEnhanceMode,
       printEnhanceClearPrintStrength: options?.printEnhanceClearPrintStrength,
       printEnhanceConcurrency: options?.printEnhanceConcurrency,
       printEnhancePerformanceProfile: options?.printEnhancePerformanceProfile,
@@ -298,6 +305,7 @@ export async function exportTodayWorksheet(
       const exportedCount = toSafeCount(result.exportedCount);
       try {
         await TodayWorksheetPdfCacheService.saveTodayWorksheetPdfCache({
+          printEnhanceMode: activePrintEnhanceMode,
           fileUris: result.fileUris,
           pdfPageCounts: result.pdfPageCounts,
           exportedCount,

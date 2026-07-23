@@ -149,8 +149,8 @@ export function useTodayWorksheetExport(
   }), []);
 
   useEffect(() => {
-    void inspectTodayWorksheetCache();
-  }, [safeDueToday]);
+    void inspectTodayWorksheetCache({ printEnhanceMode });
+  }, [printEnhanceMode, safeDueToday]);
 
   const isExporting =
     generationState.status === 'checking_cache' || generationState.status === 'generating';

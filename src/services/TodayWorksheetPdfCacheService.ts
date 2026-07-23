@@ -2,26 +2,30 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { Logger } from '@/src/services/Logger';
 import { parseLocalDateTime, toDateOnlyString } from '@/src/utils/date';
+import type { PrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
+import { toActivePrintEnhanceMode } from '@/src/utils/image/printEnhanceConfig';
 
 const SERVICE_SCOPE = 'TodayWorksheetPdfCacheService';
 const EXPORT_DIR_NAME = 'qishua_wrongbook';
 const EXPORT_SUB_DIR_NAME = 'exports';
 const CACHE_FILE_PREFIX = 'qishua_today_review_cache';
 const PDF_FILE_PREFIX = 'qishua_today_review';
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const RECENT_EXPORT_PROTECTION_MS = 10 * 60 * 1000;
+const CACHE_MODES: PrintEnhanceMode[] = ['original', 'clear_print'];
 const WORKSHEET_PDF_FILE_PATTERN = new RegExp(
   `^${PDF_FILE_PREFIX}_\\d{4}-\\d{2}-\\d{2}(?:_part\\d+-of-\\d+)?_\\d+\\.pdf$`,
   'i',
 );
 const WORKSHEET_CACHE_FILE_PATTERN = new RegExp(
-  `^${CACHE_FILE_PREFIX}_\\d{4}-\\d{2}-\\d{2}\\.json$`,
+  `^${CACHE_FILE_PREFIX}_\\d{4}-\\d{2}-\\d{2}(?:_(?:original|clear_print|bw_scan))?\\.json$`,
   'i',
 );
 
 export type TodayWorksheetPdfCache = {
   version: typeof CACHE_VERSION;
   date: string;
+  printEnhanceMode: PrintEnhanceMode;
   generatedAt: string;
   fileUri: string;
   fileUris: string[];
@@ -32,6 +36,7 @@ export type TodayWorksheetPdfCache = {
 
 export type SaveTodayWorksheetPdfCacheInput = {
   date?: string;
+  printEnhanceMode: PrintEnhanceMode;
   fileUris: string[];
   pdfPageCounts: number[];
   exportedCount: number;
@@ -89,8 +94,12 @@ function getExportDirectory(): Directory {
   return new Directory(Paths.document, EXPORT_DIR_NAME, EXPORT_SUB_DIR_NAME);
 }
 
-function getCacheFile(dateString: string): File {
-  return new File(getExportDirectory(), `${CACHE_FILE_PREFIX}_${dateString}.json`);
+function getCacheFile(dateString: string, printEnhanceMode: PrintEnhanceMode): File {
+  const activeMode = toActivePrintEnhanceMode(printEnhanceMode);
+  return new File(
+    getExportDirectory(),
+    `${CACHE_FILE_PREFIX}_${dateString}_${activeMode}.json`,
+  );
 }
 
 function isUsablePdfFile(uri: string): boolean {
@@ -102,9 +111,18 @@ function isUsablePdfFile(uri: string): boolean {
   }
 }
 
-function normalizeCache(input: unknown, expectedDate: string): TodayWorksheetPdfCache | null {
+function normalizeCache(
+  input: unknown,
+  expectedDate: string,
+  expectedPrintEnhanceMode: PrintEnhanceMode,
+): TodayWorksheetPdfCache | null {
   const raw = input as Partial<TodayWorksheetPdfCache> | null | undefined;
-  if (raw?.version !== CACHE_VERSION || raw.date !== expectedDate) {
+  const activeMode = toActivePrintEnhanceMode(expectedPrintEnhanceMode);
+  if (
+    raw?.version !== CACHE_VERSION
+    || raw.date !== expectedDate
+    || raw.printEnhanceMode !== activeMode
+  ) {
     return null;
   }
 
@@ -133,6 +151,7 @@ function normalizeCache(input: unknown, expectedDate: string): TodayWorksheetPdf
   return {
     version: CACHE_VERSION,
     date: expectedDate,
+    printEnhanceMode: activeMode,
     generatedAt,
     fileUri: fileUris[0],
     fileUris,
@@ -143,24 +162,32 @@ function normalizeCache(input: unknown, expectedDate: string): TodayWorksheetPdf
 }
 
 export async function loadTodayWorksheetPdfCache(
+  printEnhanceMode: PrintEnhanceMode,
   date?: string,
 ): Promise<TodayWorksheetPdfCache | null> {
   const dateString = resolveDateString(date);
+  const activeMode = toActivePrintEnhanceMode(printEnhanceMode);
   try {
-    const cacheFile = getCacheFile(dateString);
+    const cacheFile = getCacheFile(dateString, activeMode);
     if (!cacheFile.exists) {
       return null;
     }
-    const cache = normalizeCache(JSON.parse(await cacheFile.text()) as unknown, dateString);
+    const cache = normalizeCache(
+      JSON.parse(await cacheFile.text()) as unknown,
+      dateString,
+      activeMode,
+    );
     if (!cache) {
       Logger.warn(SERVICE_SCOPE, 'Ignore invalid or incomplete worksheet PDF cache.', {
         date: dateString,
+        printEnhanceMode: activeMode,
       });
     }
     return cache;
   } catch (error) {
     Logger.warn(SERVICE_SCOPE, 'Failed to load worksheet PDF cache.', {
       date: dateString,
+      printEnhanceMode: activeMode,
       error,
     });
     return null;
@@ -231,16 +258,22 @@ export async function scanHistoricalWorksheetPdfFiles(): Promise<HistoricalWorks
       };
     }
 
-    const currentCache = await loadTodayWorksheetPdfCache(currentDate);
+    const currentCaches = await Promise.all(
+      CACHE_MODES.map((mode) => loadTodayWorksheetPdfCache(mode, currentDate)),
+    );
     const protectedUris = new Set<string>();
-    const currentCacheFileUri = normalizeFileUri(getCacheFile(currentDate).uri);
-    if (currentCacheFileUri) {
-      protectedUris.add(currentCacheFileUri);
+    for (const mode of CACHE_MODES) {
+      const currentCacheFileUri = normalizeFileUri(getCacheFile(currentDate, mode).uri);
+      if (currentCacheFileUri) {
+        protectedUris.add(currentCacheFileUri);
+      }
     }
-    for (const fileUri of currentCache?.fileUris ?? []) {
-      const normalizedUri = normalizeFileUri(fileUri);
-      if (normalizedUri) {
-        protectedUris.add(normalizedUri);
+    for (const currentCache of currentCaches) {
+      for (const fileUri of currentCache?.fileUris ?? []) {
+        const normalizedUri = normalizeFileUri(fileUri);
+        if (normalizedUri) {
+          protectedUris.add(normalizedUri);
+        }
       }
     }
 
@@ -415,6 +448,7 @@ export async function saveTodayWorksheetPdfCache(
   input: SaveTodayWorksheetPdfCacheInput,
 ): Promise<TodayWorksheetPdfCache> {
   const dateString = resolveDateString(input.date);
+  const activeMode = toActivePrintEnhanceMode(input.printEnhanceMode);
   const fileUris = input.fileUris
     .map(normalizeOptionalText)
     .filter((uri): uri is string => uri !== null);
@@ -427,10 +461,11 @@ export async function saveTodayWorksheetPdfCache(
     throw new Error('Cannot cache an incomplete worksheet PDF set.');
   }
 
-  const previousCache = await loadTodayWorksheetPdfCache(dateString);
+  const previousCache = await loadTodayWorksheetPdfCache(activeMode, dateString);
   const nextCache: TodayWorksheetPdfCache = {
     version: CACHE_VERSION,
     date: dateString,
+    printEnhanceMode: activeMode,
     generatedAt: new Date().toISOString(),
     fileUri: fileUris[0],
     fileUris,
@@ -441,7 +476,7 @@ export async function saveTodayWorksheetPdfCache(
 
   const exportDirectory = getExportDirectory();
   exportDirectory.create({ intermediates: true, idempotent: true });
-  getCacheFile(dateString).write(JSON.stringify(nextCache));
+  getCacheFile(dateString, activeMode).write(JSON.stringify(nextCache));
   cleanupReplacedFiles(previousCache, fileUris);
   return nextCache;
 }

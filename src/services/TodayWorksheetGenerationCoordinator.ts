@@ -71,7 +71,7 @@ const INITIAL_STATE: TodayWorksheetGenerationState = {
 
 let state: TodayWorksheetGenerationState = INITIAL_STATE;
 let activeGenerationPromise: Promise<TodayWorksheetExportResult> | null = null;
-let cacheInspectionPromise: Promise<TodayWorksheetCachedExport | null> | null = null;
+let latestCacheInspectionId = 0;
 const listeners = new Set<() => void>();
 
 function toSafeCount(value: number | null | undefined): number {
@@ -173,7 +173,8 @@ async function runEnsureTodayWorksheet(
     cachedWorksheet: null,
   });
 
-  const cached = await TodayWorksheetExportService.getCachedTodayWorksheet();
+  const settings = await resolvePrintEnhanceSettings(options);
+  const cached = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
   if (cached) {
     const cachedCount = Math.max(1, toSafeCount(cached.exportedCount));
     updateState({
@@ -201,7 +202,6 @@ async function runEnsureTodayWorksheet(
     return buildCachedResult(cached);
   }
 
-  const settings = await resolvePrintEnhanceSettings(options);
   updateState({
     status: 'generating',
     stage: 'preparing',
@@ -235,7 +235,7 @@ async function runEnsureTodayWorksheet(
   const result = await TodayWorksheetExportService.exportTodayWorksheet(exportOptions);
 
   if (result.outcome === 'success') {
-    const cachedWorksheet = await TodayWorksheetExportService.getCachedTodayWorksheet();
+    const cachedWorksheet = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
     const completedCount = Math.max(1, toSafeCount(result.exportedCount));
     if (cachedWorksheet) {
       await prepareWholeSetShareCache(cachedWorksheet, startedAt, 'generated');
@@ -291,41 +291,35 @@ export function subscribeTodayWorksheetGeneration(listener: () => void): () => v
   };
 }
 
-export async function inspectTodayWorksheetCache(): Promise<TodayWorksheetCachedExport | null> {
+export async function inspectTodayWorksheetCache(
+  options: Pick<EnsureTodayWorksheetOptions, 'printEnhanceMode'> = {},
+): Promise<TodayWorksheetCachedExport | null> {
+  const inspectionId = ++latestCacheInspectionId;
+  const settings = await resolvePrintEnhanceSettings(options);
   if (activeGenerationPromise) {
     await activeGenerationPromise;
-    return state.cachedWorksheet;
-  }
-  if (cacheInspectionPromise) {
-    return cacheInspectionPromise;
   }
 
-  cacheInspectionPromise = TodayWorksheetExportService.getCachedTodayWorksheet()
-    .then((cached) => {
-      if (activeGenerationPromise) {
-        return cached;
-      }
-      if (cached) {
-        const count = Math.max(1, toSafeCount(cached.exportedCount));
-        updateState({
-          status: 'ready',
-          stage: null,
-          current: count,
-          total: count,
-          message: `今日练习卷已缓存（${cached.exportedCount}题）`,
-          startedAt: null,
-          source: 'cache',
-          cachedWorksheet: cached,
-        });
-      } else {
-        updateState(INITIAL_STATE);
-      }
-      return cached;
-    })
-    .finally(() => {
-      cacheInspectionPromise = null;
+  const cached = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
+  if (activeGenerationPromise || inspectionId !== latestCacheInspectionId) {
+    return cached;
+  }
+  if (cached) {
+    const count = Math.max(1, toSafeCount(cached.exportedCount));
+    updateState({
+      status: 'ready',
+      stage: null,
+      current: count,
+      total: count,
+      message: `今日练习卷已缓存（${cached.exportedCount}题）`,
+      startedAt: null,
+      source: 'cache',
+      cachedWorksheet: cached,
     });
-  return cacheInspectionPromise;
+  } else {
+    updateState(INITIAL_STATE);
+  }
+  return cached;
 }
 
 export function ensureTodayWorksheet(
