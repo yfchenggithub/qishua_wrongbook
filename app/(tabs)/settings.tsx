@@ -24,10 +24,13 @@ import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTo
 import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
-import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
+import {
+  ensureDailyAutomaticBackup,
+  type AutomaticBackupRecord,
+} from '@/src/services/backup/AutomaticBackupService';
 import * as BackupService from '@/src/services/backup/BackupService';
 import { BackupRestoreError } from '@/src/services/backup/BackupRestoreError';
-import type { BackupManifest, BackupProgressEvent, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
+import type { BackupManifest, RestoreProgressEvent } from '@/src/services/backup/BackupTypes';
 import { clearPrintEnhanceImageCache } from '@/src/services/export/PrintEnhanceCacheService';
 import type { ReviewReminderSettings } from '@/src/services/ReviewReminderService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
@@ -77,13 +80,6 @@ type DevEntry = {
   title: string;
   description: string;
   href: DevRoute;
-};
-
-type GeneratedBackupInfo = {
-  fileUri: string;
-  fileName: string;
-  fileSizeBytes: number | null;
-  createdAt: string;
 };
 
 type ExportImageModeOption = {
@@ -503,11 +499,9 @@ export default function SettingsScreen() {
   const [isPrintEnhanceAdvancedVisible, setIsPrintEnhanceAdvancedVisible] = useState(false);
   const [isExportImageModeLoading, setIsExportImageModeLoading] = useState(true);
   const [isExportImageModeSaving, setIsExportImageModeSaving] = useState(false);
-  const [isBackingUp, setIsBackingUp] = useState(false);
-  const [backupProgress, setBackupProgress] = useState<BackupProgressEvent | null>(null);
-  const [generatedBackupInfo, setGeneratedBackupInfo] = useState<GeneratedBackupInfo | null>(null);
-  const [isResavingBackup, setIsResavingBackup] = useState(false);
-  const [lastBackupAt, setLastBackupAt] = useState<string | null>(null);
+  const [automaticBackup, setAutomaticBackup] = useState<AutomaticBackupRecord | null>(null);
+  const [isAutomaticBackupPreparing, setIsAutomaticBackupPreparing] = useState(true);
+  const [isSharingBackup, setIsSharingBackup] = useState(false);
   const [isInspectingBackup, setIsInspectingBackup] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isScanningOrphanImages, setIsScanningOrphanImages] = useState(false);
@@ -611,10 +605,19 @@ export default function SettingsScreen() {
     }
   }, [showToast]);
 
-  const loadLastBackupState = useCallback(async () => {
-    const history = await BackupHistoryService.loadBackupHistoryState();
-    setLastBackupAt(history.lastBackupAt);
-  }, []);
+  const loadAutomaticBackupState = useCallback(async () => {
+    setIsAutomaticBackupPreparing(true);
+    try {
+      const result = await ensureDailyAutomaticBackup({ trigger: 'settings_focus' });
+      setAutomaticBackup(result.backup);
+    } catch (error) {
+      setAutomaticBackup(null);
+      Logger.warn(PAGE_SCOPE, 'Failed to prepare today automatic backup in settings.', { error });
+      showToast('今日自动备份生成失败，稍后将自动重试', 'warning', TOAST_DURATION_LONG);
+    } finally {
+      setIsAutomaticBackupPreparing(false);
+    }
+  }, [showToast]);
 
   const loadExportImageMode = useCallback(async () => {
     Logger.info(PAGE_SCOPE, 'Start loading export image mode.');
@@ -728,10 +731,10 @@ export default function SettingsScreen() {
       setIsPrintEnhanceAdvancedVisible(false);
       void loadDataOverview(mode);
       void loadReminderState();
-      void loadLastBackupState();
+      void loadAutomaticBackupState();
       void loadExportImageMode();
       return undefined;
-    }, [loadDataOverview, loadExportImageMode, loadLastBackupState, loadReminderState]),
+    }, [loadAutomaticBackupState, loadDataOverview, loadExportImageMode, loadReminderState]),
   );
 
   const disableDeveloperMode = useCallback(
@@ -841,136 +844,40 @@ export default function SettingsScreen() {
     router.push('/about-support' as never);
   }, [router]);
 
-  const startBackupToFile = useCallback(async () => {
-    if (isBackingUp) {
+  const handleShareAutomaticBackup = useCallback(async () => {
+    if (
+      !automaticBackup
+      || isAutomaticBackupPreparing
+      || isInspectingBackup
+      || isRestoring
+      || isSharingBackup
+    ) {
       return;
     }
 
-    setIsBackingUp(true);
-    setBackupProgress(null);
-    setGeneratedBackupInfo(null);
-    const backupStartedAt = Date.now();
-    let backupSessionId = '';
-    Logger.info(PAGE_SCOPE, 'Start backup flow from settings.', { reason: 'manual' });
+    setIsSharingBackup(true);
     try {
-      showToast('正在准备备份…', 'info', TOAST_DURATION_LONG);
-      const result = await BackupService.createBackup({
-        reason: 'manual',
-        onProgress: (event) => {
-          backupSessionId = event.backupSessionId;
-          setBackupProgress(event);
-        },
-      });
-      setGeneratedBackupInfo({
-        fileUri: result.fileUri,
-        fileName: result.fileName,
-        fileSizeBytes: result.fileSizeBytes,
-        createdAt: result.manifest.createdAt,
-      });
-      try {
-        const persistedHistory = await BackupHistoryService.saveLastBackupAt(result.manifest.createdAt);
-        setLastBackupAt(persistedHistory.lastBackupAt);
-      } catch (error) {
-        Logger.warn(PAGE_SCOPE, 'Failed to persist last backup time in settings.', {
-          createdAt: result.manifest.createdAt,
-          error,
-        });
-        setLastBackupAt(result.manifest.createdAt);
-      }
-      setBackupProgress({
-        backupSessionId: backupSessionId || 'backup-share',
-        stage: 'share',
-        message: '正在打开保存位置…',
-        current: 1,
-        total: 1,
-        elapsedSeconds: Math.max(0, Math.floor((Date.now() - backupStartedAt) / 1000)),
-      });
-      await BackupService.shareBackup(result.fileUri);
-      setBackupProgress({
-        backupSessionId: backupSessionId || 'backup-success',
-        stage: 'success',
-        message: '备份文件已生成',
-        current: 1,
-        total: 1,
-        elapsedSeconds: Math.max(0, Math.floor((Date.now() - backupStartedAt) / 1000)),
-      });
-      showToast('备份文件已生成，请保存到安全位置。', 'success', TOAST_DURATION_LONG);
+      showToast('正在打开分享与导出面板…', 'info', TOAST_DURATION_LONG);
+      await BackupService.shareBackup(automaticBackup.fileUri);
+      showToast('请选择分享对象或保存位置', 'success', TOAST_DURATION_LONG);
     } catch (error) {
-      const errorName = error instanceof Error ? error.name : 'UnknownError';
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      setBackupProgress(null);
-      Logger.error(PAGE_SCOPE, 'Backup flow failed from settings.', {
-        errorName,
-        errorMessage,
-      });
-      Alert.alert('备份失败', '请稍后重试。如果仍然失败，请在设置页打开日志查看原因。');
-    } finally {
-      setIsBackingUp(false);
-    }
-  }, [isBackingUp, showToast]);
-
-  const handleStartBackup = useCallback(() => {
-    if (typeof BackupService.createBackup === 'function') {
-      if (isBackingUp) {
-        return;
-      }
-
-      Alert.alert(
-        '备份当前数据？',
-        '将导出所有错题、复做记录、图片和语音讲解。题目较多时会需要一些时间，备份过程中请不要关闭 App。',
-        [
-          { text: '取消', style: 'cancel' },
-          {
-            text: '开始备份',
-            onPress: () => {
-              void startBackupToFile();
-            },
-          },
-        ],
-      );
-      return;
-    }
-
-    Logger.info(PAGE_SCOPE, 'Start backup from settings.', { supported: false });
-    try {
-      showToast('备份功能即将支持', 'info');
-      Logger.info(PAGE_SCOPE, 'Backup action finished with placeholder notice.', {
-        supported: false,
-      });
-      Logger.warn(PAGE_SCOPE, 'Backup is not supported in current version.', {
-        reason: 'not_implemented',
-      });
-    } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Backup action failed unexpectedly.', { error });
-      showToast('备份功能暂不可用，请稍后重试', 'warning');
-    }
-  }, [isBackingUp, showToast, startBackupToFile]);
-
-  const handleReSaveBackupFile = useCallback(async () => {
-    if (!generatedBackupInfo || isBackingUp || isInspectingBackup || isRestoring || isResavingBackup) {
-      return;
-    }
-
-    setIsResavingBackup(true);
-    try {
-      showToast('正在重新打开保存面板…', 'info', TOAST_DURATION_LONG);
-      await BackupService.shareBackup(generatedBackupInfo.fileUri);
-      showToast('请在系统面板中保存备份文件。', 'success', TOAST_DURATION_LONG);
-    } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Failed to re-save generated backup file.', {
-        fileName: generatedBackupInfo.fileName,
+      Logger.error(PAGE_SCOPE, 'Failed to share today automatic backup.', {
+        fileName: automaticBackup.fileName,
         error,
       });
-      Alert.alert('重新保存失败', '备份文件可能已被系统清理，请重新生成一份备份。');
+      setAutomaticBackup(null);
+      Alert.alert('分享或导出失败', '今天的备份文件暂时不可用，App 将自动重新生成，请稍后重试。');
+      void loadAutomaticBackupState();
     } finally {
-      setIsResavingBackup(false);
+      setIsSharingBackup(false);
     }
   }, [
-    generatedBackupInfo,
-    isBackingUp,
+    automaticBackup,
+    isAutomaticBackupPreparing,
     isInspectingBackup,
-    isResavingBackup,
     isRestoring,
+    isSharingBackup,
+    loadAutomaticBackupState,
     showToast,
   ]);
 
@@ -1104,7 +1011,7 @@ export default function SettingsScreen() {
   );
 
   const handleRestoreFromBackup = useCallback(() => {
-    if (isInspectingBackup || isRestoring) {
+    if (isAutomaticBackupPreparing || isInspectingBackup || isRestoring || isSharingBackup) {
       return;
     }
 
@@ -1237,7 +1144,14 @@ export default function SettingsScreen() {
         },
       ],
     );
-  }, [handleConfirmRestore, isInspectingBackup, isRestoring, showToast]);
+  }, [
+    handleConfirmRestore,
+    isAutomaticBackupPreparing,
+    isInspectingBackup,
+    isRestoring,
+    isSharingBackup,
+    showToast,
+  ]);
 
   const handleSelectExportImageMode = useCallback(
     async (nextMode: PrintEnhanceMode) => {
@@ -1694,40 +1608,12 @@ export default function SettingsScreen() {
     isExportingWorksheet && worksheetExportProgress.total > 0
       ? `已处理 ${worksheetExportProgress.current} / ${worksheetExportProgress.total} 题 · 用时 ${formatElapsedSeconds(worksheetExportProgress.elapsedSeconds)}`
       : '';
-  const backupProgressMessage = backupProgress?.message.trim() ?? '';
-  const backupButtonText = isBackingUp
-    ? '备份中…'
-    : (isRestoring || isInspectingBackup)
-      ? '恢复中…'
-      : '立即备份';
-  const backupProgressPercent = backupProgress
-    ? backupProgress.stage === 'success'
-      ? 1
-      : backupProgress.stage === 'package'
-        ? 0.92
-      : backupProgress.total > 0
-        ? Math.max(0, Math.min(1, backupProgress.current / backupProgress.total))
-        : 0
-    : 0;
-  const shouldShowBackupProgress = isBackingUp || backupProgress?.stage === 'success';
-  const backupProgressHeadline = backupProgressMessage || '备份会包含错题、复做记录、图片和语音讲解。';
-  const backupProgressDetailText = backupProgress
-    ? backupProgress.stage === 'package'
-      ? `正在生成压缩包 · 用时 ${formatElapsedSeconds(backupProgress.elapsedSeconds)}`
-      : backupProgress.total > 0 && backupProgress.stage !== 'share' && backupProgress.stage !== 'success'
-      ? `已处理 ${backupProgress.current} / ${backupProgress.total} · 用时 ${formatElapsedSeconds(backupProgress.elapsedSeconds)}`
-      : `用时 ${formatElapsedSeconds(backupProgress.elapsedSeconds)}`
-    : '';
-  const generatedBackupMetaText = generatedBackupInfo
-    ? `已生成：${generatedBackupInfo.fileName} · ${
-        generatedBackupInfo.fileSizeBytes === null
-          ? '大小暂未统计'
-          : formatStorageSize(generatedBackupInfo.fileSizeBytes)
-      }`
-    : '';
-  const canReSaveGeneratedBackup =
-    generatedBackupInfo !== null && !isBackingUp && !isInspectingBackup && !isRestoring && !isResavingBackup;
-  const reSaveBackupButtonText = isResavingBackup ? '正在打开保存面板…' : '重新保存备份文件';
+  const backupButtonText = isSharingBackup ? '正在打开…' : '分享/导出';
+  const automaticBackupSubtitle = automaticBackup
+    ? `生成于 ${formatBackupCreatedAt(automaticBackup.createdAt)} · ${formatStorageSize(automaticBackup.fileSizeBytes)}`
+    : isAutomaticBackupPreparing
+      ? '正在生成今天的备份…'
+      : '今日备份暂不可用，将自动重试';
   const selectedExportImageModeOption = useMemo(
     () =>
       EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)
@@ -2006,7 +1892,8 @@ export default function SettingsScreen() {
     || isCleaningHistoricalPdfs
     || isExportingWorksheet;
   const isRestoreBusy = isInspectingBackup || isRestoring;
-  const isBackupBusy = isBackingUp || isRestoreBusy || isResavingBackup;
+  const isBackupBusy = isAutomaticBackupPreparing || isSharingBackup || isRestoreBusy;
+  const canShareAutomaticBackup = automaticBackup !== null && !isBackupBusy;
   const isExportImageModeBusy =
     isExportingWorksheet || isExportImageModeLoading || isExportImageModeSaving;
   const isReminderBusy = isReminderLoading || isReminderSwitchBusy || isReminderTimeBusy;
@@ -2030,30 +1917,32 @@ export default function SettingsScreen() {
             <SettingsIcon name="verified-user" />
             <View style={styles.backupPrimaryText}>
               <Text numberOfLines={1} style={styles.backupPrimaryTitle}>
-                {lastBackupAt ? '已安全备份' : '尚未备份'}
+                {automaticBackup ? '今日已自动备份' : '自动备份'}
               </Text>
               <Text numberOfLines={2} style={styles.settingsRowSubtitle}>
-                上次备份：{lastBackupAt ? formatBackupCreatedAt(lastBackupAt) : '暂无记录'}
+                {automaticBackupSubtitle}
               </Text>
             </View>
             <Pressable
               accessibilityLabel={backupButtonText}
               accessibilityRole="button"
-              accessibilityState={{ busy: isBackingUp, disabled: isBackupBusy }}
-              disabled={isBackupBusy}
-              onPress={handleStartBackup}
+              accessibilityState={{ busy: isSharingBackup, disabled: !canShareAutomaticBackup }}
+              disabled={!canShareAutomaticBackup}
+              onPress={() => {
+                void handleShareAutomaticBackup();
+              }}
               style={({ pressed }) => [
                 styles.backupButton,
-                pressed && !isBackupBusy ? styles.primaryButtonPressed : null,
-                isBackupBusy ? styles.disabledButton : null,
+                pressed && canShareAutomaticBackup ? styles.primaryButtonPressed : null,
+                !canShareAutomaticBackup ? styles.disabledButton : null,
               ]}>
-              {isBackingUp ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
+              {isSharingBackup ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
               <Text numberOfLines={1} style={styles.backupButtonText}>{backupButtonText}</Text>
             </Pressable>
           </View>
           <SettingsDivider />
           <SettingsRow
-            disabled={isRestoreBusy}
+            disabled={isBackupBusy}
             icon="restore"
             onPress={handleRestoreFromBackup}
             right={isRestoreBusy ? <ActivityIndicator color={colors.accent} size="small" /> : undefined}
@@ -2061,39 +1950,6 @@ export default function SettingsScreen() {
             subtitle={isRestoring ? '正在恢复数据…' : isInspectingBackup ? '正在检查备份文件…' : undefined}
             title="从备份文件恢复"
           />
-          {shouldShowBackupProgress ? (
-            <View style={styles.inlineStatus}>
-              <View style={styles.inlineStatusHeader}>
-                <Text numberOfLines={2} style={styles.inlineStatusTitle}>{backupProgressHeadline}</Text>
-                {backupProgressDetailText ? (
-                  <Text style={styles.inlineStatusMeta}>{backupProgressDetailText}</Text>
-                ) : null}
-              </View>
-              <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { flex: backupProgressPercent }]} />
-                <View style={{ flex: Math.max(0, 1 - backupProgressPercent) }} />
-              </View>
-              {generatedBackupInfo ? (
-                <>
-                  <Text numberOfLines={2} style={styles.inlineStatusMeta}>{generatedBackupMetaText}</Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={!canReSaveGeneratedBackup}
-                    onPress={() => {
-                      void handleReSaveBackupFile();
-                    }}
-                    style={({ pressed }) => [
-                      styles.inlineLinkButton,
-                      pressed && canReSaveGeneratedBackup ? styles.settingsRowPressed : null,
-                      !canReSaveGeneratedBackup ? styles.disabledButton : null,
-                    ]}>
-                    <MaterialIcons color={colors.accent} name="ios-share" size={18} />
-                    <Text style={styles.inlineLinkText}>{reSaveBackupButtonText}</Text>
-                  </Pressable>
-                </>
-              ) : null}
-            </View>
-          ) : null}
         </SettingsSection>
 
         <SettingsSection title="学习概览">

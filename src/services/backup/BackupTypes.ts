@@ -113,7 +113,7 @@ export interface BackupProgressEvent {
 }
 
 export interface CreateBackupOptions {
-  reason: 'manual' | 'before_restore';
+  reason: 'manual' | 'automatic' | 'before_restore';
   onProgress?: (event: BackupProgressEvent) => void;
 }
 

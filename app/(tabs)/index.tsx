@@ -14,7 +14,7 @@ import {
 } from '@/src/components/today';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
-import * as BackupHistoryService from '@/src/services/backup/BackupHistoryService';
+import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
 import { Logger } from '@/src/services/Logger';
 import type { HomeStatus, HomeTaskSummary } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
@@ -62,7 +62,7 @@ function buildSummaryHint(status: HomeStatus): string {
 
 function formatBackupStatus(lastBackupAt: string | null): string {
   if (!lastBackupAt) {
-    return '数据仅保存在本机 · 尚未备份';
+    return '数据仅保存在本机 · 正在生成今日备份';
   }
 
   const date = new Date(lastBackupAt);
@@ -72,7 +72,7 @@ function formatBackupStatus(lastBackupAt: string | null): string {
 
   const hours = String(date.getHours()).padStart(2, '0');
   const minutes = String(date.getMinutes()).padStart(2, '0');
-  return `数据仅保存在本机 · 已备份 ${date.getMonth() + 1} 月 ${date.getDate()} 日 ${hours}:${minutes}`;
+  return `数据仅保存在本机 · 今日已自动备份 ${hours}:${minutes}`;
 }
 
 export default function TodayScreen() {
@@ -125,12 +125,12 @@ export default function TodayScreen() {
     }
   }, []);
 
-  const loadBackupHistory = useCallback(async () => {
+  const loadAutomaticBackupStatus = useCallback(async () => {
     try {
-      const history = await BackupHistoryService.loadBackupHistoryState();
-      setLastBackupAt(history.lastBackupAt);
+      const result = await ensureDailyAutomaticBackup({ trigger: 'app_foreground' });
+      setLastBackupAt(result.backup.createdAt);
     } catch (error) {
-      Logger.warn(PAGE_SCOPE, 'Failed to load backup history on home screen.', { error });
+      Logger.warn(PAGE_SCOPE, 'Failed to load automatic backup status on home screen.', { error });
       setLastBackupAt(null);
     }
   }, []);
@@ -140,9 +140,9 @@ export default function TodayScreen() {
       const mode: 'initial' | 'refresh' = hasFocusedRef.current ? 'refresh' : 'initial';
       hasFocusedRef.current = true;
       void loadHomeData(mode);
-      void loadBackupHistory();
+      void loadAutomaticBackupStatus();
       return undefined;
-    }, [loadBackupHistory, loadHomeData]),
+    }, [loadAutomaticBackupStatus, loadHomeData]),
   );
 
   const dueTodayCount = Number.isFinite(summary.todayDueCount)

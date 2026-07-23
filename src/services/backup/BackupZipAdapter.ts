@@ -19,6 +19,8 @@ import { BackupRestoreError, getBackupErrorUserMessage } from '@/src/services/ba
 
 const CACHE_BACKUP_DIR_NAME = 'qishua_wrongbook_backups';
 const BACKUP_ZIP_STREAM_CHUNK_BYTES = 512 * 1024;
+const MANAGED_BACKUP_CACHE_FILE_PATTERN =
+  /^qishua-backup-(\d{4})(\d{2})(\d{2})-\d{6}\.qsbk$/i;
 
 export interface BackupZipPackageProgressEvent {
   current: number;
@@ -64,6 +66,45 @@ function ensureCacheBackupDir(): Directory {
   const backupDir = new Directory(Paths.cache, CACHE_BACKUP_DIR_NAME);
   backupDir.create({ intermediates: true, idempotent: true });
   return backupDir;
+}
+
+export function cleanupCachedBackupPackagesBefore(date: Date): {
+  deletedCount: number;
+  failedCount: number;
+} {
+  const backupDir = new Directory(Paths.cache, CACHE_BACKUP_DIR_NAME);
+  if (!backupDir.exists) {
+    return { deletedCount: 0, failedCount: 0 };
+  }
+
+  const currentDatePart =
+    `${date.getFullYear()}${String(date.getMonth() + 1).padStart(2, '0')}${String(date.getDate()).padStart(2, '0')}`;
+  let deletedCount = 0;
+  let failedCount = 0;
+
+  for (const entry of backupDir.list()) {
+    if (!(entry instanceof File)) {
+      continue;
+    }
+    const matched = MANAGED_BACKUP_CACHE_FILE_PATTERN.exec(entry.name);
+    if (!matched) {
+      continue;
+    }
+    const fileDatePart = `${matched[1]}${matched[2]}${matched[3]}`;
+    if (fileDatePart >= currentDatePart) {
+      continue;
+    }
+    try {
+      if (entry.exists) {
+        entry.delete();
+        deletedCount += 1;
+      }
+    } catch {
+      failedCount += 1;
+    }
+  }
+
+  return { deletedCount, failedCount };
 }
 
 function closeFileHandleBestEffort(handle: FileHandle | null): void {

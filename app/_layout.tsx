@@ -14,6 +14,8 @@ import { MusicProvider } from '@/src/music';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
 import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
+import { registerAutomaticBackupBackgroundTask } from '@/src/services/backup/AutomaticBackupBackgroundTaskService';
+import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
 import { registerTodayWorksheetBackgroundTask } from '@/src/services/TodayWorksheetBackgroundTaskService';
 import { ensureTodayWorksheet } from '@/src/services/TodayWorksheetGenerationCoordinator';
 
@@ -23,6 +25,7 @@ export const unstable_settings = {
 
 const LAYOUT_SCOPE = 'RootLayout';
 const WORKSHEET_STARTUP_DELAY_MS = 800;
+const AUTOMATIC_BACKUP_STARTUP_DELAY_MS = 1800;
 const DATE_ROLLOVER_DELAY_MS = 1000;
 let appDatabaseInitPromise: Promise<void> | null = null;
 let hasConfiguredNotificationHandler = false;
@@ -83,6 +86,23 @@ async function prepareTodayWorksheet(reason: string): Promise<void> {
   }
 }
 
+async function prepareAutomaticBackup(
+  trigger: 'app_start' | 'app_foreground' | 'date_rollover',
+): Promise<void> {
+  try {
+    await initializeDatabaseOnce();
+    const result = await ensureDailyAutomaticBackup({ trigger });
+    Logger.info(LAYOUT_SCOPE, 'Automatic backup preparation finished.', {
+      trigger,
+      outcome: result.outcome,
+      fileName: result.backup.fileName,
+      deletedCount: result.deletedCount,
+    });
+  } catch (error) {
+    Logger.warn(LAYOUT_SCOPE, 'Automatic backup preparation failed.', { trigger, error });
+  }
+}
+
 function getMillisecondsUntilNextLocalDay(): number {
   const now = new Date();
   const nextDay = new Date(
@@ -126,6 +146,7 @@ export default function RootLayout() {
       }
       dateRolloverTimer = setTimeout(() => {
         void prepareTodayWorksheet('date_rollover');
+        void prepareAutomaticBackup('date_rollover');
         scheduleDateRollover();
       }, getMillisecondsUntilNextLocalDay());
     };
@@ -133,8 +154,14 @@ export default function RootLayout() {
     const startupTimer = setTimeout(() => {
       void prepareTodayWorksheet('app_start');
     }, WORKSHEET_STARTUP_DELAY_MS);
+    const automaticBackupStartupTimer = setTimeout(() => {
+      void prepareAutomaticBackup('app_start');
+    }, AUTOMATIC_BACKUP_STARTUP_DELAY_MS);
     void registerTodayWorksheetBackgroundTask().catch((error) => {
       Logger.warn(LAYOUT_SCOPE, 'Today worksheet background task registration failed.', { error });
+    });
+    void registerAutomaticBackupBackgroundTask().catch((error) => {
+      Logger.warn(LAYOUT_SCOPE, 'Automatic backup background task registration failed.', { error });
     });
     scheduleDateRollover();
 
@@ -143,11 +170,13 @@ export default function RootLayout() {
         return;
       }
       void prepareTodayWorksheet('app_foreground');
+      void prepareAutomaticBackup('app_foreground');
       scheduleDateRollover();
     });
 
     return () => {
       clearTimeout(startupTimer);
+      clearTimeout(automaticBackupStartupTimer);
       if (dateRolloverTimer) {
         clearTimeout(dateRolloverTimer);
       }
