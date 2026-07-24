@@ -12,7 +12,7 @@ const AUTOMATIC_BACKUP_DIR_NAME = 'automatic_backups';
 const AUTOMATIC_BACKUP_FILE_PATTERN =
   /^qishua-backup-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})\.qsbk$/i;
 
-export type AutomaticBackupTrigger = 'background';
+export type AutomaticBackupTrigger = 'app_runtime' | 'background';
 
 export type AutomaticBackupRecord = {
   date: string;
@@ -40,6 +40,29 @@ type ManagedAutomaticBackup = {
 };
 
 let ensurePromise: Promise<EnsureDailyAutomaticBackupResult> | null = null;
+const listeners = new Set<(backup: AutomaticBackupRecord) => void>();
+
+function notifyAutomaticBackupReady(backup: AutomaticBackupRecord): void {
+  for (const listener of listeners) {
+    try {
+      listener(backup);
+    } catch (error) {
+      Logger.warn(SERVICE_SCOPE, 'Automatic backup listener failed.', {
+        fileName: backup.fileName,
+        error,
+      });
+    }
+  }
+}
+
+export function subscribeAutomaticBackup(
+  listener: (backup: AutomaticBackupRecord) => void,
+): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
 
 function getAutomaticBackupDirectory(): Directory {
   return new Directory(Paths.document, APP_STATE_DIR_NAME, AUTOMATIC_BACKUP_DIR_NAME);
@@ -270,8 +293,13 @@ export function ensureDailyAutomaticBackup(options: {
     return ensurePromise;
   }
 
-  ensurePromise = createTodayAutomaticBackup(options).finally(() => {
-    ensurePromise = null;
-  });
+  ensurePromise = createTodayAutomaticBackup(options)
+    .then((result) => {
+      notifyAutomaticBackupReady(result.backup);
+      return result;
+    })
+    .finally(() => {
+      ensurePromise = null;
+    });
   return ensurePromise;
 }

@@ -1,6 +1,6 @@
 import * as BackgroundTask from 'expo-background-task';
 import * as TaskManager from 'expo-task-manager';
-import { AppState, Platform } from 'react-native';
+import { Platform } from 'react-native';
 
 import { initDatabase } from '@/src/db';
 import { Logger } from '@/src/services/Logger';
@@ -9,10 +9,6 @@ import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBacku
 const SERVICE_SCOPE = 'AutomaticBackupBackgroundTaskService';
 const TASK_NAME = 'qishua-create-daily-automatic-backup';
 const MINIMUM_INTERVAL_MINUTES = 60;
-
-function isAppActive(): boolean {
-  return AppState.currentState === 'active';
-}
 
 if (!TaskManager.isTaskDefined(TASK_NAME)) {
   TaskManager.defineTask(TASK_NAME, async ({ error, executionInfo }) => {
@@ -26,19 +22,7 @@ if (!TaskManager.isTaskDefined(TASK_NAME)) {
     }
 
     try {
-      if (isAppActive()) {
-        Logger.info(SERVICE_SCOPE, 'Deferred automatic backup while the app is active.', {
-          eventId: executionInfo.eventId,
-        });
-        return BackgroundTask.BackgroundTaskResult.Success;
-      }
       await initDatabase();
-      if (isAppActive()) {
-        Logger.info(SERVICE_SCOPE, 'Deferred automatic backup because the app became active.', {
-          eventId: executionInfo.eventId,
-        });
-        return BackgroundTask.BackgroundTaskResult.Success;
-      }
       const result = await ensureDailyAutomaticBackup({ trigger: 'background' });
       Logger.info(SERVICE_SCOPE, 'Background automatic backup task finished.', {
         eventId: executionInfo.eventId,

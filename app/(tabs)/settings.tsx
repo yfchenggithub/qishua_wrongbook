@@ -26,6 +26,7 @@ import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
 import {
   getTodayAutomaticBackup,
+  subscribeAutomaticBackup,
   type AutomaticBackupRecord,
 } from '@/src/services/backup/AutomaticBackupService';
 import * as BackupService from '@/src/services/backup/BackupService';
@@ -618,6 +619,13 @@ export default function SettingsScreen() {
     }
   }, [showToast]);
 
+  useEffect(
+    () => subscribeAutomaticBackup((backup) => {
+      setAutomaticBackup(backup);
+    }),
+    [],
+  );
+
   const loadExportImageMode = useCallback(async () => {
     Logger.info(PAGE_SCOPE, 'Start loading export image mode.');
     setIsExportImageModeLoading(true);
@@ -865,7 +873,7 @@ export default function SettingsScreen() {
         error,
       });
       setAutomaticBackup(null);
-      Alert.alert('分享或导出失败', '今天的备份文件暂时不可用，后台任务稍后会重新生成。');
+      Alert.alert('分享或导出失败', '今天的备份文件暂时不可用，App 运行时会自动重新生成。');
       void loadAutomaticBackupState();
     } finally {
       setIsSharingBackup(false);
@@ -1612,7 +1620,7 @@ export default function SettingsScreen() {
     ? `生成于 ${formatBackupCreatedAt(automaticBackup.createdAt)} · ${formatStorageSize(automaticBackup.fileSizeBytes)}`
     : isAutomaticBackupLoading
       ? '正在读取今天的备份状态…'
-      : '今日备份将在 App 进入后台后生成';
+      : '今日备份正在自动生成，完成后可分享/导出';
   const selectedExportImageModeOption = useMemo(
     () =>
       EXPORT_IMAGE_MODE_OPTIONS.find((item) => item.mode === exportImageMode)

@@ -3,6 +3,7 @@ import * as Notifications from 'expo-notifications';
 import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -12,6 +13,10 @@ import { initDatabase } from '@/src/db';
 import { MusicProvider } from '@/src/music';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
+import {
+  runRuntimeDailyWork,
+  type RuntimeDailyWorkTrigger,
+} from '@/src/services/RuntimeDailyWorkService';
 import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
 import { registerAutomaticBackupBackgroundTask } from '@/src/services/backup/AutomaticBackupBackgroundTaskService';
 import { registerTodayWorksheetBackgroundTask } from '@/src/services/TodayWorksheetBackgroundTaskService';
@@ -21,6 +26,7 @@ export const unstable_settings = {
 };
 
 const LAYOUT_SCOPE = 'RootLayout';
+const MINIMUM_DAY_CHANGE_DELAY_MS = 1_000;
 let appDatabaseInitPromise: Promise<void> | null = null;
 let hasConfiguredNotificationHandler = false;
 let hasLoggedRuntimeContext = false;
@@ -65,6 +71,28 @@ function initializeDatabaseOnce(): Promise<void> {
   return appDatabaseInitPromise;
 }
 
+function millisecondsUntilNextLocalDay(now = new Date()): number {
+  const nextLocalDay = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + 1,
+    0,
+    0,
+    0,
+    0,
+  );
+  return Math.max(MINIMUM_DAY_CHANGE_DELAY_MS, nextLocalDay.getTime() - now.getTime());
+}
+
+function startRuntimeDailyWork(trigger: RuntimeDailyWorkTrigger): void {
+  void runRuntimeDailyWork(trigger).catch((error) => {
+    Logger.error(LAYOUT_SCOPE, 'App runtime daily work could not start or settle.', {
+      trigger,
+      error,
+    });
+  });
+}
+
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const router = useRouter();
@@ -72,6 +100,28 @@ export default function RootLayout() {
   useEffect(() => {
     logRuntimeContextOnce();
     configureNotificationHandlerOnce();
+    startRuntimeDailyWork('app_start');
+
+    let dayChangeTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleNextLocalDay = () => {
+      if (dayChangeTimer) {
+        clearTimeout(dayChangeTimer);
+      }
+      dayChangeTimer = setTimeout(() => {
+        startRuntimeDailyWork('local_day_change');
+        scheduleNextLocalDay();
+      }, millisecondsUntilNextLocalDay());
+    };
+    scheduleNextLocalDay();
+
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') {
+        startRuntimeDailyWork('app_foreground');
+        scheduleNextLocalDay();
+      } else if (nextState === 'background') {
+        startRuntimeDailyWork('app_background');
+      }
+    });
 
     void initializeDatabaseOnce()
       .then(async () => {
@@ -84,6 +134,13 @@ export default function RootLayout() {
         // Database initialization errors are already logged in initializeDatabaseOnce.
         Logger.warn(LAYOUT_SCOPE, 'Reminder schedule refresh on app start failed.', { error });
       });
+
+    return () => {
+      appStateSubscription.remove();
+      if (dayChangeTimer) {
+        clearTimeout(dayChangeTimer);
+      }
+    };
   }, []);
 
   useEffect(() => {

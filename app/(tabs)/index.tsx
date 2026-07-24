@@ -1,6 +1,6 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, type ScrollView, StyleSheet, Text, View, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -14,7 +14,10 @@ import {
 } from '@/src/components/today';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
-import { getTodayAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
+import {
+  getTodayAutomaticBackup,
+  subscribeAutomaticBackup,
+} from '@/src/services/backup/AutomaticBackupService';
 import { Logger } from '@/src/services/Logger';
 import type { HomeStatus, HomeTaskSummary } from '@/src/services/MistakeListService';
 import * as MistakeListService from '@/src/services/MistakeListService';
@@ -62,7 +65,7 @@ function buildSummaryHint(status: HomeStatus): string {
 
 function formatBackupStatus(lastBackupAt: string | null): string {
   if (!lastBackupAt) {
-    return '数据仅保存在本机 · 今日备份等待后台生成';
+    return '数据仅保存在本机 · 今日备份自动生成中';
   }
 
   const date = new Date(lastBackupAt);
@@ -134,6 +137,13 @@ export default function TodayScreen() {
       setLastBackupAt(null);
     }
   }, []);
+
+  useEffect(
+    () => subscribeAutomaticBackup((backup) => {
+      setLastBackupAt(backup.createdAt);
+    }),
+    [],
+  );
 
   useFocusEffect(
     useCallback(() => {
