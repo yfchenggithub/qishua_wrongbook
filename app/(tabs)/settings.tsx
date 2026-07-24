@@ -21,7 +21,10 @@ import { AppToast, PageHeader, PageShell, SectionHeader, SurfaceCard } from '@/s
 import { useAppToast } from '@/src/hooks/useAppToast';
 import { APP_BUILD_DATE, APP_NAME } from '@/src/constants/app';
 import { formatElapsedSeconds, useTodayWorksheetExport } from '@/src/hooks/useTodayWorksheetExport';
-import { loadDeveloperModeEnabled, saveDeveloperModeEnabled } from '@/src/services/DeveloperModeService';
+import {
+  getSessionDeveloperModeEnabled,
+  setSessionDeveloperModeEnabled,
+} from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
 import {
@@ -484,7 +487,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(false);
+  const [isDevModeUnlocked, setIsDevModeUnlocked] = useState(getSessionDeveloperModeEnabled);
   const [dataOverview, setDataOverview] = useState<SettingsStats>(DEFAULT_DATA_OVERVIEW_STATS);
   const [isOverviewLoading, setIsOverviewLoading] = useState(true);
   const [, setIsOverviewRefreshing] = useState(false);
@@ -565,21 +568,6 @@ export default function SettingsScreen() {
       } as never);
     },
   });
-
-  useEffect(() => {
-    let isMounted = true;
-
-    void (async () => {
-      const enabled = await loadDeveloperModeEnabled();
-      if (isMounted) {
-        setIsDevModeUnlocked(enabled);
-      }
-    })();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   const loadReminderState = useCallback(async () => {
     Logger.info(PAGE_SCOPE, 'Start loading reminder settings.');
@@ -754,12 +742,7 @@ export default function SettingsScreen() {
       lastTapAtRef.current = null;
       setIsDevModeUnlocked(false);
 
-      void saveDeveloperModeEnabled(false).catch((error) => {
-        Logger.error(PAGE_SCOPE, 'Failed to persist developer mode disabled state.', {
-          error,
-        });
-        showToast('开发者模式状态保存失败，请稍后重试', 'warning');
-      });
+      setSessionDeveloperModeEnabled(false);
 
       Logger.info(PAGE_SCOPE, 'Developer mode disabled in settings page state.', { source });
 
@@ -795,9 +778,7 @@ export default function SettingsScreen() {
       Logger.info(PAGE_SCOPE, 'Developer mode unlocked from version taps.', {
         tapCount: nextCount,
       });
-      void saveDeveloperModeEnabled(true).catch((error) => {
-        Logger.error(PAGE_SCOPE, 'Failed to persist developer mode enabled state.', { error });
-      });
+      setSessionDeveloperModeEnabled(true);
       showToast('开发者模式已开启', 'success');
       return;
     }
@@ -824,9 +805,7 @@ export default function SettingsScreen() {
     lastTapAtRef.current = null;
     setIsDevModeUnlocked(true);
     Logger.info(PAGE_SCOPE, 'Developer mode unlocked from version long press.');
-    void saveDeveloperModeEnabled(true).catch((error) => {
-      Logger.error(PAGE_SCOPE, 'Failed to persist developer mode enabled state from long press.', { error });
-    });
+    setSessionDeveloperModeEnabled(true);
     showToast('开发者模式已开启', 'success');
   }, [disableDeveloperMode, isDevModeUnlocked, showToast]);
 
