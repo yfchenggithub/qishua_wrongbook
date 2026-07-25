@@ -1,7 +1,11 @@
 import Constants from 'expo-constants';
 import { Appearance, Dimensions, I18nManager, Platform } from 'react-native';
 
-const sessionStartedAt = new Date().toISOString();
+import {
+  captureRuntimeDiagnostics,
+  getRuntimeSessionStartedAt,
+  type RuntimeDiagnosticsSnapshot,
+} from '@/src/services/RuntimeDiagnosticsService';
 
 export interface RuntimePromotionContext {
   source?: string;
@@ -36,6 +40,7 @@ export interface RuntimeLogContext {
     scale: number;
     fontScale: number;
   };
+  diagnostics?: RuntimeDiagnosticsSnapshot;
   promotion?: RuntimePromotionContext;
 }
 
@@ -152,7 +157,7 @@ export function getRuntimeLogContext(): RuntimeLogContext {
   return {
     session: {
       ...(sessionId ? { id: sessionId } : {}),
-      startedAt: sessionStartedAt,
+      startedAt: getRuntimeSessionStartedAt(),
     },
     app: {
       ...(appVersion ? { version: appVersion } : {}),
@@ -178,5 +183,13 @@ export function getRuntimeLogContext(): RuntimeLogContext {
       fontScale: screen.fontScale,
     },
     ...(promotion ? { promotion } : {}),
+  };
+}
+
+export async function getRuntimeLogContextWithDiagnostics(): Promise<RuntimeLogContext> {
+  const context = getRuntimeLogContext();
+  return {
+    ...context,
+    diagnostics: await captureRuntimeDiagnostics(),
   };
 }

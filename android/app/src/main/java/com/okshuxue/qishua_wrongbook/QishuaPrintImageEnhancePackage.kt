@@ -10,6 +10,7 @@ class QishuaPrintImageEnhancePackage : ReactPackage {
     return listOf(
       QishuaFileShareModule(reactContext),
       QishuaPrintImageEnhanceModule(reactContext),
+      QishuaRuntimeDiagnosticsModule(reactContext),
     )
   }
 

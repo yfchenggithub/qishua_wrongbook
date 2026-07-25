@@ -17,7 +17,7 @@ import {
   runRuntimeDailyWork,
   type RuntimeDailyWorkTrigger,
 } from '@/src/services/RuntimeDailyWorkService';
-import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
+import { getRuntimeLogContextWithDiagnostics } from '@/src/services/RuntimeContextService';
 import { registerAutomaticBackupBackgroundTask } from '@/src/services/backup/AutomaticBackupBackgroundTaskService';
 import { registerTodayWorksheetBackgroundTask } from '@/src/services/TodayWorksheetBackgroundTaskService';
 
@@ -31,13 +31,17 @@ let appDatabaseInitPromise: Promise<void> | null = null;
 let hasConfiguredNotificationHandler = false;
 let hasLoggedRuntimeContext = false;
 
-function logRuntimeContextOnce(): void {
+async function logRuntimeContextOnce(): Promise<void> {
   if (hasLoggedRuntimeContext) {
     return;
   }
 
   hasLoggedRuntimeContext = true;
-  Logger.info('RuntimeContext', 'Runtime context initialized.', getRuntimeLogContext());
+  Logger.info(
+    'RuntimeContext',
+    'Runtime context initialized.',
+    await getRuntimeLogContextWithDiagnostics(),
+  );
 }
 
 function configureNotificationHandlerOnce(): void {
@@ -98,7 +102,7 @@ export default function RootLayout() {
   const router = useRouter();
 
   useEffect(() => {
-    logRuntimeContextOnce();
+    void logRuntimeContextOnce();
     configureNotificationHandlerOnce();
     startRuntimeDailyWork('app_start');
 

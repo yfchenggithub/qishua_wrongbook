@@ -22,6 +22,7 @@ export * as TodayReviewPdfExportService from "./TodayReviewPdfExportService";
 export * as TodayWorksheetExportService from "./TodayWorksheetExportService";
 export * as StorageMaintenanceService from "./StorageMaintenanceService";
 export * as RuntimeContextService from "./RuntimeContextService";
+export * as RuntimeDiagnosticsService from "./RuntimeDiagnosticsService";
 export * as VoiceNoteService from "./VoiceNoteService";
 export * as BackupService from "./backup/BackupService";
 export * as BackupManifest from "./backup/BackupManifest";

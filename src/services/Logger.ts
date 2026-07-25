@@ -1,3 +1,8 @@
+import {
+  captureRuntimeDiagnostics,
+  type RuntimeDiagnosticsSnapshot,
+} from '@/src/services/RuntimeDiagnosticsService';
+
 type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 type RuntimeLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -187,10 +192,10 @@ function appendRuntimeLog(
   scope: string,
   message: string,
   metadata?: unknown,
-): void {
+): RuntimeLogItem {
   runtimeLogSequence += 1;
 
-  runtimeLogs.push({
+  const runtimeLog: RuntimeLogItem = {
     id: `runtime-log-${runtimeLogSequence}`,
     timestamp: new Date().toISOString(),
     level: mapLogLevelToRuntime(level),
@@ -198,7 +203,8 @@ function appendRuntimeLog(
     message: redactMessage(message),
     metadata:
       metadata === undefined ? undefined : normalizeRuntimeMetadata(metadata),
-  });
+  };
+  runtimeLogs.push(runtimeLog);
 
   if (runtimeLogs.length > RUNTIME_LOG_LIMIT) {
     // Runtime logs are append-only, so insertion order is their usage recency.
@@ -206,6 +212,41 @@ function appendRuntimeLog(
     runtimeLogs.splice(0, runtimeLogs.length - RUNTIME_LOG_LIMIT);
   }
 
+  notifyRuntimeLogListeners();
+  return runtimeLog;
+}
+
+function addRuntimeDiagnosticsToMetadata(
+  metadata: unknown,
+  diagnostics: RuntimeDiagnosticsSnapshot,
+): unknown {
+  if (metadata === undefined) {
+    return { runtimeDiagnostics: diagnostics };
+  }
+
+  if (typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)) {
+    return {
+      ...metadata,
+      runtimeDiagnostics: diagnostics,
+    };
+  }
+
+  return {
+    details: metadata,
+    runtimeDiagnostics: diagnostics,
+  };
+}
+
+async function enrichRuntimeLogWithDiagnostics(runtimeLog: RuntimeLogItem): Promise<void> {
+  const diagnostics = await captureRuntimeDiagnostics();
+  const currentLog = runtimeLogs.find((item) => item.id === runtimeLog.id);
+  if (!currentLog) {
+    return;
+  }
+
+  currentLog.metadata = normalizeRuntimeMetadata(
+    addRuntimeDiagnosticsToMetadata(currentLog.metadata, diagnostics),
+  );
   notifyRuntimeLogListeners();
 }
 
@@ -253,7 +294,10 @@ function writeLog(
       console.log(logLine, redactedPayload === undefined ? "" : redactedPayload);
   }
 
-  appendRuntimeLog(level, sanitizedScope, sanitizedMessage, redactedPayload);
+  const runtimeLog = appendRuntimeLog(level, sanitizedScope, sanitizedMessage, redactedPayload);
+  if (level === 'WARN' || level === 'ERROR') {
+    void enrichRuntimeLogWithDiagnostics(runtimeLog);
+  }
 }
 
 function getRuntimeLogs(): RuntimeLogItem[] {

@@ -3,7 +3,11 @@ import * as Sharing from 'expo-sharing';
 
 import { shareFile as shareFileWithNativeModule } from '@/src/services/AndroidFileShareService';
 import type { RuntimeLogItem } from '@/src/services/Logger';
-import { getRuntimeLogContext } from '@/src/services/RuntimeContextService';
+import {
+  getRuntimeLogContext,
+  getRuntimeLogContextWithDiagnostics,
+  type RuntimeLogContext,
+} from '@/src/services/RuntimeContextService';
 
 const EXPORT_CACHE_DIRECTORY = 'runtime-log-exports';
 const EXPORT_FILE_PREFIX = 'qishua-runtime-logs';
@@ -74,6 +78,56 @@ function safeString(value: unknown): string {
   } catch {
     return '[无法序列化]';
   }
+}
+
+function formatBytes(value: number | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return '未知';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let unitIndex = 0;
+  let displayedValue = value;
+  while (displayedValue >= 1024 && unitIndex < units.length - 1) {
+    displayedValue /= 1024;
+    unitIndex += 1;
+  }
+  const fractionDigits = displayedValue >= 100 || unitIndex === 0 ? 0 : 1;
+  return `${displayedValue.toFixed(fractionDigits)} ${units[unitIndex]}`;
+}
+
+function formatPercent(value: number | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? `${value.toFixed(1)}%`
+    : '未知';
+}
+
+function formatDuration(milliseconds: number | undefined): string {
+  if (typeof milliseconds !== 'number' || !Number.isFinite(milliseconds) || milliseconds < 0) {
+    return '未知';
+  }
+
+  const totalSeconds = Math.floor(milliseconds / 1000);
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return [
+    ...(days > 0 ? [`${days}天`] : []),
+    ...(hours > 0 ? [`${hours}小时`] : []),
+    ...(minutes > 0 ? [`${minutes}分`] : []),
+    `${seconds}秒`,
+  ].join('');
+}
+
+function formatBoolean(value: boolean | undefined): string {
+  if (value === true) {
+    return '是';
+  }
+  if (value === false) {
+    return '否';
+  }
+  return '未知';
 }
 
 export function formatRuntimeLogMetadata(metadata: unknown, pretty = true): string {
@@ -154,8 +208,8 @@ export function formatRuntimeLogEntry(log: RuntimeLogItem): string {
 export function buildRuntimeLogsTxt(
   input: RuntimeLogExportInput,
   exportedAt: Date = new Date(),
+  context: RuntimeLogContext = getRuntimeLogContext(),
 ): string {
-  const context = getRuntimeLogContext();
   const header = [
     `导出时间：${formatExportTimestamp(exportedAt)}`,
     `原始日志：${input.totalLogCount} 条`,
@@ -194,6 +248,60 @@ export function buildRuntimeLogsTxt(
   header.push(
     `屏幕环境：${context.display.width}×${context.display.height} @${context.display.scale}，字体缩放 ${context.display.fontScale}`,
   );
+  const diagnostics = context.diagnostics;
+  if (diagnostics) {
+    const hardware = diagnostics.hardware;
+    const memory = diagnostics.memory;
+    const storage = diagnostics.storage;
+    const battery = diagnostics.battery;
+    const runtime = diagnostics.runtime;
+
+    header.push(`诊断采集时间：${formatRuntimeLogTimestamp(runtime.capturedAt)}`);
+    header.push(`原生诊断可用：${formatBoolean(runtime.nativeDiagnosticsAvailable)}`);
+    if (hardware) {
+      header.push(
+        `设备类型：${hardware.deviceKind === 'physical' ? '真机' : hardware.deviceKind === 'emulator' ? '模拟器' : '未知'}`,
+      );
+      header.push(
+        `CPU：${hardware.cpuCoreCount ?? '未知'} 核 / ${hardware.cpuArchitectures?.join(', ') || '未知'}`,
+      );
+      header.push(
+        `硬件：brand=${hardware.brand ?? '未知'}，manufacturer=${hardware.manufacturer ?? '未知'}，model=${hardware.model ?? '未知'}，board=${hardware.board ?? '未知'}，hardware=${hardware.hardware ?? '未知'}，product=${hardware.product ?? '未知'}，device=${hardware.device ?? '未知'}`,
+      );
+      if (hardware.socManufacturer || hardware.socModel) {
+        header.push(
+          `SoC：${[hardware.socManufacturer, hardware.socModel].filter(Boolean).join(' ')}`,
+        );
+      }
+    }
+    if (memory) {
+      header.push(
+        `设备内存：总量 ${formatBytes(memory.deviceTotalBytes)}，可用 ${formatBytes(memory.deviceAvailableBytes)}（${formatPercent(memory.deviceAvailablePercent)}），低内存 ${formatBoolean(memory.lowMemory)}`,
+      );
+      header.push(
+        `App 内存：PSS ${formatBytes(memory.appTotalPssBytes)}，Java heap ${formatBytes(memory.appJavaHeapUsedBytes)} / ${formatBytes(memory.appJavaHeapMaxBytes)}，Native heap ${formatBytes(memory.appNativeHeapAllocatedBytes)}`,
+      );
+      header.push(
+        `Android 内存档位：${memory.memoryClassMb ?? '未知'} MB / large ${memory.largeMemoryClassMb ?? '未知'} MB，低内存设备 ${formatBoolean(memory.lowRamDevice)}`,
+      );
+    }
+    if (storage) {
+      header.push(
+        `本机存储：总量 ${formatBytes(storage.totalBytes)}，可用 ${formatBytes(storage.availableBytes)}（${formatPercent(storage.availablePercent)}）`,
+      );
+    }
+    if (battery) {
+      header.push(
+        `电池：${formatPercent(battery.levelPercent)}，${battery.state ?? 'unknown'}，供电 ${battery.powerSource ?? 'unknown'}，温度 ${battery.temperatureCelsius ?? '未知'}°C，健康 ${battery.health ?? 'unknown'}`,
+      );
+    }
+    header.push(
+      `运行状态：App ${runtime.appState}，进程 ${runtime.processImportance ?? 'unknown'}，会话 ${formatDuration(runtime.sessionUptimeMs)}，设备已运行 ${formatDuration(runtime.deviceUptimeMs)}`,
+    );
+    header.push(
+      `电源与温控：节电模式 ${formatBoolean(runtime.powerSaveMode)}，设备交互中 ${formatBoolean(runtime.interactive)}，温控 ${runtime.thermalStatus ?? 'unknown'}，最近内存回收级别 ${runtime.lastTrimMemoryLevel ?? '未知'}`,
+    );
+  }
   if (context.promotion?.source) {
     header.push(`推广来源：${context.promotion.source}`);
   }
@@ -242,6 +350,7 @@ export async function exportRuntimeLogsTxt(
   }
 
   const exportedAt = new Date();
+  const runtimeContext = await getRuntimeLogContextWithDiagnostics();
   const fileName = `${EXPORT_FILE_PREFIX}-${formatFileTimestamp(exportedAt)}.txt`;
   const exportDirectory = new Directory(Paths.cache, EXPORT_CACHE_DIRECTORY);
   exportDirectory.create({ intermediates: true, idempotent: true });
@@ -249,7 +358,7 @@ export async function exportRuntimeLogsTxt(
   const outputFile = new File(exportDirectory, fileName);
   outputFile.create({ intermediates: true, overwrite: true });
   // A UTF-8 BOM improves Chinese text detection in desktop TXT viewers.
-  outputFile.write(`\uFEFF${buildRuntimeLogsTxt(input, exportedAt)}`);
+  outputFile.write(`\uFEFF${buildRuntimeLogsTxt(input, exportedAt, runtimeContext)}`);
 
   await openSharePanel(outputFile.uri);
 
