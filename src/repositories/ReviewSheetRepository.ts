@@ -150,12 +150,15 @@ export const ReviewSheetRepository = {
         ReviewSheetRepository.createReviewSheetInTransaction(db, normalizedMistakeIds),
       );
 
-      const db = await getDatabase();
-      const reloaded = await getReviewSheetWithItemsInternal(db, created.id);
-      if (!reloaded) {
-        throw new Error('Failed to reload created review sheet.');
-      }
-      return reloaded;
+      // withDatabaseTransaction resolves only after the transaction has
+      // committed. `created` already contains the exact rows just written, so
+      // immediately opening a second connection merely adds a fragile read
+      // between creation and PDF rendering.
+      Logger.info(REPO_SCOPE, 'review_sheet_transaction_committed', {
+        sheetId: created.id,
+        itemCount: created.items.length,
+      });
+      return created;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createReviewSheet failed.', { mistakeIds, error });
       throw error;

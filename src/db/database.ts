@@ -53,8 +53,21 @@ type TransactionCapableDatabase = SQLite.SQLiteDatabase & {
 
 let databaseInstance: SQLite.SQLiteDatabase | null = null;
 let openingDatabasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
+let databaseRecoveryPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 let databaseInitialized = false;
 let databaseInitializationPromise: Promise<void> | null = null;
+
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error ?? '');
+}
+
+function isReleasedNativeDatabaseError(error: unknown): boolean {
+  return /shared object that was already released/i.test(getErrorMessage(error));
+}
 
 async function readUserVersion(db: SQLite.SQLiteDatabase): Promise<number> {
   const row = await db.getFirstAsync<UserVersionRow>('PRAGMA user_version');
@@ -288,7 +301,7 @@ async function runMigrationToCurrentVersion(
   await setUserVersion(db, DATABASE_VERSION);
 }
 
-export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+async function openDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (databaseInstance) {
     return databaseInstance;
   }
@@ -312,6 +325,68 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     });
 
   return openingDatabasePromise;
+}
+
+async function recoverReleasedDatabase(
+  releasedDatabase: SQLite.SQLiteDatabase,
+  originalError: unknown,
+): Promise<SQLite.SQLiteDatabase> {
+  if (databaseRecoveryPromise) {
+    return databaseRecoveryPromise;
+  }
+
+  databaseRecoveryPromise = (async () => {
+    const replacedCachedInstance = databaseInstance === releasedDatabase;
+    if (replacedCachedInstance) {
+      databaseInstance = null;
+    }
+
+    // The underlying database file is unchanged, so its schema remains ready.
+    // Only the JavaScript-to-native shared-object handle needs to be reopened.
+    Logger.warn(DB_SCOPE, 'Detected a released native database handle; reopening the connection.', {
+      replacedCachedInstance,
+      error: getErrorMessage(originalError),
+    });
+
+    const reopenedDatabase = await openDatabase();
+
+    // Verify the newly obtained native handle before handing it to a repository.
+    // This call is intentionally lightweight and does not mutate database state.
+    await reopenedDatabase.isInTransactionAsync();
+
+    Logger.info(DB_SCOPE, 'Database connection recovered after native-handle release.');
+    return reopenedDatabase;
+  })().finally(() => {
+    databaseRecoveryPromise = null;
+  });
+
+  return databaseRecoveryPromise;
+}
+
+async function verifyDatabaseHandle(
+  database: SQLite.SQLiteDatabase,
+): Promise<SQLite.SQLiteDatabase> {
+  try {
+    // Expo SQLite exposes this as a native call. It catches a released shared
+    // object before a real read/write operation is allowed to fail later.
+    await database.isInTransactionAsync();
+    return database;
+  } catch (error) {
+    if (!isReleasedNativeDatabaseError(error)) {
+      throw error;
+    }
+
+    return recoverReleasedDatabase(database, error);
+  }
+}
+
+export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+  if (databaseRecoveryPromise) {
+    return databaseRecoveryPromise;
+  }
+
+  const database = await openDatabase();
+  return verifyDatabaseHandle(database);
 }
 
 export async function withDatabaseTransaction<T>(

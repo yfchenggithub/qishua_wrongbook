@@ -7,6 +7,12 @@ import ReactNativeBlobUtil from 'react-native-blob-util';
 
 import type { TodayReviewExportItem } from '@/src/models/TodayReviewExportItem';
 import * as AndroidFileShareService from '@/src/services/AndroidFileShareService';
+import {
+  ANDROID_NATIVE_WORKSHEET_PDF_TIMEOUT_MS,
+  isAndroidNativeWorksheetPdfAvailable,
+  printAndroidNativeWorksheetPdf,
+  type AndroidNativeWorksheetPdfItem,
+} from '@/src/services/AndroidNativeWorksheetPdfService';
 import { getCachedPrintEnhancedImageForPdf, type PrintEnhanceCacheStatus } from '@/src/services/export/PrintEnhanceCacheService';
 import {
   cleanupPrintEnhancedTempFiles,
@@ -42,7 +48,7 @@ const ZIP_MIME_TYPE = 'application/zip';
 const PDF_FILE_PREFIX = 'qishua_today_review';
 const DEFAULT_EXPORT_PRINT_ENHANCE_MODE: PrintEnhanceMode = DEFAULT_PRINT_ENHANCE_MODE;
 const SUSPICIOUS_PDF_SIZE_BYTES = 4 * 1024;
-const EXPORT_ITEMS_PER_PDF_FILE = 40;
+const EXPORT_ITEMS_PER_PDF_FILE = 20;
 const A4_WIDTH_MM = 210;
 const A4_HEIGHT_MM = 297;
 const PDF_PAGE_MARGIN_MM = 12;
@@ -148,6 +154,8 @@ export type OpenTodayReviewPdfWithOtherAppResult =
 type TodayReviewPdfRenderItem = {
   raw: TodayReviewExportItem;
   questionImageSrc: string | null;
+  questionImageUri: string | null;
+  fallbackQuestionImageUri: string | null;
   questionImageSize: PrintImageSize | null;
 };
 
@@ -191,6 +199,7 @@ type QuestionImageEnhanceTrace = {
 
 type BuildQuestionImageSrcResult = {
   imageDataUri: string | null;
+  selectedImageUri: string | null;
   imageSize: PrintImageSize | null;
   temporaryEnhancedUri: string | null;
   trace: QuestionImageEnhanceTrace | null;
@@ -375,15 +384,32 @@ function summarizeExportItems(items: TodayReviewExportItem[]): {
   }));
 }
 
-function buildReviewSheetQrSvg(sheetId: string): string {
+type ReviewSheetQrData = {
+  svg: string;
+  size: number;
+  cells: number[];
+};
+
+function buildReviewSheetQrData(sheetId: string): ReviewSheetQrData {
   const qr = createQrCode(0, 'M');
   qr.addData(sheetId);
   qr.make();
-  return qr.createSvgTag({
-    cellSize: 2,
-    margin: 1,
-    scalable: true,
-  });
+  const size = qr.getModuleCount();
+  const cells: number[] = [];
+  for (let row = 0; row < size; row += 1) {
+    for (let column = 0; column < size; column += 1) {
+      cells.push(qr.isDark(row, column) ? 1 : 0);
+    }
+  }
+  return {
+    svg: qr.createSvgTag({
+      cellSize: 2,
+      margin: 1,
+      scalable: true,
+    }),
+    size,
+    cells,
+  };
 }
 
 function buildReviewSheetQrBadgeHtml(sheetId: string, qrSvg: string): string {
@@ -627,11 +653,13 @@ async function buildQuestionImageSrc(
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
   performanceProfile: PrintEnhancePerformanceProfile,
+  embedImageData: boolean,
 ): Promise<BuildQuestionImageSrcResult> {
   const normalizedUri = normalizeOptionalText(uri);
   if (!normalizedUri) {
     return {
       imageDataUri: null,
+      selectedImageUri: null,
       imageSize: null,
       temporaryEnhancedUri: null,
       trace: null,
@@ -655,6 +683,42 @@ async function buildQuestionImageSrc(
   let base64ReadAttemptCount = 0;
 
   for (const candidateUri of candidateUris) {
+    if (!embedImageData) {
+      let fileExists = false;
+      try {
+        fileExists = new File(candidateUri).exists;
+      } catch {
+        fileExists = false;
+      }
+      const imageSize = await getPrintImageSize(candidateUri);
+      if (fileExists || imageSize) {
+        const trace: QuestionImageEnhanceTrace = {
+          mode: printEnhanceMode,
+          clearPrintStrength,
+          performanceProfile,
+          sourceUri: normalizedUri,
+          enhancedUri,
+          selectedUri: candidateUri,
+          engine: enhanceResult.engine,
+          outputFormat: enhanceResult.outputFormat,
+          success: enhanceResult.success,
+          usedFallback: enhanceResult.usedFallback,
+          durationMs: enhanceResult.durationMs,
+          cacheStatus: enhanceResult.cacheStatus,
+        };
+        return {
+          imageDataUri: null,
+          selectedImageUri: candidateUri,
+          imageSize,
+          temporaryEnhancedUri,
+          trace,
+          base64ReadDurationMs,
+          base64ReadAttemptCount,
+        };
+      }
+      continue;
+    }
+
     const base64StartedAt = Date.now();
     const dataUri = await toImageDataUri(candidateUri);
     base64ReadDurationMs += Math.max(0, Date.now() - base64StartedAt);
@@ -677,6 +741,7 @@ async function buildQuestionImageSrc(
       };
       return {
         imageDataUri: dataUri,
+        selectedImageUri: candidateUri,
         imageSize,
         temporaryEnhancedUri,
         trace,
@@ -697,6 +762,7 @@ async function buildQuestionImageSrc(
   });
   return {
     imageDataUri: null,
+    selectedImageUri: null,
     imageSize: null,
     temporaryEnhancedUri,
     trace: {
@@ -741,6 +807,22 @@ function formatDueDateText(dueDate: string): string {
     return toDateOnlyString(parsed);
   }
   return normalizeOptionalText(dueDate) ?? '-';
+}
+
+function toAndroidNativeWorksheetItem(
+  item: TodayReviewPdfRenderItem,
+): AndroidNativeWorksheetPdfItem {
+  return {
+    title: toDisplayText(item.raw.title, '未命名题目'),
+    module: toDisplayText(item.raw.module, '模块未知'),
+    progress: formatProgressText(item.raw),
+    difficulty: formatDifficultyText(item.raw.difficulty),
+    dueDate: formatDueDateText(item.raw.dueDate),
+    imageUri: item.questionImageUri,
+    fallbackImageUri: item.fallbackQuestionImageUri,
+    imageWidth: item.questionImageSize?.width ?? 0,
+    imageHeight: item.questionImageSize?.height ?? 0,
+  };
 }
 
 function buildQuestionCardHtml(item: TodayReviewPdfRenderItem, index: number): string {
@@ -1472,6 +1554,7 @@ async function buildSingleRenderItem(
   printEnhanceMode: PrintEnhanceMode,
   clearPrintStrength: PrintEnhanceClearPrintStrength,
   performanceProfile: PrintEnhancePerformanceProfile,
+  embedImageData: boolean,
 ): Promise<RenderItemBuildResult> {
   const questionImageUri = normalizeOptionalText(item.questionImageUri);
   const imageResult = questionImageUri
@@ -1480,9 +1563,11 @@ async function buildSingleRenderItem(
       printEnhanceMode,
       clearPrintStrength,
       performanceProfile,
+      embedImageData,
     )
     : {
       imageDataUri: null,
+      selectedImageUri: null,
       imageSize: null,
       temporaryEnhancedUri: null,
       trace: null,
@@ -1508,6 +1593,7 @@ async function buildSingleRenderItem(
       enhancedUriPreview: toSafeUriPreview(imageResult.trace.enhancedUri),
       selectedUriPreview: toSafeUriPreview(imageResult.trace.selectedUri),
       hasImageData: imageResult.imageDataUri !== null,
+      hasNativeImageUri: imageResult.selectedImageUri !== null,
     });
   } else {
     Logger.info(SERVICE_SCOPE, 'pdf_export_question_image_missing', {
@@ -1519,6 +1605,8 @@ async function buildSingleRenderItem(
     renderItem: {
       raw: item,
       questionImageSrc: imageResult.imageDataUri,
+      questionImageUri: imageResult.selectedImageUri,
+      fallbackQuestionImageUri: questionImageUri,
       questionImageSize: imageResult.imageSize,
     },
     temporaryEnhancedUri: imageResult.temporaryEnhancedUri,
@@ -1535,6 +1623,7 @@ async function buildRenderItems(
   clearPrintStrength: PrintEnhanceClearPrintStrength,
   performanceProfile: PrintEnhancePerformanceProfile,
   enhanceConcurrency: PrintEnhanceConcurrency,
+  embedImageData: boolean,
   onItemProcessed?: (progress: BuildItemsProgress) => void,
 ): Promise<BuildRenderItemsResult> {
   const renderItems: (TodayReviewPdfRenderItem | null)[] = new Array(items.length).fill(null);
@@ -1578,6 +1667,7 @@ async function buildRenderItems(
         printEnhanceMode,
         clearPrintStrength,
         performanceProfile,
+        embedImageData,
       );
       renderItems[index] = built.renderItem;
       if (built.temporaryEnhancedUri) {
@@ -1606,6 +1696,8 @@ async function buildRenderItems(
     renderItems: renderItems.map((item, index) => item ?? {
       raw: items[index],
       questionImageSrc: null,
+      questionImageUri: null,
+      fallbackQuestionImageUri: normalizeOptionalText(items[index].questionImageUri),
       questionImageSize: null,
     }),
     temporaryEnhancedUris,
@@ -1735,7 +1827,8 @@ export async function exportTodayReviewPdf(
       exportItems.map((item) => item.mistakeId),
     );
     const reviewSheetId = reviewSheet.id;
-    const reviewSheetQrSvg = buildReviewSheetQrSvg(reviewSheetId);
+    const reviewSheetQr = buildReviewSheetQrData(reviewSheetId);
+    const reviewSheetQrSvg = reviewSheetQr.svg;
     Logger.info(SERVICE_SCOPE, 'review_sheet_created_for_pdf_export', {
       sheetId: reviewSheetId,
       itemCount: reviewSheet.items.length,
@@ -1771,6 +1864,7 @@ export async function exportTodayReviewPdf(
         activeClearPrintStrength,
         activePerformanceProfile,
         activeEnhanceConcurrency,
+        Platform.OS !== 'android',
         ({ current }) => {
           const globalCurrent = processedItemOffset + current;
           reportExportProgress(onProgress, {
@@ -1800,7 +1894,9 @@ export async function exportTodayReviewPdf(
       temporaryEnhancedUris.push(...renderResult.temporaryEnhancedUris);
       const renderItemCount = renderResult.renderItems.length;
       const withImageDataCount = renderResult.renderItems.filter((item) => item.questionImageSrc !== null).length;
-      const withoutImageDataCount = Math.max(0, renderItemCount - withImageDataCount);
+      const withNativeImageUriCount = renderResult.renderItems
+        .filter((item) => item.questionImageUri !== null)
+        .length;
       Logger.info(SERVICE_SCOPE, 'export_pdf_render_items_summary', {
         partNumber,
         pdfPartCount,
@@ -1808,38 +1904,54 @@ export async function exportTodayReviewPdf(
         questionNumberEnd: processedItemOffset + partItems.length,
         renderItemCount,
         withImageDataCount,
-        withoutImageDataCount,
+        withNativeImageUriCount,
+        withoutUsableImageCount: Math.max(
+          0,
+          renderItemCount - Math.max(withImageDataCount, withNativeImageUriCount),
+        ),
         temporaryEnhancedCount: renderResult.temporaryEnhancedUris.length,
       });
-      const buildHtmlStartedAt = Date.now();
-      const html = buildPdfHtml(
-        renderResult.renderItems,
-        dateString,
-        imageFilterCss,
-        reviewSheetId,
-        reviewSheetQrSvg,
-        exportItems.length,
-        processedItemOffset,
-        ({ current }) => {
-          const globalCurrent = processedItemOffset + current;
-          reportExportProgress(onProgress, {
-            stage: 'generate_pdf',
-            current: globalCurrent,
-            total: exportItems.length,
-            itemCount: exportItems.length,
-            message: pdfPartCount > 1
-              ? `生成 PDF 页面 ${Math.max(0, Math.min(globalCurrent, exportItems.length))} / ${exportItems.length}${partProgressLabel}`
-              : undefined,
-          });
-        },
-      );
-      stageTiming.buildHtmlMs += Math.max(0, Date.now() - buildHtmlStartedAt);
-      Logger.info(SERVICE_SCOPE, 'export_pdf_html_built', {
-        partNumber,
-        pdfPartCount,
-        htmlLength: html.length,
-        pageMarkerCount: countWorksheetPagesInHtml(html),
-      });
+      const useAndroidNativeRenderer = Platform.OS === 'android';
+      let html = '';
+      if (useAndroidNativeRenderer) {
+        Logger.info(SERVICE_SCOPE, 'export_pdf_native_canvas_payload_ready', {
+          partNumber,
+          pdfPartCount,
+          itemCount: renderItemCount,
+          withNativeImageUriCount,
+          qrSize: reviewSheetQr.size,
+        });
+      } else {
+        const buildHtmlStartedAt = Date.now();
+        html = buildPdfHtml(
+          renderResult.renderItems,
+          dateString,
+          imageFilterCss,
+          reviewSheetId,
+          reviewSheetQrSvg,
+          exportItems.length,
+          processedItemOffset,
+          ({ current }) => {
+            const globalCurrent = processedItemOffset + current;
+            reportExportProgress(onProgress, {
+              stage: 'generate_pdf',
+              current: globalCurrent,
+              total: exportItems.length,
+              itemCount: exportItems.length,
+              message: pdfPartCount > 1
+                ? `生成 PDF 页面 ${Math.max(0, Math.min(globalCurrent, exportItems.length))} / ${exportItems.length}${partProgressLabel}`
+                : undefined,
+            });
+          },
+        );
+        stageTiming.buildHtmlMs += Math.max(0, Date.now() - buildHtmlStartedAt);
+        Logger.info(SERVICE_SCOPE, 'export_pdf_html_built', {
+          partNumber,
+          pdfPartCount,
+          htmlLength: html.length,
+          pageMarkerCount: countWorksheetPagesInHtml(html),
+        });
+      }
 
       let generatedPdfUri = '';
       let generatedPdfPageCount = 0;
@@ -1854,12 +1966,28 @@ export async function exportTodayReviewPdf(
             : '正在生成练习卷 PDF...',
         });
         const printStartedAt = Date.now();
-        const printResult = await printHtmlToFileWithDiagnostics({
-          html,
-          partNumber,
-          pdfPartCount,
-          variant: 'primary',
-        });
+        if (useAndroidNativeRenderer && !isAndroidNativeWorksheetPdfAvailable()) {
+          throw new Error(
+            'QishuaWorksheetPdfModule is unavailable. Rebuild and reinstall the Android app.',
+          );
+        }
+        const printResult = useAndroidNativeRenderer
+          ? await printAndroidNativeWorksheetPdf({
+              date: dateString,
+              sheetId: reviewSheetId,
+              totalQuestionCount: exportItems.length,
+              questionNumberOffset: processedItemOffset,
+              qrSize: reviewSheetQr.size,
+              qrCells: reviewSheetQr.cells,
+              items: renderResult.renderItems.map(toAndroidNativeWorksheetItem),
+              timeoutMs: ANDROID_NATIVE_WORKSHEET_PDF_TIMEOUT_MS,
+            })
+          : await printHtmlToFileWithDiagnostics({
+              html,
+              partNumber,
+              pdfPartCount,
+              variant: 'primary',
+            });
         generatedPdfUri = printResult.uri;
         generatedPdfPageCount = toSafeProgressCounter(printResult.numberOfPages);
         stageTiming.printPdfMs += Math.max(0, Date.now() - printStartedAt);
@@ -1877,6 +2005,11 @@ export async function exportTodayReviewPdf(
           && generatedPdfSizeBytes > 0
           && generatedPdfSizeBytes < SUSPICIOUS_PDF_SIZE_BYTES
         ) {
+          if (useAndroidNativeRenderer) {
+            throw new Error(
+              `Native worksheet PDF is too small (${generatedPdfSizeBytes} bytes).`,
+            );
+          }
           Logger.warn(SERVICE_SCOPE, 'Generated PDF is suspiciously small, retry with fallback html.', {
             partNumber,
             pdfPartCount,
@@ -1913,11 +2046,12 @@ export async function exportTodayReviewPdf(
       } catch (error) {
         exportOutcome = 'generate_failed';
         exportFailureReason = 'print_to_file_failed';
-        Logger.error(SERVICE_SCOPE, 'Failed to generate export PDF with expo-print.', {
+        Logger.error(SERVICE_SCOPE, 'Failed to generate export PDF.', {
           date: options?.date ?? null,
           partNumber,
           pdfPartCount,
           itemCount: partItems.length,
+          renderer: useAndroidNativeRenderer ? 'android_pdf_document' : 'expo_print',
           stageTiming,
           error,
         });

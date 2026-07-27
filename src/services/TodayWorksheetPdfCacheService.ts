@@ -13,6 +13,7 @@ const PDF_FILE_PREFIX = 'qishua_today_review';
 const CACHE_VERSION = 2;
 const RECENT_EXPORT_PROTECTION_MS = 10 * 60 * 1000;
 const CACHE_MODES: PrintEnhanceMode[] = ['original', 'clear_print'];
+const recentlyReplacedPdfProtection = new Map<string, number>();
 const WORKSHEET_PDF_FILE_PATTERN = new RegExp(
   `^${PDF_FILE_PREFIX}_\\d{4}-\\d{2}-\\d{2}(?:_part\\d+-of-\\d+)?_\\d+\\.pdf$`,
   'i',
@@ -102,6 +103,18 @@ function getCacheFile(dateString: string, printEnhanceMode: PrintEnhanceMode): F
   );
 }
 
+function getCacheRecoveryFile(
+  dateString: string,
+  printEnhanceMode: PrintEnhanceMode,
+  suffix: 'next' | 'previous',
+): File {
+  const activeMode = toActivePrintEnhanceMode(printEnhanceMode);
+  return new File(
+    getExportDirectory(),
+    `${CACHE_FILE_PREFIX}_${dateString}_${activeMode}.json.${suffix}`,
+  );
+}
+
 function isUsablePdfFile(uri: string): boolean {
   try {
     const info = new File(uri).info();
@@ -139,6 +152,7 @@ function normalizeCache(
   if (
     fileUris.length <= 0
     || pdfPageCounts.length !== fileUris.length
+    || pdfPageCounts.some((pageCount) => pageCount <= 0)
     || toSafeCount(raw.pdfPartCount) !== fileUris.length
     || exportedCount <= 0
     || !generatedAt
@@ -167,31 +181,61 @@ export async function loadTodayWorksheetPdfCache(
 ): Promise<TodayWorksheetPdfCache | null> {
   const dateString = resolveDateString(date);
   const activeMode = toActivePrintEnhanceMode(printEnhanceMode);
-  try {
-    const cacheFile = getCacheFile(dateString, activeMode);
-    if (!cacheFile.exists) {
-      return null;
-    }
-    const cache = normalizeCache(
-      JSON.parse(await cacheFile.text()) as unknown,
-      dateString,
-      activeMode,
-    );
-    if (!cache) {
-      Logger.warn(SERVICE_SCOPE, 'Ignore invalid or incomplete worksheet PDF cache.', {
+  const primaryFile = getCacheFile(dateString, activeMode);
+  const candidates = [
+    primaryFile,
+    getCacheRecoveryFile(dateString, activeMode, 'previous'),
+    getCacheRecoveryFile(dateString, activeMode, 'next'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (!candidate.exists) {
+        continue;
+      }
+      const cache = normalizeCache(
+        JSON.parse(await candidate.text()) as unknown,
+        dateString,
+        activeMode,
+      );
+      if (!cache) {
+        Logger.warn(SERVICE_SCOPE, 'Ignore invalid or incomplete worksheet PDF cache.', {
+          date: dateString,
+          printEnhanceMode: activeMode,
+          cacheFileName: candidate.name,
+        });
+        continue;
+      }
+      if (candidate.uri !== primaryFile.uri) {
+        try {
+          if (primaryFile.exists) {
+            primaryFile.delete();
+          }
+          candidate.copy(primaryFile);
+          Logger.warn(SERVICE_SCOPE, 'Recovered worksheet PDF cache metadata.', {
+            date: dateString,
+            printEnhanceMode: activeMode,
+            recoveryFileName: candidate.name,
+          });
+        } catch (recoveryError) {
+          Logger.warn(SERVICE_SCOPE, 'Worksheet cache is usable but metadata recovery failed.', {
+            date: dateString,
+            printEnhanceMode: activeMode,
+            recoveryFileName: candidate.name,
+            error: recoveryError,
+          });
+        }
+      }
+      return cache;
+    } catch (error) {
+      Logger.warn(SERVICE_SCOPE, 'Failed to load worksheet PDF cache candidate.', {
         date: dateString,
         printEnhanceMode: activeMode,
+        cacheFileName: candidate.name,
+        error,
       });
     }
-    return cache;
-  } catch (error) {
-    Logger.warn(SERVICE_SCOPE, 'Failed to load worksheet PDF cache.', {
-      date: dateString,
-      printEnhanceMode: activeMode,
-      error,
-    });
-    return null;
   }
+  return null;
 }
 
 function normalizeFileUri(uri: string | null | undefined): string | null {
@@ -236,6 +280,18 @@ function isRecentlyWrittenFile(
   return Math.max(...timestamps) >= now - RECENT_EXPORT_PROTECTION_MS;
 }
 
+function collectRecentlyReplacedProtectedUris(now: number): Set<string> {
+  const protectedUris = new Set<string>();
+  for (const [uri, protectedUntil] of recentlyReplacedPdfProtection) {
+    if (protectedUntil <= now) {
+      recentlyReplacedPdfProtection.delete(uri);
+      continue;
+    }
+    protectedUris.add(uri);
+  }
+  return protectedUris;
+}
+
 export async function scanHistoricalWorksheetPdfFiles(): Promise<HistoricalWorksheetPdfScanResult> {
   const startedAt = Date.now();
   const currentDate = resolveDateString();
@@ -261,7 +317,7 @@ export async function scanHistoricalWorksheetPdfFiles(): Promise<HistoricalWorks
     const currentCaches = await Promise.all(
       CACHE_MODES.map((mode) => loadTodayWorksheetPdfCache(mode, currentDate)),
     );
-    const protectedUris = new Set<string>();
+    const protectedUris = collectRecentlyReplacedProtectedUris(startedAt);
     for (const mode of CACHE_MODES) {
       const currentCacheFileUri = normalizeFileUri(getCacheFile(currentDate, mode).uri);
       if (currentCacheFileUri) {
@@ -419,31 +475,6 @@ export async function cleanupHistoricalWorksheetPdfFiles(
   return result;
 }
 
-function cleanupReplacedFiles(
-  previousCache: TodayWorksheetPdfCache | null,
-  currentFileUris: string[],
-): void {
-  if (!previousCache) {
-    return;
-  }
-  const currentUriSet = new Set(currentFileUris);
-  for (const previousUri of previousCache.fileUris) {
-    if (currentUriSet.has(previousUri)) {
-      continue;
-    }
-    try {
-      const previousFile = new File(previousUri);
-      if (previousFile.exists) {
-        previousFile.delete();
-      }
-    } catch (error) {
-      Logger.warn(SERVICE_SCOPE, 'Failed to remove a replaced cached worksheet PDF.', {
-        error,
-      });
-    }
-  }
-}
-
 export async function saveTodayWorksheetPdfCache(
   input: SaveTodayWorksheetPdfCacheInput,
 ): Promise<TodayWorksheetPdfCache> {
@@ -456,6 +487,7 @@ export async function saveTodayWorksheetPdfCache(
   if (
     fileUris.length <= 0
     || pdfPageCounts.length !== fileUris.length
+    || pdfPageCounts.some((pageCount) => pageCount <= 0)
     || fileUris.some((uri) => !isUsablePdfFile(uri))
   ) {
     throw new Error('Cannot cache an incomplete worksheet PDF set.');
@@ -476,7 +508,75 @@ export async function saveTodayWorksheetPdfCache(
 
   const exportDirectory = getExportDirectory();
   exportDirectory.create({ intermediates: true, idempotent: true });
-  getCacheFile(dateString, activeMode).write(JSON.stringify(nextCache));
-  cleanupReplacedFiles(previousCache, fileUris);
+  const cacheFile = getCacheFile(dateString, activeMode);
+  const nextFile = getCacheRecoveryFile(dateString, activeMode, 'next');
+  const previousFile = getCacheRecoveryFile(dateString, activeMode, 'previous');
+  if (nextFile.exists) {
+    nextFile.delete();
+  }
+  nextFile.write(JSON.stringify(nextCache));
+  const verifiedNextCache = normalizeCache(
+    JSON.parse(await nextFile.text()) as unknown,
+    dateString,
+    activeMode,
+  );
+  if (!verifiedNextCache) {
+    nextFile.delete();
+    throw new Error('Cannot commit invalid worksheet PDF cache metadata.');
+  }
+
+  if (previousFile.exists) {
+    previousFile.delete();
+  }
+  if (cacheFile.exists) {
+    cacheFile.copy(previousFile);
+  }
+  try {
+    if (cacheFile.exists) {
+      cacheFile.delete();
+    }
+    nextFile.move(cacheFile);
+    const committedCache = normalizeCache(
+      JSON.parse(await cacheFile.text()) as unknown,
+      dateString,
+      activeMode,
+    );
+    if (!committedCache) {
+      throw new Error('Worksheet PDF cache metadata verification failed after commit.');
+    }
+    if (previousFile.exists) {
+      previousFile.delete();
+    }
+    const protectedUntil = Date.now() + RECENT_EXPORT_PROTECTION_MS;
+    for (const previousUri of previousCache?.fileUris ?? []) {
+      if (!fileUris.includes(previousUri)) {
+        const normalizedUri = normalizeFileUri(previousUri);
+        if (normalizedUri) {
+          recentlyReplacedPdfProtection.set(normalizedUri, protectedUntil);
+        }
+      }
+    }
+  } catch (error) {
+    try {
+      if (cacheFile.exists) {
+        cacheFile.delete();
+      }
+      if (previousFile.exists) {
+        previousFile.copy(cacheFile);
+      }
+    } catch (recoveryError) {
+      Logger.error(SERVICE_SCOPE, 'Failed to restore previous worksheet cache metadata.', {
+        date: dateString,
+        printEnhanceMode: activeMode,
+        error: recoveryError,
+      });
+    }
+    throw error;
+  } finally {
+    const staleNextFile = getCacheRecoveryFile(dateString, activeMode, 'next');
+    if (staleNextFile.exists) {
+      staleNextFile.delete();
+    }
+  }
   return nextCache;
 }

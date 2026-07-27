@@ -45,7 +45,6 @@ import {
   scanStorageUsage,
   type StorageUsageScanResult,
 } from '@/src/services/StorageMaintenanceService';
-import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
 import {
   cleanupHistoricalWorksheetPdfFiles,
   scanHistoricalWorksheetPdfFiles,
@@ -539,11 +538,13 @@ export default function SettingsScreen() {
   const worksheetPendingCount = Math.max(0, Math.floor(dataOverview.dueToday));
   const {
     isExporting: isExportingWorksheet,
+    isRegenerating: isRegeneratingWorksheet,
     hasCachedWorksheet,
-    exportStage: worksheetExportStage,
+    cachedWorksheet,
     progress: worksheetExportProgress,
     progressPercent: worksheetExportProgressPercent,
     exportTodayWorksheet: exportTodayWorksheetShared,
+    regenerateTodayWorksheet: regenerateTodayWorksheetShared,
   } = useTodayWorksheetExport({
     scope: PAGE_SCOPE,
     dueToday: worksheetPendingCount,
@@ -1406,6 +1407,41 @@ export default function SettingsScreen() {
     await exportTodayWorksheetShared();
   }, [exportTodayWorksheetShared]);
 
+  const handleRegenerateTodayWorksheet = useCallback(() => {
+    if (
+      isExportingWorksheet
+      || !hasCachedWorksheet
+      || worksheetPendingCount <= 0
+    ) {
+      return;
+    }
+
+    const generatedAtText = cachedWorksheet?.generatedAt
+      ? formatBackupCreatedAt(cachedWorksheet.generatedAt)
+      : '时间未知';
+    const cachedCount = cachedWorksheet?.exportedCount ?? 0;
+    Alert.alert(
+      '重新生成今日练习卷？',
+      `当前缓存：${generatedAtText} · ${cachedCount} 题。\n\n将根据当前 ${worksheetPendingCount} 道待复做题和当前打印设置重新生成。生成期间原练习卷仍可打开，全部完成后才会自动替换。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '重新生成',
+          onPress: () => {
+            void regenerateTodayWorksheetShared();
+          },
+        },
+      ],
+    );
+  }, [
+    cachedWorksheet?.exportedCount,
+    cachedWorksheet?.generatedAt,
+    hasCachedWorksheet,
+    isExportingWorksheet,
+    regenerateTodayWorksheetShared,
+    worksheetPendingCount,
+  ]);
+
   const handleToggleReminder = useCallback(
     async (nextValue: boolean) => {
       if (isReminderLoading || isReminderSwitchBusy) {
@@ -1570,20 +1606,21 @@ export default function SettingsScreen() {
     ? `数据 ${formatStorageSize(storageUsageScan.persistentBytes)}`
     : `图片 ${displayStorageText}`;
   const canExportTodayWorksheet = worksheetPendingCount > 0 || hasCachedWorksheet;
-  const worksheetExportButtonText = isExportingWorksheet
-    ? TodayWorksheetExportService.buildTodayWorksheetExportProgressMessage(
-        worksheetExportStage ?? 'preparing',
-        worksheetPendingCount,
-      )
-    : hasCachedWorksheet
-      ? '打开今日练习卷'
-      : TodayWorksheetExportService.buildTodayWorksheetExportButtonLabel(worksheetPendingCount);
+  const canRegenerateTodayWorksheet =
+    hasCachedWorksheet && worksheetPendingCount > 0 && !isExportingWorksheet;
+  const worksheetExportButtonText = hasCachedWorksheet
+    ? '打开今日练习卷'
+    : isExportingWorksheet
+      ? '练习卷准备中'
+      : '准备今日练习卷';
   const worksheetExportHintText = isExportingWorksheet
-    ? worksheetExportButtonText
+    ? isRegeneratingWorksheet
+      ? '正在后台重新生成，当前练习卷仍可正常打开。'
+      : '系统正在后台准备，完成后点击即可直接打开。'
     : hasCachedWorksheet
       ? '今日练习卷已缓存，点击后将快速读取并打开。'
       : canExportTodayWorksheet
-      ? `将导出今日待复做的 ${worksheetPendingCount} 题，便于打印。`
+      ? `系统将自动准备今日待复做的 ${worksheetPendingCount} 题。`
       : '今日没有待复做错题，暂不可导出。';
   const worksheetExportProgressHeadline = isExportingWorksheet
     ? (worksheetExportProgress.message || worksheetExportButtonText)
@@ -1767,7 +1804,7 @@ export default function SettingsScreen() {
   );
 
   const handleCleanHistoricalPdfs = useCallback(async () => {
-    if (isScanningHistoricalPdfs || isCleaningHistoricalPdfs || isExportingWorksheet) {
+    if (isScanningHistoricalPdfs || isCleaningHistoricalPdfs) {
       return;
     }
 
@@ -1816,7 +1853,6 @@ export default function SettingsScreen() {
   }, [
     cleanupHistoricalPdfs,
     isCleaningHistoricalPdfs,
-    isExportingWorksheet,
     isScanningHistoricalPdfs,
     showToast,
   ]);
@@ -1875,8 +1911,7 @@ export default function SettingsScreen() {
     || isClearingPrintEnhanceCache
     || isStorageUsageScanning
     || isScanningHistoricalPdfs
-    || isCleaningHistoricalPdfs
-    || isExportingWorksheet;
+    || isCleaningHistoricalPdfs;
   const isRestoreBusy = isInspectingBackup || isRestoring;
   const isBackupBusy = isAutomaticBackupLoading || isSharingBackup || isRestoreBusy;
   const canShareAutomaticBackup = automaticBackup !== null && !isBackupBusy;
@@ -2275,27 +2310,60 @@ export default function SettingsScreen() {
                       accessibilityLabel={worksheetExportButtonText}
                       accessibilityRole="button"
                       accessibilityState={{
-                        busy: isExportingWorksheet,
-                        disabled: isExportingWorksheet || !canExportTodayWorksheet,
+                        disabled: !canExportTodayWorksheet,
                       }}
-                      disabled={isExportingWorksheet || !canExportTodayWorksheet}
+                      disabled={!canExportTodayWorksheet}
                       onPress={() => {
                         void handleExportTodayWorksheet();
                       }}
                       style={({ pressed }) => [
                         styles.primarySheetButton,
-                        pressed && canExportTodayWorksheet && !isExportingWorksheet
+                        pressed && canExportTodayWorksheet
                           ? styles.primaryButtonPressed
                           : null,
-                        isExportingWorksheet || !canExportTodayWorksheet
+                        !canExportTodayWorksheet
                           ? styles.disabledButton
                           : null,
                       ]}>
-                      {isExportingWorksheet ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
                       <Text numberOfLines={2} style={styles.primarySheetButtonText}>
                         {worksheetExportButtonText}
                       </Text>
                     </Pressable>
+                    {hasCachedWorksheet ? (
+                      <Pressable
+                        accessibilityLabel={
+                          isRegeneratingWorksheet
+                            ? '正在重新生成今日练习卷'
+                            : '重新生成今日练习卷'
+                        }
+                        accessibilityRole="button"
+                        accessibilityState={{
+                          busy: isRegeneratingWorksheet,
+                          disabled: !canRegenerateTodayWorksheet,
+                        }}
+                        disabled={!canRegenerateTodayWorksheet}
+                        onPress={handleRegenerateTodayWorksheet}
+                        style={({ pressed }) => [
+                          styles.secondarySheetButton,
+                          pressed && canRegenerateTodayWorksheet
+                            ? styles.settingsRowPressed
+                            : null,
+                          !canRegenerateTodayWorksheet
+                            ? styles.disabledButton
+                            : null,
+                        ]}>
+                        {isRegeneratingWorksheet
+                          ? <ActivityIndicator color={colors.accent} size="small" />
+                          : <MaterialIcons color={colors.accent} name="refresh" size={20} />}
+                        <Text style={styles.secondarySheetButtonText}>
+                          {isRegeneratingWorksheet
+                            ? '正在重新生成…'
+                            : worksheetPendingCount > 0
+                              ? '重新生成今日练习卷'
+                              : '当前无待复做题'}
+                        </Text>
+                      </Pressable>
+                    ) : null}
                     <Text style={styles.exportHint}>{worksheetExportProgressHeadline}</Text>
                     {worksheetExportProgressDetailText ? (
                       <Text style={styles.exportProgressMeta}>{worksheetExportProgressDetailText}</Text>

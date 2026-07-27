@@ -1,6 +1,5 @@
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
-import { prepareCachedTodayReviewPdfZip } from '@/src/services/TodayReviewPdfBundleService';
 import type {
   ExportTodayWorksheetOptions,
   TodayWorksheetCachedExport,
@@ -19,13 +18,14 @@ import {
   toActivePrintEnhancePerformanceProfile,
 } from '@/src/utils/image/printEnhanceConfig';
 
-const CACHE_PROGRESS_VISIBLE_MS = 240;
 const SERVICE_SCOPE = 'TodayWorksheetGenerationCoordinator';
+const PREPARATION_FAILED_MESSAGE = '今日练习卷自动准备失败，系统稍后会重试';
 
 export type TodayWorksheetGenerationStatus =
   | 'idle'
   | 'checking_cache'
   | 'generating'
+  | 'refreshing'
   | 'ready'
   | 'empty'
   | 'error';
@@ -51,6 +51,15 @@ export type EnsureTodayWorksheetOptions = {
   printEnhancePerformanceProfile?: PrintEnhancePerformanceProfile;
 };
 
+export type RegenerateTodayWorksheetOptions = EnsureTodayWorksheetOptions;
+
+export type TodayWorksheetPreparationInspection = {
+  outcome: 'cached' | 'pending' | 'empty';
+  pendingCount: number;
+  cachedWorksheet: TodayWorksheetCachedExport | null;
+  generationActive: boolean;
+};
+
 type ResolvedPrintEnhanceSettings = {
   mode: PrintEnhanceMode;
   clearPrintStrength: PrintEnhanceClearPrintStrength;
@@ -71,6 +80,7 @@ const INITIAL_STATE: TodayWorksheetGenerationState = {
 
 let state: TodayWorksheetGenerationState = INITIAL_STATE;
 let activeGenerationPromise: Promise<TodayWorksheetExportResult> | null = null;
+let activeGenerationOperation: 'prepare' | 'regenerate' | null = null;
 let latestCacheInspectionId = 0;
 const listeners = new Set<() => void>();
 
@@ -88,15 +98,6 @@ function updateState(next: TodayWorksheetGenerationState): void {
   }
 }
 
-function delay(milliseconds: number): Promise<void> {
-  if (milliseconds <= 0) {
-    return Promise.resolve();
-  }
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-}
-
 function buildCachedResult(cached: TodayWorksheetCachedExport): TodayWorksheetExportResult {
   return {
     outcome: 'success',
@@ -108,36 +109,6 @@ function buildCachedResult(cached: TodayWorksheetCachedExport): TodayWorksheetEx
     pdfPartCount: cached.pdfPartCount,
     fromCache: true,
   };
-}
-
-async function prepareWholeSetShareCache(
-  cached: TodayWorksheetCachedExport,
-  startedAt: number,
-  source: Exclude<TodayWorksheetGenerationSource, null>,
-): Promise<void> {
-  if (cached.fileUris.length <= 1) {
-    return;
-  }
-
-  const completedCount = Math.max(1, toSafeCount(cached.exportedCount));
-  updateState({
-    status: source === 'cache' ? 'checking_cache' : 'generating',
-    stage: 'saving',
-    current: completedCount,
-    total: completedCount,
-    message: '正在缓存整套练习卷分享文件...',
-    startedAt,
-    source,
-    cachedWorksheet: cached,
-  });
-  try {
-    await prepareCachedTodayReviewPdfZip(cached.fileUris);
-  } catch (error) {
-    Logger.warn(SERVICE_SCOPE, 'Failed to prepare the complete worksheet share cache.', {
-      pdfPartCount: cached.fileUris.length,
-      error,
-    });
-  }
 }
 
 async function resolvePrintEnhanceSettings(
@@ -177,18 +148,6 @@ async function runEnsureTodayWorksheet(
   const cached = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
   if (cached) {
     const cachedCount = Math.max(1, toSafeCount(cached.exportedCount));
-    updateState({
-      status: 'checking_cache',
-      stage: 'preparing',
-      current: cachedCount,
-      total: cachedCount,
-      message: '正在读取今日练习卷缓存...',
-      startedAt,
-      source: 'cache',
-      cachedWorksheet: cached,
-    });
-    await prepareWholeSetShareCache(cached, startedAt, 'cache');
-    await delay(Math.max(0, CACHE_PROGRESS_VISIBLE_MS - (Date.now() - startedAt)));
     updateState({
       status: 'ready',
       stage: null,
@@ -236,10 +195,25 @@ async function runEnsureTodayWorksheet(
 
   if (result.outcome === 'success') {
     const cachedWorksheet = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
-    const completedCount = Math.max(1, toSafeCount(result.exportedCount));
-    if (cachedWorksheet) {
-      await prepareWholeSetShareCache(cachedWorksheet, startedAt, 'generated');
+    if (!cachedWorksheet) {
+      const cacheMissingResult: TodayWorksheetExportResult = {
+        outcome: 'failed',
+        message: '练习卷缓存校验失败，系统会自动重试',
+        exportedCount: toSafeCount(result.exportedCount),
+      };
+      updateState({
+        status: 'error',
+        stage: null,
+        current: 0,
+        total: expectedPendingCount,
+        message: cacheMissingResult.message,
+        startedAt: null,
+        source: null,
+        cachedWorksheet: null,
+      });
+      return cacheMissingResult;
     }
+    const completedCount = Math.max(1, toSafeCount(result.exportedCount));
     updateState({
       status: 'ready',
       stage: null,
@@ -280,6 +254,120 @@ async function runEnsureTodayWorksheet(
   return result;
 }
 
+async function runRegenerateTodayWorksheet(
+  options: RegenerateTodayWorksheetOptions,
+): Promise<TodayWorksheetExportResult> {
+  const startedAt = Date.now();
+  const settings = await resolvePrintEnhanceSettings(options);
+  const previousCachedWorksheet =
+    await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
+  const expectedPendingCount = toSafeCount(options.expectedPendingCount);
+  const progressTotal = expectedPendingCount > 0
+    ? expectedPendingCount
+    : toSafeCount(previousCachedWorksheet?.exportedCount);
+
+  Logger.info(SERVICE_SCOPE, 'Start forced worksheet regeneration.', {
+    expectedPendingCount,
+    previousCachedCount: previousCachedWorksheet?.exportedCount ?? 0,
+    printEnhanceMode: settings.mode,
+  });
+  updateState({
+    status: 'refreshing',
+    stage: 'preparing',
+    current: 0,
+    total: progressTotal,
+    message: '正在重新生成今日练习卷...',
+    startedAt,
+    source: previousCachedWorksheet ? 'cache' : null,
+    cachedWorksheet: previousCachedWorksheet,
+  });
+
+  const result = await TodayWorksheetExportService.exportTodayWorksheet({
+    expectedPendingCount,
+    forceRegenerate: true,
+    printEnhanceMode: settings.mode,
+    printEnhanceClearPrintStrength: settings.clearPrintStrength,
+    printEnhanceConcurrency: settings.concurrency,
+    printEnhancePerformanceProfile: settings.performanceProfile,
+    onProgress: (progress) => {
+      updateState({
+        status: 'refreshing',
+        stage: progress.stage,
+        current: toSafeCount(progress.current),
+        total: toSafeCount(progress.total ?? progress.pendingCount ?? progressTotal),
+        message: progress.message,
+        startedAt,
+        source: previousCachedWorksheet ? 'cache' : null,
+        cachedWorksheet: previousCachedWorksheet,
+      });
+    },
+  });
+
+  if (result.outcome === 'success') {
+    const refreshedCache = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
+    if (refreshedCache) {
+      const completedCount = Math.max(1, toSafeCount(refreshedCache.exportedCount));
+      updateState({
+        status: 'ready',
+        stage: null,
+        current: completedCount,
+        total: completedCount,
+        message: `今日练习卷已更新（${refreshedCache.exportedCount}题）`,
+        startedAt: null,
+        source: 'generated',
+        cachedWorksheet: refreshedCache,
+      });
+      Logger.info(SERVICE_SCOPE, 'Forced worksheet regeneration completed.', {
+        exportedCount: refreshedCache.exportedCount,
+        pdfPartCount: refreshedCache.pdfPartCount,
+        printEnhanceMode: settings.mode,
+      });
+      return result;
+    }
+  }
+
+  const settledResult: TodayWorksheetExportResult = result.outcome === 'success'
+    ? {
+        outcome: 'failed',
+        message: '重新生成完成但新缓存校验失败',
+        exportedCount: toSafeCount(result.exportedCount),
+      }
+    : result;
+  const failureMessage = settledResult.outcome === 'empty'
+    ? '当前没有待复做题，已保留原练习卷'
+    : '重新生成失败，原练习卷仍可使用';
+  if (previousCachedWorksheet) {
+    const previousCount = Math.max(1, toSafeCount(previousCachedWorksheet.exportedCount));
+    updateState({
+      status: 'ready',
+      stage: null,
+      current: previousCount,
+      total: previousCount,
+      message: failureMessage,
+      startedAt: null,
+      source: 'cache',
+      cachedWorksheet: previousCachedWorksheet,
+    });
+  } else {
+    updateState({
+      status: settledResult.outcome === 'empty' ? 'empty' : 'error',
+      stage: null,
+      current: 0,
+      total: progressTotal,
+      message: settledResult.outcome === 'empty' ? settledResult.message : failureMessage,
+      startedAt: null,
+      source: null,
+      cachedWorksheet: null,
+    });
+  }
+  Logger.warn(SERVICE_SCOPE, 'Forced worksheet regeneration did not replace the cache.', {
+    outcome: settledResult.outcome,
+    previousCacheRetained: previousCachedWorksheet !== null,
+    printEnhanceMode: settings.mode,
+  });
+  return settledResult;
+}
+
 export function getTodayWorksheetGenerationState(): TodayWorksheetGenerationState {
   return state;
 }
@@ -296,10 +384,6 @@ export async function inspectTodayWorksheetCache(
 ): Promise<TodayWorksheetCachedExport | null> {
   const inspectionId = ++latestCacheInspectionId;
   const settings = await resolvePrintEnhanceSettings(options);
-  if (activeGenerationPromise) {
-    await activeGenerationPromise;
-  }
-
   const cached = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
   if (activeGenerationPromise || inspectionId !== latestCacheInspectionId) {
     return cached;
@@ -322,6 +406,29 @@ export async function inspectTodayWorksheetCache(
   return cached;
 }
 
+export async function getCachedTodayWorksheetForOpening(
+  options: Pick<EnsureTodayWorksheetOptions, 'printEnhanceMode'> = {},
+): Promise<TodayWorksheetCachedExport | null> {
+  const settings = await resolvePrintEnhanceSettings(options);
+  return TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
+}
+
+export async function inspectTodayWorksheetPreparation(
+  options: Pick<EnsureTodayWorksheetOptions, 'printEnhanceMode'> = {},
+): Promise<TodayWorksheetPreparationInspection> {
+  const settings = await resolvePrintEnhanceSettings(options);
+  const [cachedWorksheet, pendingCount] = await Promise.all([
+    TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode),
+    TodayWorksheetExportService.getTodayWorksheetPendingCount(),
+  ]);
+  return {
+    outcome: cachedWorksheet ? 'cached' : pendingCount > 0 ? 'pending' : 'empty',
+    pendingCount: toSafeCount(pendingCount),
+    cachedWorksheet,
+    generationActive: activeGenerationPromise !== null,
+  };
+}
+
 export function ensureTodayWorksheet(
   options: EnsureTodayWorksheetOptions = {},
 ): Promise<TodayWorksheetExportResult> {
@@ -329,8 +436,95 @@ export function ensureTodayWorksheet(
     return activeGenerationPromise;
   }
 
-  activeGenerationPromise = runEnsureTodayWorksheet(options).finally(() => {
-    activeGenerationPromise = null;
-  });
+  activeGenerationOperation = 'prepare';
+  activeGenerationPromise = runEnsureTodayWorksheet(options)
+    .catch((error): TodayWorksheetExportResult => {
+      const expectedPendingCount = toSafeCount(options.expectedPendingCount);
+      Logger.error(SERVICE_SCOPE, 'Unexpected worksheet preparation failure.', {
+        expectedPendingCount,
+        error,
+      });
+      updateState({
+        status: 'error',
+        stage: null,
+        current: 0,
+        total: expectedPendingCount,
+        message: PREPARATION_FAILED_MESSAGE,
+        startedAt: null,
+        source: null,
+        cachedWorksheet: null,
+      });
+      return {
+        outcome: 'failed',
+        message: PREPARATION_FAILED_MESSAGE,
+        exportedCount: expectedPendingCount,
+      };
+    })
+    .finally(() => {
+      activeGenerationPromise = null;
+      activeGenerationOperation = null;
+    });
+  return activeGenerationPromise;
+}
+
+export function regenerateTodayWorksheet(
+  options: RegenerateTodayWorksheetOptions = {},
+): Promise<TodayWorksheetExportResult> {
+  if (activeGenerationPromise) {
+    return Promise.resolve({
+      outcome: 'busy',
+      message: activeGenerationOperation === 'regenerate'
+        ? '今日练习卷正在重新生成'
+        : '今日练习卷正在自动准备',
+      exportedCount: toSafeCount(state.cachedWorksheet?.exportedCount),
+      fromCache: state.cachedWorksheet !== null,
+    });
+  }
+
+  activeGenerationOperation = 'regenerate';
+  activeGenerationPromise = runRegenerateTodayWorksheet(options)
+    .catch((error): TodayWorksheetExportResult => {
+      const cachedWorksheet = state.cachedWorksheet;
+      const cachedCount = Math.max(1, toSafeCount(cachedWorksheet?.exportedCount));
+      Logger.error(SERVICE_SCOPE, 'Unexpected forced worksheet regeneration failure.', {
+        previousCacheRetained: cachedWorksheet !== null,
+        error,
+      });
+      if (cachedWorksheet) {
+        updateState({
+          status: 'ready',
+          stage: null,
+          current: cachedCount,
+          total: cachedCount,
+          message: '重新生成失败，原练习卷仍可使用',
+          startedAt: null,
+          source: 'cache',
+          cachedWorksheet,
+        });
+      } else {
+        updateState({
+          status: 'error',
+          stage: null,
+          current: 0,
+          total: toSafeCount(options.expectedPendingCount),
+          message: '重新生成失败，请稍后重试',
+          startedAt: null,
+          source: null,
+          cachedWorksheet: null,
+        });
+      }
+      return {
+        outcome: 'failed',
+        message: cachedWorksheet
+          ? '重新生成失败，原练习卷仍可使用'
+          : '重新生成失败，请稍后重试',
+        exportedCount: toSafeCount(cachedWorksheet?.exportedCount),
+        fromCache: cachedWorksheet !== null,
+      };
+    })
+    .finally(() => {
+      activeGenerationPromise = null;
+      activeGenerationOperation = null;
+    });
   return activeGenerationPromise;
 }

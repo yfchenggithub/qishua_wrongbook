@@ -3,8 +3,12 @@ import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
 import { initDatabase } from '@/src/db';
+import { isAndroidNativeWorksheetPdfAvailable } from '@/src/services/AndroidNativeWorksheetPdfService';
 import { Logger } from '@/src/services/Logger';
-import { ensureTodayWorksheet } from '@/src/services/TodayWorksheetGenerationCoordinator';
+import {
+  ensureTodayWorksheet,
+  inspectTodayWorksheetPreparation,
+} from '@/src/services/TodayWorksheetGenerationCoordinator';
 
 const SERVICE_SCOPE = 'TodayWorksheetBackgroundTaskService';
 const TASK_NAME = 'qishua-prepare-today-worksheet';
@@ -23,18 +27,44 @@ if (!TaskManager.isTaskDefined(TASK_NAME)) {
 
     try {
       await initDatabase();
-      const result = await ensureTodayWorksheet();
-      Logger.info(SERVICE_SCOPE, 'Background worksheet task finished.', {
+      const inspection = await inspectTodayWorksheetPreparation();
+      Logger.info(SERVICE_SCOPE, 'Background worksheet preparation inspected.', {
+        eventId: executionInfo.eventId,
+        outcome: inspection.outcome,
+        pendingCount: inspection.pendingCount,
+        cachedExportedCount: inspection.cachedWorksheet?.exportedCount ?? 0,
+        generationActive: inspection.generationActive,
+      });
+
+      if (
+        inspection.outcome !== 'pending'
+        || inspection.generationActive
+      ) {
+        return BackgroundTask.BackgroundTaskResult.Success;
+      }
+      if (!isAndroidNativeWorksheetPdfAvailable()) {
+        Logger.warn(SERVICE_SCOPE, 'Native worksheet PDF module is unavailable in background.', {
+          eventId: executionInfo.eventId,
+          pendingCount: inspection.pendingCount,
+        });
+        return BackgroundTask.BackgroundTaskResult.Failed;
+      }
+
+      const result = await ensureTodayWorksheet({
+        expectedPendingCount: inspection.pendingCount,
+      });
+      Logger.info(SERVICE_SCOPE, 'Background worksheet preparation settled.', {
         eventId: executionInfo.eventId,
         outcome: result.outcome,
         exportedCount: result.exportedCount,
         fromCache: result.fromCache ?? false,
       });
-      return result.outcome === 'success' || result.outcome === 'empty'
-        ? BackgroundTask.BackgroundTaskResult.Success
-        : BackgroundTask.BackgroundTaskResult.Failed;
+      if (result.outcome !== 'success' && result.outcome !== 'empty') {
+        return BackgroundTask.BackgroundTaskResult.Failed;
+      }
+      return BackgroundTask.BackgroundTaskResult.Success;
     } catch (taskError) {
-      Logger.error(SERVICE_SCOPE, 'Background worksheet task failed.', {
+      Logger.error(SERVICE_SCOPE, 'Background worksheet preparation failed.', {
         eventId: executionInfo.eventId,
         error: taskError,
       });

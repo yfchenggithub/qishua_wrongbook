@@ -268,9 +268,9 @@ export default function TodayScreen() {
         : completedCount > 0
           ? '今日复做已完成'
           : '今日暂无复做';
-  const exportDisabled = isExportingPdf || (dueTodayCount <= 0 && !hasCachedWorksheet);
+  const exportDisabled = dueTodayCount <= 0 && !hasCachedWorksheet;
   const exportProgressLabel = isExportingPdf
-    ? `${exportPdfProgress.message || '正在生成练习卷…'}${
+    ? `${exportPdfProgress.message || '系统正在准备练习卷…'}${
         exportPdfProgress.total > 0
           ? ` · ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
           : ''
@@ -278,7 +278,7 @@ export default function TodayScreen() {
     : hasCachedWorksheet
       ? `${exportPdfProgress.message || '今日练习卷已缓存'} · 可快速打开`
       : dueTodayCount > 0
-        ? `等待生成今日练习卷 · 0 / ${dueTodayCount} 题`
+        ? `系统将自动准备今日练习卷 · 0 / ${dueTodayCount} 题`
         : '今日没有可生成的练习卷';
   const toastBottomOffset = Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg);
 
@@ -336,11 +336,11 @@ export default function TodayScreen() {
           completed={summary.todayCompletedStats}
           exportDisabled={exportDisabled}
           exportLabel={
-            isExportingPdf
-              ? '正在生成今日练习卷…'
-              : hasCachedWorksheet
-                ? '打开今日练习卷'
-                : '导出今日练习卷'
+            hasCachedWorksheet
+              ? '打开今日练习卷'
+              : isExportingPdf
+                ? '练习卷准备中'
+                : '准备今日练习卷'
           }
           exportProgress={exportPdfProgressPercent}
           exportProgressLabel={exportProgressLabel}

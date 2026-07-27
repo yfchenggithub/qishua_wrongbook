@@ -11,6 +11,7 @@ class QishuaPrintImageEnhancePackage : ReactPackage {
       QishuaFileShareModule(reactContext),
       QishuaPrintImageEnhanceModule(reactContext),
       QishuaRuntimeDiagnosticsModule(reactContext),
+      QishuaWorksheetPdfModule(reactContext),
     )
   }
 

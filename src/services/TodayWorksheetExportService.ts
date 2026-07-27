@@ -316,6 +316,14 @@ export async function exportTodayWorksheet(
           pdfPartCount: result.pdfPartCount,
           error,
         });
+        return {
+          outcome: 'failed',
+          message: '练习卷已生成但缓存提交失败，系统会自动重试',
+          exportedCount,
+          fileUri: result.fileUri,
+          fileUris: result.fileUris,
+          pdfPartCount: result.pdfPartCount,
+        };
       }
       return {
         outcome: 'success',

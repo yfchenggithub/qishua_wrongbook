@@ -3,8 +3,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Logger } from '@/src/services/Logger';
 import {
   ensureTodayWorksheet,
+  getCachedTodayWorksheetForOpening,
   getTodayWorksheetGenerationState,
   inspectTodayWorksheetCache,
+  regenerateTodayWorksheet as requestTodayWorksheetRegeneration,
   subscribeTodayWorksheetGeneration,
   type TodayWorksheetGenerationState,
 } from '@/src/services/TodayWorksheetGenerationCoordinator';
@@ -51,15 +53,19 @@ export type UseTodayWorksheetExportOptions = {
 
 export type UseTodayWorksheetExportResult = {
   isExporting: boolean;
+  isRegenerating: boolean;
   hasCachedWorksheet: boolean;
+  cachedWorksheet: TodayWorksheetGenerationState['cachedWorksheet'];
   exportStage: TodayWorksheetExportStage | null;
   progress: ExportPdfProgressState;
   progressPercent: number;
   exportTodayWorksheet: () => Promise<void>;
+  regenerateTodayWorksheet: () => Promise<void>;
 };
 
 const EMPTY_MESSAGE = '今天暂无需要复做的错题';
-const GENERIC_FAILED_MESSAGE = '导出失败，请稍后重试';
+const GENERIC_FAILED_MESSAGE = '练习卷读取失败，系统会自动重新准备';
+const PREPARING_MESSAGE = '练习卷正在后台准备，完成后可直接打开';
 
 function toSafeCount(value: number | null | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -153,7 +159,10 @@ export function useTodayWorksheetExport(
   }, [printEnhanceMode, safeDueToday]);
 
   const isExporting =
-    generationState.status === 'checking_cache' || generationState.status === 'generating';
+    generationState.status === 'checking_cache'
+    || generationState.status === 'generating'
+    || generationState.status === 'refreshing';
+  const isRegenerating = generationState.status === 'refreshing';
   const hasCachedWorksheet = generationState.cachedWorksheet !== null;
 
   useEffect(() => {
@@ -192,42 +201,31 @@ export function useTodayWorksheetExport(
       : 0;
 
   const exportTodayWorksheet = useCallback(async () => {
-    if (isExporting) {
-      return;
-    }
-
     const startedAt = Date.now();
-    Logger.info(scope, 'export_pdf_start', {
+    Logger.info(scope, 'open_cached_worksheet_start', {
       total: safeDueToday,
-      cacheAware: true,
+      generationActive: isExporting,
     });
 
     try {
-      const result = await ensureTodayWorksheet({
-        expectedPendingCount: safeDueToday,
-        printEnhanceMode,
-        printEnhanceClearPrintStrength,
-        printEnhanceConcurrency,
-        printEnhancePerformanceProfile,
-      });
+      const cached = await getCachedTodayWorksheetForOpening({ printEnhanceMode });
       const durationMs = Math.max(0, Date.now() - startedAt);
-
-      if (result.outcome === 'success') {
-        const pdfUri = typeof result.fileUri === 'string' ? result.fileUri.trim() : '';
-        const pdfUris = normalizeFileUris(pdfUri, result.fileUris);
-        const pdfPageCounts = normalizePdfPageCounts(result.pdfPageCounts, pdfUris.length);
+      if (cached) {
+        const pdfUri = cached.fileUri.trim();
+        const pdfUris = normalizeFileUris(pdfUri, cached.fileUris);
+        const pdfPageCounts = normalizePdfPageCounts(cached.pdfPageCounts, pdfUris.length);
         if (!pdfUri) {
-          Logger.warn(scope, 'export_pdf_failed', {
+          Logger.warn(scope, 'open_cached_worksheet_failed', {
             errorName: 'EmptyPdfUri',
-            errorMessage: 'Worksheet export succeeded but fileUri is empty.',
+            errorMessage: 'Worksheet cache has an empty fileUri.',
             durationMs,
           });
-          showToast('导出成功但未找到 PDF 文件，请重试', 'error', longToastDurationMs);
+          showToast(GENERIC_FAILED_MESSAGE, 'error', longToastDurationMs);
           return;
         }
 
-        Logger.info(scope, result.fromCache ? 'export_pdf_cache_reused' : 'export_pdf_success', {
-          total: result.exportedCount,
+        Logger.info(scope, 'open_cached_worksheet_success', {
+          total: cached.exportedCount,
           durationMs,
           filePath: pdfUri,
           fileCount: pdfUris.length,
@@ -237,21 +235,37 @@ export function useTodayWorksheetExport(
         return;
       }
 
-      if (result.outcome === 'empty') {
+      if (safeDueToday <= 0) {
         showToast(EMPTY_MESSAGE, 'info');
         onEmpty?.();
         return;
       }
 
-      const failureType = result.outcome === 'share_unavailable' ? 'info' : 'error';
-      Logger.warn(scope, 'export_pdf_failed', {
-        errorName: result.outcome,
-        errorMessage: result.message,
+      Logger.info(scope, 'open_cached_worksheet_not_ready', {
+        total: safeDueToday,
         durationMs,
+        generationActive: isExporting,
       });
-      showToast(result.message, failureType, longToastDurationMs);
+      showToast(PREPARING_MESSAGE, 'info', longToastDurationMs);
+      void ensureTodayWorksheet({
+        expectedPendingCount: safeDueToday,
+        printEnhanceMode,
+        printEnhanceClearPrintStrength,
+        printEnhanceConcurrency,
+        printEnhancePerformanceProfile,
+      }).then((result) => {
+        Logger.info(scope, 'worksheet_preparation_after_cache_miss_settled', {
+          outcome: result.outcome,
+          exportedCount: result.exportedCount,
+          fromCache: result.fromCache ?? false,
+        });
+      }).catch((error) => {
+        Logger.error(scope, 'worksheet_preparation_after_cache_miss_rejected', {
+          error,
+        });
+      });
     } catch (error) {
-      Logger.error(scope, 'export_pdf_failed', {
+      Logger.error(scope, 'open_cached_worksheet_failed', {
         durationMs: Math.max(0, Date.now() - startedAt),
         error,
       });
@@ -271,12 +285,81 @@ export function useTodayWorksheetExport(
     showToast,
   ]);
 
+  const regenerateTodayWorksheet = useCallback(async () => {
+    if (isExporting) {
+      showToast(
+        isRegenerating ? '今日练习卷正在重新生成' : '今日练习卷正在自动准备',
+        'info',
+      );
+      return;
+    }
+    if (!hasCachedWorksheet) {
+      showToast('当前没有可保留的今日练习卷，请先等待自动准备完成', 'info');
+      return;
+    }
+    if (safeDueToday <= 0) {
+      showToast('当前没有待复做题，已保留原练习卷', 'info');
+      return;
+    }
+
+    const startedAt = Date.now();
+    Logger.info(scope, 'force_regenerate_worksheet_start', {
+      pendingCount: safeDueToday,
+      previousCachedCount: generationState.cachedWorksheet?.exportedCount ?? 0,
+    });
+    try {
+      const result = await requestTodayWorksheetRegeneration({
+        expectedPendingCount: safeDueToday,
+        printEnhanceMode,
+        printEnhanceClearPrintStrength,
+        printEnhanceConcurrency,
+        printEnhancePerformanceProfile,
+      });
+      Logger.info(scope, 'force_regenerate_worksheet_settled', {
+        outcome: result.outcome,
+        exportedCount: result.exportedCount,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+      if (result.outcome === 'success') {
+        showToast('今日练习卷已更新', 'success');
+        return;
+      }
+      if (result.outcome === 'busy' || result.outcome === 'empty') {
+        showToast(result.message, 'info', longToastDurationMs);
+        return;
+      }
+      showToast('重新生成失败，原练习卷仍可使用', 'error', longToastDurationMs);
+    } catch (error) {
+      Logger.error(scope, 'force_regenerate_worksheet_rejected', {
+        durationMs: Math.max(0, Date.now() - startedAt),
+        error,
+      });
+      showToast('重新生成失败，原练习卷仍可使用', 'error', longToastDurationMs);
+    }
+  }, [
+    generationState.cachedWorksheet?.exportedCount,
+    hasCachedWorksheet,
+    isExporting,
+    isRegenerating,
+    longToastDurationMs,
+    printEnhanceClearPrintStrength,
+    printEnhanceConcurrency,
+    printEnhanceMode,
+    printEnhancePerformanceProfile,
+    safeDueToday,
+    scope,
+    showToast,
+  ]);
+
   return {
     isExporting,
+    isRegenerating,
     hasCachedWorksheet,
+    cachedWorksheet: generationState.cachedWorksheet,
     exportStage: generationState.stage,
     progress,
     progressPercent,
     exportTodayWorksheet,
+    regenerateTodayWorksheet,
   };
 }
