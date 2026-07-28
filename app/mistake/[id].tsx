@@ -1206,6 +1206,8 @@ function DetailMetadataEditorModal({
   onChangeDraft: (draft: DetailMetadataDraft) => void;
   onSave: () => void;
 }) {
+  const insets = useSafeAreaInsets();
+
   if (!draft) {
     return null;
   }
@@ -1213,7 +1215,13 @@ function DetailMetadataEditorModal({
   const errorReasonOptions = buildDetailErrorReasonOptions(customErrorReasons, draft);
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={onClose}>
       <View style={styles.metadataModalOverlay}>
         <Pressable
           accessibilityRole="button"
@@ -1221,27 +1229,47 @@ function DetailMetadataEditorModal({
           style={styles.metadataModalBackdrop}
           onPress={onClose}
         />
-        <View style={styles.metadataModalSheet}>
+        <View
+          style={[
+            styles.metadataModalSheet,
+            { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+          ]}>
           <View style={styles.metadataModalHandle} />
           <View style={styles.metadataModalHeader}>
-            <View style={styles.metadataModalHeaderTextWrap}>
-              <Text style={styles.metadataModalTitle}>修改错因/难度</Text>
-              <Text style={styles.metadataModalSubtitle}>修正录入时选错的信息</Text>
-            </View>
-            {busy ? <ActivityIndicator size="small" color={colors.success} /> : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="关闭错因难度编辑"
+              accessibilityLabel="取消修改错因难度"
               onPress={onClose}
               disabled={busy}
               style={({ pressed }) => [
-                styles.metadataModalCloseButton,
-                pressed && !busy && styles.metadataModalCloseButtonPressed,
+                styles.metadataModalHeaderAction,
+                pressed && !busy && styles.metadataModalHeaderActionPressed,
                 busy && styles.metadataModalButtonDisabled,
               ]}>
-              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+              <Text style={styles.metadataModalCancelText}>取消</Text>
+            </Pressable>
+            <Text numberOfLines={1} style={styles.metadataModalTitle}>
+              修改错因与难度
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="保存错因难度"
+              onPress={onSave}
+              disabled={busy}
+              style={({ pressed }) => [
+                styles.metadataModalHeaderAction,
+                styles.metadataModalSaveAction,
+                pressed && !busy && styles.metadataModalHeaderActionPressed,
+                busy && styles.metadataModalButtonDisabled,
+              ]}>
+              {busy ? (
+                <ActivityIndicator size="small" color={colors.success} />
+              ) : (
+                <Text style={styles.metadataModalSaveText}>保存</Text>
+              )}
             </Pressable>
           </View>
+          <Text style={styles.metadataModalSubtitle}>修正录入时选择的信息</Text>
 
           {message ? (
             <Text maxFontSizeMultiplier={1.1} style={styles.metadataModalMessage}>
@@ -1249,119 +1277,110 @@ function DetailMetadataEditorModal({
             </Text>
           ) : null}
 
-          <View style={styles.metadataSection}>
-            <Text style={styles.metadataSectionTitle}>错因</Text>
-            <View style={styles.metadataChipRow}>
-              {errorReasonOptions.map((option) => {
-                const selectedIndex = draft.errorReasonIds.indexOf(option.id);
-                const selected = selectedIndex >= 0;
-                return (
-                  <Pressable
-                    key={option.id}
-                    accessibilityRole="checkbox"
-                    accessibilityState={{ checked: selected }}
-                    accessibilityLabel={`选择错因：${option.label}`}
-                    disabled={busy}
-                    onPress={() => {
-                      if (selected) {
+          <ScrollView
+            style={styles.metadataModalScroll}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.metadataModalContent}>
+            <View style={styles.metadataSection}>
+              <Text style={styles.metadataSectionTitle}>错因</Text>
+              <View style={styles.metadataReasonGrid}>
+                {errorReasonOptions.map((option) => {
+                  const selectedIndex = draft.errorReasonIds.indexOf(option.id);
+                  const selected = selectedIndex >= 0;
+                  return (
+                    <Pressable
+                      key={option.id}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: selected, disabled: busy }}
+                      accessibilityLabel={`选择错因：${option.label}`}
+                      disabled={busy}
+                      onPress={() => {
+                        if (selected) {
+                          onChangeDraft({
+                            ...draft,
+                            errorReasonIds: draft.errorReasonIds.filter(
+                              (_, index) => index !== selectedIndex,
+                            ),
+                            errorReasonLabels: draft.errorReasonLabels.filter(
+                              (_, index) => index !== selectedIndex,
+                            ),
+                          });
+                          return;
+                        }
                         onChangeDraft({
                           ...draft,
-                          errorReasonIds: draft.errorReasonIds.filter((_, index) => index !== selectedIndex),
-                          errorReasonLabels: draft.errorReasonLabels.filter((_, index) => index !== selectedIndex),
+                          errorReasonIds: [...draft.errorReasonIds, option.id],
+                          errorReasonLabels: [...draft.errorReasonLabels, option.label],
                         });
-                        return;
+                      }}
+                      style={({ pressed }) => [
+                        styles.metadataReasonCard,
+                        selected && styles.metadataReasonCardSelected,
+                        pressed && !busy && styles.metadataReasonCardPressed,
+                        busy && styles.metadataModalButtonDisabled,
+                      ]}>
+                      <Text
+                        numberOfLines={2}
+                        maxFontSizeMultiplier={1.1}
+                        style={[
+                          styles.metadataReasonCardText,
+                          selected && styles.metadataReasonCardTextSelected,
+                        ]}>
+                        {option.label}
+                      </Text>
+                      {selected ? (
+                        <View style={styles.metadataReasonCheck}>
+                          <MaterialIcons name="check" size={16} color={colors.white} />
+                        </View>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.metadataDivider} />
+
+            <View style={styles.metadataSection}>
+              <Text style={styles.metadataSectionTitle}>难度</Text>
+              <View style={styles.metadataDifficultyControl}>
+                {DIFFICULTY_OPTIONS.map((option) => {
+                  const selected = draft.difficulty === option.value;
+                  return (
+                    <Pressable
+                      key={option.value}
+                      accessibilityRole="radio"
+                      accessibilityState={{ checked: selected, disabled: busy }}
+                      accessibilityLabel={`选择难度：${option.label}`}
+                      disabled={busy}
+                      onPress={() =>
+                        onChangeDraft({
+                          ...draft,
+                          difficulty: option.value,
+                        })
                       }
-                      onChangeDraft({
-                        ...draft,
-                        errorReasonIds: [...draft.errorReasonIds, option.id],
-                        errorReasonLabels: [...draft.errorReasonLabels, option.label],
-                      });
-                    }}
-                    style={({ pressed }) => [
-                      styles.metadataChip,
-                      selected && styles.metadataChipSelected,
-                      pressed && !busy && styles.metadataChipPressed,
-                      busy && styles.metadataModalButtonDisabled,
-                    ]}>
-                    <Text
-                      numberOfLines={1}
-                      maxFontSizeMultiplier={1.1}
-                      style={[
-                        styles.metadataChipText,
-                        selected && styles.metadataChipTextSelected,
+                      style={({ pressed }) => [
+                        styles.metadataDifficultyOption,
+                        selected && styles.metadataDifficultyOptionSelected,
+                        pressed && !busy && styles.metadataDifficultyOptionPressed,
+                        busy && styles.metadataModalButtonDisabled,
                       ]}>
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
+                      <Text
+                        numberOfLines={1}
+                        maxFontSizeMultiplier={1.05}
+                        style={[
+                          styles.metadataDifficultyText,
+                          selected && styles.metadataDifficultyTextSelected,
+                        ]}>
+                        {option.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={styles.metadataDifficultyHint}>用于安排后续复做优先级</Text>
             </View>
-          </View>
-
-          <View style={styles.metadataSection}>
-            <Text style={styles.metadataSectionTitle}>难度</Text>
-            <View style={styles.metadataChipRow}>
-              {DIFFICULTY_OPTIONS.map((option) => {
-                const selected = draft.difficulty === option.value;
-                return (
-                  <Pressable
-                    key={option.value}
-                    accessibilityRole="button"
-                    accessibilityLabel={`选择难度：${option.label}`}
-                    disabled={busy}
-                    onPress={() =>
-                      onChangeDraft({
-                        ...draft,
-                        difficulty: option.value,
-                      })
-                    }
-                    style={({ pressed }) => [
-                      styles.metadataChip,
-                      selected && styles.metadataChipSelected,
-                      pressed && !busy && styles.metadataChipPressed,
-                      busy && styles.metadataModalButtonDisabled,
-                    ]}>
-                    <Text
-                      numberOfLines={1}
-                      maxFontSizeMultiplier={1.1}
-                      style={[
-                        styles.metadataChipText,
-                        selected && styles.metadataChipTextSelected,
-                      ]}>
-                      {option.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          <View style={styles.metadataModalFooter}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="取消修改错因难度"
-              disabled={busy}
-              onPress={onClose}
-              style={({ pressed }) => [
-                styles.metadataSecondaryButton,
-                pressed && !busy && styles.metadataButtonPressed,
-                busy && styles.metadataModalButtonDisabled,
-              ]}>
-              <Text style={styles.metadataSecondaryButtonText}>取消</Text>
-            </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="保存错因难度"
-              disabled={busy}
-              onPress={onSave}
-              style={({ pressed }) => [
-                styles.metadataPrimaryButton,
-                pressed && !busy && styles.metadataButtonPressed,
-                busy && styles.metadataModalButtonDisabled,
-              ]}>
-              <Text style={styles.metadataPrimaryButtonText}>{busy ? '保存中...' : '保存'}</Text>
-            </Pressable>
-          </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -6330,21 +6349,18 @@ const styles = StyleSheet.create({
   },
   metadataModalOverlay: {
     flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.screenPadding,
-    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.58)',
   },
   metadataModalBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
   metadataModalSheet: {
-    maxHeight: '86%',
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
+    height: '78%',
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
     backgroundColor: colors.surface,
-    padding: spacing.lg,
-    gap: spacing.md,
+    paddingTop: spacing.md,
     shadowColor: colors.shadow,
     shadowOpacity: 0.14,
     shadowRadius: 24,
@@ -6353,132 +6369,176 @@ const styles = StyleSheet.create({
   },
   metadataModalHandle: {
     alignSelf: 'center',
-    width: 42,
-    height: 4,
+    width: 44,
+    height: 5,
     borderRadius: radius.pill,
-    backgroundColor: colors.border,
+    backgroundColor: '#D1D1D6',
   },
   metadataModalHeader: {
-    minHeight: 40,
+    minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: spacing.sm,
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.xl,
   },
-  metadataModalHeaderTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  metadataModalTitle: {
-    ...typography.sectionTitle,
-    color: colors.textPrimary,
-  },
-  metadataModalSubtitle: {
-    ...typography.caption,
-    color: colors.textMuted,
-    fontWeight: '700',
-  },
-  metadataModalCloseButton: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
+  metadataModalHeaderAction: {
+    width: 52,
+    minHeight: layout.minimumTouchSize,
+    alignItems: 'flex-start',
     justifyContent: 'center',
   },
-  metadataModalCloseButtonPressed: {
-    opacity: 0.78,
+  metadataModalSaveAction: {
+    alignItems: 'flex-end',
+  },
+  metadataModalHeaderActionPressed: {
+    opacity: 0.62,
+  },
+  metadataModalCancelText: {
+    fontSize: 17,
+    lineHeight: 24,
+    color: colors.textPrimary,
+    fontWeight: '600',
+  },
+  metadataModalSaveText: {
+    fontSize: 17,
+    lineHeight: 24,
+    color: colors.success,
+    fontWeight: '700',
+  },
+  metadataModalTitle: {
+    flex: 1,
+    fontSize: 23,
+    lineHeight: 30,
+    fontWeight: '800',
+    color: colors.textPrimary,
+    textAlign: 'center',
+  },
+  metadataModalSubtitle: {
+    ...typography.bodySmall,
+    marginTop: spacing.xs,
+    color: colors.textTertiary,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   metadataModalMessage: {
     ...typography.caption,
+    marginTop: spacing.md,
+    marginHorizontal: spacing.xl,
     color: colors.danger,
     fontWeight: '700',
+    textAlign: 'center',
+  },
+  metadataModalScroll: {
+    flex: 1,
+    marginTop: spacing.xl,
+  },
+  metadataModalContent: {
+    gap: spacing.xl,
+    paddingHorizontal: spacing.xl,
+    paddingBottom: spacing.xl,
   },
   metadataSection: {
-    gap: spacing.sm,
+    gap: spacing.lg,
   },
   metadataSectionTitle: {
-    ...typography.bodySmall,
+    fontSize: 18,
+    lineHeight: 24,
     color: colors.textPrimary,
     fontWeight: '800',
   },
-  metadataChipRow: {
+  metadataReasonGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: spacing.md,
   },
-  metadataChip: {
-    minHeight: 36,
-    borderRadius: radius.lg,
+  metadataReasonCard: {
+    minWidth: '29%',
+    minHeight: 52,
+    borderRadius: radius.control,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surfaceMuted,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.sm,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.xs,
   },
-  metadataChipSelected: {
-    borderColor: colors.successBorder,
+  metadataReasonCardSelected: {
+    borderColor: colors.success,
     backgroundColor: colors.successBg,
   },
-  metadataChipPressed: {
-    opacity: 0.82,
+  metadataReasonCardPressed: {
+    backgroundColor: colors.surface,
   },
-  metadataChipText: {
+  metadataReasonCardText: {
     ...typography.bodySmall,
     color: colors.textPrimary,
     fontWeight: '700',
+    textAlign: 'center',
   },
-  metadataChipTextSelected: {
+  metadataReasonCardTextSelected: {
     color: colors.success,
   },
-  metadataModalFooter: {
-    minHeight: 40,
+  metadataReasonCheck: {
+    width: 22,
+    height: 22,
+    borderRadius: radius.pill,
+    backgroundColor: colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metadataDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.separator,
+  },
+  metadataDifficultyControl: {
+    minHeight: 52,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceMuted,
+    padding: spacing.xs,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: spacing.sm,
   },
-  metadataSecondaryButton: {
-    minWidth: 76,
-    minHeight: 40,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
+  metadataDifficultyOption: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: radius.control,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: 2,
   },
-  metadataPrimaryButton: {
-    minWidth: 90,
-    minHeight: 40,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.black,
-    backgroundColor: colors.black,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.md,
+  metadataDifficultyOptionSelected: {
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  metadataButtonPressed: {
-    opacity: 0.84,
+  metadataDifficultyOptionPressed: {
+    backgroundColor: colors.surface,
+  },
+  metadataDifficultyText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textPrimary,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  metadataDifficultyTextSelected: {
+    color: colors.success,
+    fontWeight: '800',
+  },
+  metadataDifficultyHint: {
+    ...typography.caption,
+    color: colors.textTertiary,
+    fontWeight: '600',
   },
   metadataModalButtonDisabled: {
     opacity: 0.56,
-  },
-  metadataSecondaryButtonText: {
-    ...typography.bodySmall,
-    color: colors.textPrimary,
-    fontWeight: '800',
-  },
-  metadataPrimaryButtonText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '800',
   },
   imagesSectionCard: {
     borderRadius: radius.xl,
