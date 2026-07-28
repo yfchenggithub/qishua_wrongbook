@@ -72,6 +72,8 @@ export function ModulePickerSheet({
       ? options.filter((option) => option.label.toLocaleLowerCase().includes(keyword))
       : options;
   }, [options, searchText]);
+  const builtInOptions = filteredOptions.filter((option) => !option.isCustom);
+  const customOptions = filteredOptions.filter((option) => option.isCustom);
   const recentOptions = recentIds
     .map((id) => options.find((option) => option.id === id))
     .filter((option): option is ModulePickerOption => !!option)
@@ -141,23 +143,46 @@ export function ModulePickerSheet({
                   </Pressable>
                 ) : null}
               </View>
-              <ScrollView style={styles.flex} keyboardShouldPersistTaps="handled" contentContainerStyle={styles.content}>
-                {!searchText ? (
-                  recentOptions.length > 0 ? (
-                    <OptionSection title="最近使用" options={recentOptions} selectedId={temporaryId} onSelect={setTemporaryId} />
-                  ) : (
-                    <View style={styles.section}>
-                      <Text style={styles.sectionTitle}>最近使用</Text>
-                      <Text style={styles.recentEmpty}>还没有最近使用的模块</Text>
-                    </View>
-                  )
-                ) : null}
-                <OptionSection
-                  title={searchText ? `搜索结果（${filteredOptions.length}）` : '全部模块'}
-                  options={filteredOptions}
-                  selectedId={temporaryId}
-                  onSelect={setTemporaryId}
-                />
+              <ScrollView
+                style={styles.flex}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.content}>
+                {searchText ? (
+                  <GridOptionSection
+                    title={`搜索结果（${filteredOptions.length}）`}
+                    options={filteredOptions}
+                    selectedId={temporaryId}
+                    onSelect={setTemporaryId}
+                  />
+                ) : (
+                  <>
+                    {recentOptions.length > 0 ? (
+                      <RecentOptionSection
+                        options={recentOptions}
+                        selectedId={temporaryId}
+                        onSelect={setTemporaryId}
+                      />
+                    ) : (
+                      <View style={styles.section}>
+                        <Text style={styles.sectionTitle}>最近使用</Text>
+                        <Text style={styles.recentEmpty}>还没有最近使用的模块</Text>
+                      </View>
+                    )}
+                    <GridOptionSection
+                      title="全部模块"
+                      options={builtInOptions}
+                      selectedId={temporaryId}
+                      onSelect={setTemporaryId}
+                    />
+                    <GridOptionSection
+                      title="自定义"
+                      options={customOptions}
+                      selectedId={temporaryId}
+                      onSelect={setTemporaryId}
+                    />
+                  </>
+                )}
                 {filteredOptions.length === 0 ? <Text style={styles.emptyText}>没有找到匹配的模块</Text> : null}
               </ScrollView>
               <Pressable
@@ -206,44 +231,92 @@ export function ModulePickerSheet({
   );
 }
 
-function OptionSection({
+type OptionSectionProps = {
+  options: ModulePickerOption[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+};
+
+function RecentOptionSection({
+  options,
+  selectedId,
+  onSelect,
+}: OptionSectionProps) {
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>最近使用</Text>
+      <View style={styles.recentGrid}>
+        {options.map((option) => (
+          <ModuleCard
+            key={option.id}
+            compact
+            option={option}
+            selected={option.id === selectedId}
+            onSelect={onSelect}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function GridOptionSection({
   title,
   options,
   selectedId,
   onSelect,
-}: {
-  title: string;
-  options: ModulePickerOption[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-}) {
+}: OptionSectionProps & { title: string }) {
   if (options.length === 0) return null;
   return (
     <View style={styles.section}>
       <Text style={styles.sectionTitle}>{title}</Text>
-      <View style={styles.list}>
-        {options.map((option, index) => {
-          const selected = option.id === selectedId;
-          return (
-            <Pressable
-              key={option.id}
-              accessibilityRole="radio"
-              accessibilityState={{ selected }}
-              onPress={() => onSelect(option.id)}
-              style={({ pressed }) => [
-                styles.optionRow,
-                index > 0 && styles.optionBorder,
-                selected && styles.selectedRow,
-                pressed && styles.pressed,
-              ]}>
-              <Text style={styles.optionLabel}>{option.label}</Text>
-              {option.isCustom ? <Text style={styles.customMark}>自定义</Text> : null}
-              {selected ? <MaterialIcons name="check" size={24} color={GREEN} /> : <View style={styles.checkSpace} />}
-            </Pressable>
-          );
-        })}
+      <View style={styles.optionGrid}>
+        {options.map((option) => (
+          <ModuleCard
+            key={option.id}
+            option={option}
+            selected={option.id === selectedId}
+            onSelect={onSelect}
+          />
+        ))}
       </View>
     </View>
+  );
+}
+
+function ModuleCard({
+  compact = false,
+  option,
+  selected,
+  onSelect,
+}: {
+  compact?: boolean;
+  option: ModulePickerOption;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={`选择模块：${option.label}`}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      onPress={() => onSelect(option.id)}
+      style={({ pressed }) => [
+        styles.optionCard,
+        compact ? styles.recentCard : styles.gridCard,
+        selected && styles.selectedCard,
+        pressed && styles.pressed,
+      ]}>
+      <Text
+        numberOfLines={1}
+        style={[
+          styles.optionLabel,
+          compact && !selected && styles.centeredOptionLabel,
+        ]}>
+        {option.label}
+      </Text>
+      {selected ? <MaterialIcons name="check-circle" size={compact ? 22 : 25} color={GREEN} /> : null}
+    </Pressable>
   );
 }
 
@@ -251,30 +324,41 @@ const styles = StyleSheet.create({
   layer: { flex: 1, justifyContent: 'flex-end' },
   flex: { flex: 1 },
   backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(28,28,30,0.42)' },
-  sheet: { height: '88%', overflow: 'hidden', borderTopLeftRadius: 28, borderTopRightRadius: 28, backgroundColor: BACKGROUND },
-  handle: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginTop: 9, backgroundColor: '#C7C7CC' },
-  header: { minHeight: 58, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 },
-  headerTitle: { flex: 1, color: TEXT, fontSize: 20, fontWeight: '700', textAlign: 'center' },
+  sheet: { height: '88%', overflow: 'hidden', borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: BACKGROUND },
+  handle: { width: 40, height: 5, borderRadius: 3, alignSelf: 'center', marginTop: 10, backgroundColor: '#C7C7CC' },
+  header: { minHeight: 66, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 },
+  headerTitle: { flex: 1, color: TEXT, fontSize: 22, fontWeight: '700', textAlign: 'center' },
   headerAction: { minWidth: 72, minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
-  headerActionText: { color: TEXT, fontSize: 16, fontWeight: '600' },
+  headerActionText: { color: TEXT, fontSize: 17, fontWeight: '600' },
   green: { color: GREEN },
   disabledText: { opacity: 0.35 },
-  searchWrap: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 20, marginBottom: 8, paddingHorizontal: 13, borderRadius: 12, backgroundColor: '#E9E9EE' },
-  searchInput: { flex: 1, minHeight: 44, color: TEXT, fontSize: 16, paddingVertical: 0 },
-  content: { paddingHorizontal: 20, paddingBottom: 24 },
-  section: { marginTop: 14 },
-  sectionTitle: { marginBottom: 8, marginLeft: 4, color: SECONDARY, fontSize: 14, fontWeight: '600' },
-  list: { overflow: 'hidden', borderRadius: 16, backgroundColor: '#FFFFFF' },
-  optionRow: { minHeight: 54, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, gap: 10 },
-  optionBorder: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER },
-  selectedRow: { backgroundColor: colors.accentSoft },
-  optionLabel: { flex: 1, color: TEXT, fontSize: 17, fontWeight: '500' },
-  customMark: { color: SECONDARY, fontSize: 12 },
-  checkSpace: { width: 24 },
+  searchWrap: { minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, marginHorizontal: 20, marginBottom: 12, paddingHorizontal: 15, borderRadius: 14, backgroundColor: '#E9E9EE' },
+  searchInput: { flex: 1, minHeight: 46, color: TEXT, fontSize: 17, paddingVertical: 0 },
+  content: { paddingHorizontal: 22, paddingBottom: 28 },
+  section: { marginTop: 18 },
+  sectionTitle: { marginBottom: 12, marginLeft: 2, color: SECONDARY, fontSize: 16, fontWeight: '600' },
+  recentGrid: { flexDirection: 'row', columnGap: 10 },
+  optionGrid: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 10, rowGap: 8 },
+  optionCard: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#D6D6DA',
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+  },
+  recentCard: { width: '31%', gap: 5, paddingHorizontal: 10 },
+  gridCard: { width: '48%' },
+  selectedCard: { borderColor: colors.accentBorder, backgroundColor: colors.accentSoft },
+  optionLabel: { flex: 1, color: TEXT, fontSize: 17, fontWeight: '600' },
+  centeredOptionLabel: { textAlign: 'center' },
   emptyText: { paddingVertical: 36, color: SECONDARY, fontSize: 15, textAlign: 'center' },
-  recentEmpty: { padding: 16, borderRadius: 16, color: SECONDARY, fontSize: 14, backgroundColor: '#FFFFFF' },
-  createEntry: { minHeight: 60, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER, backgroundColor: '#FFFFFF' },
-  createEntryText: { flex: 1, color: TEXT, fontSize: 16, fontWeight: '600' },
+  recentEmpty: { padding: 16, borderRadius: 12, color: SECONDARY, fontSize: 14, backgroundColor: '#FFFFFF' },
+  createEntry: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 22, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: BORDER, backgroundColor: '#FFFFFF' },
+  createEntryText: { flex: 1, color: TEXT, fontSize: 17, fontWeight: '600' },
   createContent: { padding: 20 },
   fieldLabel: { marginBottom: 9, color: TEXT, fontSize: 16, fontWeight: '600' },
   nameInput: { minHeight: 54, borderRadius: 14, paddingHorizontal: 15, color: TEXT, fontSize: 17, backgroundColor: '#FFFFFF' },
