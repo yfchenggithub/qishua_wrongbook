@@ -19,9 +19,7 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.modules.core.DeviceEventManagerModule
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.ScheduledFuture
@@ -222,7 +220,7 @@ class QishuaWorksheetPdfModule(
             itemNumber = questionNumber,
             pageCount = pageCount,
           )
-          val bitmap = decodeBestBitmap(item)
+          val bitmap = decodeBestBitmap(item, questionNumber)
           try {
             val imageRatio = resolveImageRatio(item, bitmap)
             val singlePage = bitmap == null || CONTENT_WIDTH * imageRatio <= SINGLE_PAGE_IMAGE_MAX_HEIGHT
@@ -728,7 +726,7 @@ class QishuaWorksheetPdfModule(
       }
     }
 
-    private fun decodeBestBitmap(item: WorksheetItem): Bitmap? {
+    private fun decodeBestBitmap(item: WorksheetItem, questionNumber: Int): Bitmap? {
       val candidates = listOfNotNull(item.imageUri, item.fallbackImageUri).distinct()
       for (candidate in candidates) {
         checkNotCancelled()
@@ -738,6 +736,14 @@ class QishuaWorksheetPdfModule(
         }
         Log.w(LOG_TAG, "Unable to decode worksheet image: ${safeUriPreview(candidate)}")
       }
+      if (candidates.isNotEmpty()) {
+        markStage(
+          STAGE_ITEM_IMAGE_UNAVAILABLE,
+          level = LOG_LEVEL_WARN,
+          itemNumber = questionNumber,
+          message = "Unable to decode all ${candidates.size} local image candidate(s).",
+        )
+      }
       return null
     }
 
@@ -745,9 +751,7 @@ class QishuaWorksheetPdfModule(
       val bounds = BitmapFactory.Options().apply {
         inJustDecodeBounds = true
       }
-      openImageStream(uriText)?.use { stream ->
-        BitmapFactory.decodeStream(stream, null, bounds)
-      } ?: return null
+      decodeBitmapWithOptions(uriText, bounds)
       if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
         return null
       }
@@ -763,22 +767,46 @@ class QishuaWorksheetPdfModule(
         inSampleSize = sampleSize
         inPreferredConfig = Bitmap.Config.ARGB_8888
       }
-      return openImageStream(uriText)?.use { stream ->
-        BitmapFactory.decodeStream(stream, null, options)
-      }
+      return decodeBitmapWithOptions(uriText, options)
     }
 
-    private fun openImageStream(uriText: String): InputStream? {
+    private fun decodeBitmapWithOptions(
+      uriText: String,
+      options: BitmapFactory.Options,
+    ): Bitmap? {
       return try {
         val uri = Uri.parse(uriText)
         when (uri.scheme?.lowercase()) {
-          "content" -> reactContext.contentResolver.openInputStream(uri)
-          "file" -> uri.path?.let { FileInputStream(File(it)) }
-          null, "" -> FileInputStream(File(uriText))
-          else -> reactContext.contentResolver.openInputStream(uri)
+          // Decode app-private files by their absolute path. This is more
+          // reliable than streaming `file://` URIs on recent Android versions
+          // and matches the path used by the image-enhancement native module.
+          "file" -> {
+            val path = uri.path ?: return null
+            val file = File(path)
+            if (!file.isFile) {
+              Log.w(LOG_TAG, "Worksheet image file does not exist: ${safeUriPreview(uriText)}")
+              null
+            } else {
+              BitmapFactory.decodeFile(file.absolutePath, options)
+            }
+          }
+
+          null, "" -> {
+            val file = File(uriText)
+            if (!file.isFile) {
+              Log.w(LOG_TAG, "Worksheet image path does not exist: ${safeUriPreview(uriText)}")
+              null
+            } else {
+              BitmapFactory.decodeFile(file.absolutePath, options)
+            }
+          }
+
+          else -> reactContext.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, options)
+          }
         }
       } catch (error: Throwable) {
-        Log.w(LOG_TAG, "Unable to open worksheet image: ${safeUriPreview(uriText)}", error)
+        Log.w(LOG_TAG, "Unable to decode worksheet image: ${safeUriPreview(uriText)}", error)
         null
       }
     }
@@ -912,6 +940,7 @@ class QishuaWorksheetPdfModule(
     private const val STAGE_JOB_STARTED = "native_worksheet_pdf_job_started"
     private const val STAGE_DOCUMENT_CREATED = "native_worksheet_pdf_document_created"
     private const val STAGE_ITEM_STARTED = "native_worksheet_pdf_item_started"
+    private const val STAGE_ITEM_IMAGE_UNAVAILABLE = "native_worksheet_pdf_item_image_unavailable"
     private const val STAGE_ITEM_FINISHED = "native_worksheet_pdf_item_finished"
     private const val STAGE_WRITE_STARTED = "native_worksheet_pdf_write_started"
     private const val STAGE_WRITE_FINISHED = "native_worksheet_pdf_write_finished"
