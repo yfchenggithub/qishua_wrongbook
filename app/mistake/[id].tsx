@@ -538,6 +538,10 @@ function toModulePickerKey(value: string): string {
   return value.trim().replace(/\s+/g, ' ').toLocaleLowerCase();
 }
 
+const DETAIL_OTHER_MODULE_KEYS = new Set(
+  ['其他', '英语', '未分类'].map((moduleName) => toModulePickerKey(moduleName)),
+);
+
 function appendModulePickerOption(
   options: DetailModulePickerOption[],
   seenKeys: Set<string>,
@@ -1018,7 +1022,7 @@ function DetailModulePickerModal({
   busy,
   message,
   onClose,
-  onSelectModule,
+  onConfirm,
 }: {
   visible: boolean;
   options: DetailModulePickerOption[];
@@ -1026,12 +1030,80 @@ function DetailModulePickerModal({
   busy: boolean;
   message?: string | null;
   onClose: () => void;
-  onSelectModule: (moduleName: string) => void;
+  onConfirm: (moduleName: string) => void;
 }) {
+  const insets = useSafeAreaInsets();
   const normalizedSelectedModule = normalizeModuleNameForPicker(selectedModule);
+  const [draftModule, setDraftModule] = useState<string | null>(normalizedSelectedModule);
+  const groupedOptions = useMemo(() => {
+    const mathOptions: DetailModulePickerOption[] = [];
+    const otherOptions: DetailModulePickerOption[] = [];
+
+    for (const option of options) {
+      if (DETAIL_OTHER_MODULE_KEYS.has(toModulePickerKey(option.value))) {
+        otherOptions.push(option);
+      } else {
+        mathOptions.push(option);
+      }
+    }
+
+    return { mathOptions, otherOptions };
+  }, [options]);
+
+  useEffect(() => {
+    if (visible) {
+      setDraftModule(normalizedSelectedModule);
+    }
+  }, [normalizedSelectedModule, visible]);
+
+  const renderOption = (option: DetailModulePickerOption) => {
+    const selected =
+      draftModule !== null
+      && toModulePickerKey(draftModule) === toModulePickerKey(option.value);
+
+    return (
+      <Pressable
+        key={option.value}
+        accessibilityRole="button"
+        accessibilityLabel={`选择模块：${option.label}`}
+        accessibilityState={{ disabled: busy, selected }}
+        disabled={busy}
+        onPress={() => setDraftModule(option.value)}
+        style={({ pressed }) => [
+          styles.modulePickerOption,
+          selected && styles.modulePickerOptionSelected,
+          pressed && !busy && styles.modulePickerOptionPressed,
+          busy && styles.modulePickerOptionDisabled,
+        ]}>
+        <Text
+          numberOfLines={2}
+          maxFontSizeMultiplier={1.1}
+          style={[
+            styles.modulePickerOptionText,
+            selected && styles.modulePickerOptionTextSelected,
+          ]}>
+          {option.label}
+        </Text>
+        {selected ? (
+          <MaterialIcons
+            name="check"
+            size={20}
+            color={colors.white}
+            style={styles.modulePickerOptionCheck}
+          />
+        ) : null}
+      </Pressable>
+    );
+  };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      navigationBarTranslucent
+      onRequestClose={onClose}>
       <View style={styles.modulePickerOverlay}>
         <Pressable
           accessibilityRole="button"
@@ -1039,23 +1111,26 @@ function DetailModulePickerModal({
           style={styles.modulePickerBackdrop}
           onPress={onClose}
         />
-        <View style={styles.modulePickerSheet}>
+        <View
+          style={[
+            styles.modulePickerSheet,
+            { paddingBottom: Math.max(insets.bottom, spacing.lg) },
+          ]}>
           <View style={styles.modulePickerHandle} />
           <View style={styles.modulePickerHeader}>
             <View style={styles.modulePickerHeaderTextWrap}>
               <Text style={styles.modulePickerTitle}>修改模块</Text>
-              <Text style={styles.modulePickerSubtitle}>选择已有模块</Text>
+              <Text style={styles.modulePickerSubtitle}>选择一个模块</Text>
             </View>
-            {busy ? <ActivityIndicator size="small" color={colors.success} /> : null}
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="关闭模块选择"
+              accessibilityLabel="取消修改模块"
               onPress={onClose}
               style={({ pressed }) => [
-                styles.modulePickerCloseButton,
-                pressed && styles.modulePickerCloseButtonPressed,
+                styles.modulePickerCancelButton,
+                pressed && styles.modulePickerCancelButtonPressed,
               ]}>
-              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
+              <Text style={styles.modulePickerCancelText}>取消</Text>
             </Pressable>
           </View>
 
@@ -1067,40 +1142,45 @@ function DetailModulePickerModal({
 
           <ScrollView
             style={styles.modulePickerScroll}
+            showsVerticalScrollIndicator={false}
             contentContainerStyle={styles.modulePickerContent}>
-            {options.map((option) => {
-              const selected =
-                normalizedSelectedModule !== null
-                && toModulePickerKey(normalizedSelectedModule) === toModulePickerKey(option.value);
-              return (
-                <Pressable
-                  key={option.value}
-                  accessibilityRole="button"
-                  accessibilityLabel={`选择模块：${option.label}`}
-                  disabled={busy || selected}
-                  onPress={() => onSelectModule(option.value)}
-                  style={({ pressed }) => [
-                    styles.modulePickerOption,
-                    selected && styles.modulePickerOptionSelected,
-                    pressed && !busy && !selected && styles.modulePickerOptionPressed,
-                    busy && styles.modulePickerOptionDisabled,
-                  ]}>
-                  <Text
-                    numberOfLines={1}
-                    maxFontSizeMultiplier={1.1}
-                    style={[
-                      styles.modulePickerOptionText,
-                      selected && styles.modulePickerOptionTextSelected,
-                    ]}>
-                    {option.label}
-                  </Text>
-                  {selected ? (
-                    <MaterialIcons name="check-circle" size={18} color={colors.success} />
-                  ) : null}
-                </Pressable>
-              );
-            })}
+            <View style={styles.modulePickerSection}>
+              <Text style={styles.modulePickerSectionTitle}>数学</Text>
+              <View style={styles.modulePickerGrid}>
+                {groupedOptions.mathOptions.map(renderOption)}
+              </View>
+            </View>
+
+            {groupedOptions.otherOptions.length > 0 ? (
+              <View style={styles.modulePickerSection}>
+                <Text style={styles.modulePickerSectionTitle}>其他分类</Text>
+                <View style={styles.modulePickerGrid}>
+                  {groupedOptions.otherOptions.map(renderOption)}
+                </View>
+              </View>
+            ) : null}
           </ScrollView>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="完成模块修改"
+            disabled={busy || draftModule === null}
+            onPress={() => {
+              if (draftModule) {
+                onConfirm(draftModule);
+              }
+            }}
+            style={({ pressed }) => [
+              styles.modulePickerConfirmButton,
+              pressed && !busy && draftModule !== null && styles.modulePickerConfirmButtonPressed,
+              (busy || draftModule === null) && styles.modulePickerConfirmButtonDisabled,
+            ]}>
+            {busy ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <Text style={styles.modulePickerConfirmText}>完成</Text>
+            )}
+          </Pressable>
         </View>
       </View>
     </Modal>
@@ -4953,7 +5033,7 @@ export default function MistakeDetailScreen() {
         busy={isModulePickerBusy}
         message={modulePickerMessage}
         onClose={handleCloseModulePicker}
-        onSelectModule={(moduleName) => {
+        onConfirm={(moduleName) => {
           void handleSelectModule(moduleName);
         }}
       />
@@ -6106,21 +6186,20 @@ const styles = StyleSheet.create({
   },
   modulePickerOverlay: {
     flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.screenPadding,
-    backgroundColor: 'rgba(0, 0, 0, 0.36)',
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0, 0, 0, 0.58)',
   },
   modulePickerBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
   modulePickerSheet: {
-    maxHeight: '86%',
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
+    maxHeight: '88%',
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
     backgroundColor: colors.surface,
-    padding: spacing.lg,
-    gap: spacing.md,
+    paddingTop: spacing.md,
+    paddingHorizontal: spacing.screenPadding,
+    gap: spacing.lg,
     shadowColor: colors.shadow,
     shadowOpacity: 0.14,
     shadowRadius: 24,
@@ -6129,15 +6208,15 @@ const styles = StyleSheet.create({
   },
   modulePickerHandle: {
     alignSelf: 'center',
-    width: 42,
-    height: 4,
+    width: 44,
+    height: 5,
     borderRadius: radius.pill,
-    backgroundColor: colors.border,
+    backgroundColor: '#D1D1D6',
   },
   modulePickerHeader: {
-    minHeight: 40,
+    minHeight: 64,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: spacing.sm,
   },
@@ -6146,26 +6225,29 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   modulePickerTitle: {
-    ...typography.sectionTitle,
+    fontSize: 26,
+    lineHeight: 34,
+    fontWeight: '800',
     color: colors.textPrimary,
   },
   modulePickerSubtitle: {
-    ...typography.caption,
-    color: colors.textMuted,
+    ...typography.bodySmall,
+    color: colors.textTertiary,
     fontWeight: '700',
   },
-  modulePickerCloseButton: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
+  modulePickerCancelButton: {
+    minWidth: layout.minimumTouchSize,
+    minHeight: layout.minimumTouchSize,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modulePickerCloseButtonPressed: {
-    opacity: 0.78,
+  modulePickerCancelButtonPressed: {
+    opacity: 0.62,
+  },
+  modulePickerCancelText: {
+    ...typography.body,
+    color: colors.success,
+    fontWeight: '600',
   },
   modulePickerMessage: {
     ...typography.caption,
@@ -6176,40 +6258,75 @@ const styles = StyleSheet.create({
     flexGrow: 0,
   },
   modulePickerContent: {
+    gap: spacing.xl,
+    paddingBottom: spacing.sm,
+  },
+  modulePickerSection: {
+    gap: spacing.md,
+  },
+  modulePickerSectionTitle: {
+    ...typography.bodySmall,
+    color: colors.textTertiary,
+    fontWeight: '700',
+  },
+  modulePickerGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
-    paddingBottom: spacing.xs,
   },
   modulePickerOption: {
-    minHeight: 44,
-    borderRadius: radius.lg,
+    width: '31.3%',
+    minHeight: 64,
+    borderRadius: radius.control,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surfaceMuted,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.md,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
+    justifyContent: 'center',
   },
   modulePickerOptionSelected: {
-    borderColor: colors.successBorder,
-    backgroundColor: colors.successBg,
+    borderColor: colors.success,
+    backgroundColor: colors.success,
   },
   modulePickerOptionPressed: {
-    opacity: 0.82,
+    backgroundColor: colors.surfaceMuted,
   },
   modulePickerOptionDisabled: {
     opacity: 0.72,
   },
   modulePickerOptionText: {
     ...typography.bodySmall,
-    flex: 1,
     color: colors.textPrimary,
-    fontWeight: '700',
+    fontWeight: '600',
+    textAlign: 'center',
   },
   modulePickerOptionTextSelected: {
-    color: colors.success,
+    color: colors.white,
+  },
+  modulePickerOptionCheck: {
+    position: 'absolute',
+    right: spacing.md,
+  },
+  modulePickerConfirmButton: {
+    minHeight: layout.primaryButtonHeight,
+    borderRadius: radius.control,
+    backgroundColor: colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modulePickerConfirmButtonPressed: {
+    backgroundColor: colors.accentPressed,
+  },
+  modulePickerConfirmButtonDisabled: {
+    backgroundColor: colors.accentDisabled,
+  },
+  modulePickerConfirmText: {
+    fontSize: 18,
+    lineHeight: 24,
+    color: colors.white,
+    fontWeight: '800',
   },
   metadataModalOverlay: {
     flex: 1,
