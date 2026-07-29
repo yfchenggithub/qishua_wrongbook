@@ -19,6 +19,7 @@ import {
 const SERVICE_SCOPE = 'PrintEnhanceCacheService';
 const CACHE_DIR_PARTS = ['qishua_wrongbook', 'export', 'print-enhanced-cache'] as const;
 const CACHE_VERSION = 1;
+const STALE_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 export type PrintEnhanceCacheStatus =
   | 'bypass_original'
@@ -36,6 +37,7 @@ export type PrintEnhanceCacheCleanupResult = {
   scannedCount: number;
   deletedCount: number;
   failedCount: number;
+  retainedCount: number;
   releasedBytes: number;
 };
 
@@ -203,6 +205,61 @@ function safeReadFileSize(file: File): number {
   }
 }
 
+function safeReadFileModificationTime(file: File): number | null {
+  try {
+    const modificationTime = file.info().modificationTime;
+    return typeof modificationTime === 'number' && Number.isFinite(modificationTime)
+      ? modificationTime
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function deletePrintEnhanceCacheFiles(
+  files: File[],
+  scannedCount: number,
+  retainedCount: number,
+  logEvent: string,
+): Promise<PrintEnhanceCacheCleanupResult> {
+  let deletedCount = 0;
+  let failedCount = 0;
+  let releasedBytes = 0;
+
+  for (const file of files) {
+    const size = safeReadFileSize(file);
+    try {
+      if (file.exists) {
+        file.delete();
+      }
+      deletedCount += 1;
+      releasedBytes += size;
+    } catch (error) {
+      failedCount += 1;
+      Logger.warn(SERVICE_SCOPE, 'Failed to delete print enhance cache file.', {
+        uriPreview: toShortUri(file.uri),
+        error,
+      });
+    }
+  }
+
+  Logger.info(SERVICE_SCOPE, logEvent, {
+    scannedCount,
+    deletedCount,
+    failedCount,
+    retainedCount,
+    releasedBytes,
+  });
+
+  return {
+    scannedCount,
+    deletedCount,
+    failedCount,
+    retainedCount,
+    releasedBytes,
+  };
+}
+
 export async function getCachedPrintEnhancedImageForPdf(
   sourceUriInput: string,
   modeInput?: PrintEnhanceMode,
@@ -310,38 +367,29 @@ export async function getCachedPrintEnhancedImageForPdf(
 
 export async function clearPrintEnhanceImageCache(): Promise<PrintEnhanceCacheCleanupResult> {
   const files = listCacheFiles();
-  let deletedCount = 0;
-  let failedCount = 0;
-  let releasedBytes = 0;
+  return deletePrintEnhanceCacheFiles(
+    files,
+    files.length,
+    0,
+    'print_enhance_cache_cleanup_finished',
+  );
+}
 
-  for (const file of files) {
-    const size = safeReadFileSize(file);
-    try {
-      if (file.exists) {
-        file.delete();
-      }
-      deletedCount += 1;
-      releasedBytes += size;
-    } catch (error) {
-      failedCount += 1;
-      Logger.warn(SERVICE_SCOPE, 'Failed to delete print enhance cache file.', {
-        uriPreview: toShortUri(file.uri),
-        error,
-      });
-    }
-  }
-
-  Logger.info(SERVICE_SCOPE, 'print_enhance_cache_cleanup_finished', {
-    scannedCount: files.length,
-    deletedCount,
-    failedCount,
-    releasedBytes,
+export async function cleanupStalePrintEnhanceImageCache(
+  now: number = Date.now(),
+): Promise<PrintEnhanceCacheCleanupResult> {
+  const files = listCacheFiles();
+  const safeNow = Number.isFinite(now) ? now : Date.now();
+  const staleBefore = safeNow - STALE_CACHE_MAX_AGE_MS;
+  const staleFiles = files.filter((file) => {
+    const modificationTime = safeReadFileModificationTime(file);
+    return modificationTime !== null && modificationTime < staleBefore;
   });
 
-  return {
-    scannedCount: files.length,
-    deletedCount,
-    failedCount,
-    releasedBytes,
-  };
+  return deletePrintEnhanceCacheFiles(
+    staleFiles,
+    files.length,
+    files.length - staleFiles.length,
+    'print_enhance_stale_cache_cleanup_finished',
+  );
 }

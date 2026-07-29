@@ -2,7 +2,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 
 import { Logger } from '@/src/services/Logger';
 import {
-  clearPrintEnhanceImageCache,
+  cleanupStalePrintEnhanceImageCache,
   type PrintEnhanceCacheCleanupResult,
 } from '@/src/services/export/PrintEnhanceCacheService';
 import {
@@ -138,7 +138,7 @@ async function runDailyStorageMaintenance(
   const pdfCleanup = await cleanupHistoricalWorksheetPdfFiles(
     pdfScan.candidates.map((candidate) => candidate.uri),
   );
-  const imageCacheCleanup = await clearPrintEnhanceImageCache();
+  const imageCacheCleanup = await cleanupStalePrintEnhanceImageCache();
   await saveCompletedState(date);
 
   Logger.info(SERVICE_SCOPE, 'Daily storage maintenance completed.', {
@@ -150,6 +150,7 @@ async function runDailyStorageMaintenance(
     pdfReleasedBytes: pdfCleanup.releasedBytes,
     imageDeletedCount: imageCacheCleanup.deletedCount,
     imageFailedCount: imageCacheCleanup.failedCount,
+    imageRetainedCount: imageCacheCleanup.retainedCount,
     imageReleasedBytes: imageCacheCleanup.releasedBytes,
   });
   return {

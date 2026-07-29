@@ -1,3 +1,5 @@
+import { AppState, type AppStateStatus } from 'react-native';
+
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
 import { Logger } from '@/src/services/Logger';
 import type {
@@ -82,6 +84,9 @@ let state: TodayWorksheetGenerationState = INITIAL_STATE;
 let activeGenerationPromise: Promise<TodayWorksheetExportResult> | null = null;
 let activeGenerationOperation: 'prepare' | 'regenerate' | null = null;
 let latestCacheInspectionId = 0;
+let generationActiveElapsedMs = 0;
+let generationActiveSegmentStartedAt: number | null = null;
+let generationClockSubscription: ReturnType<typeof AppState.addEventListener> | null = null;
 const listeners = new Set<() => void>();
 
 function toSafeCount(value: number | null | undefined): number {
@@ -96,6 +101,41 @@ function updateState(next: TodayWorksheetGenerationState): void {
   for (const listener of listeners) {
     listener();
   }
+}
+
+function settleGenerationActiveSegment(now: number = Date.now()): void {
+  if (generationActiveSegmentStartedAt === null) {
+    return;
+  }
+  generationActiveElapsedMs += Math.max(0, now - generationActiveSegmentStartedAt);
+  generationActiveSegmentStartedAt = null;
+}
+
+function handleGenerationAppStateChange(nextState: AppStateStatus): void {
+  const now = Date.now();
+  if (nextState === 'active') {
+    if (generationActiveSegmentStartedAt === null) {
+      generationActiveSegmentStartedAt = now;
+    }
+    return;
+  }
+  settleGenerationActiveSegment(now);
+}
+
+function startGenerationActiveClock(): void {
+  generationClockSubscription?.remove();
+  generationActiveElapsedMs = 0;
+  generationActiveSegmentStartedAt = AppState.currentState === 'active' ? Date.now() : null;
+  generationClockSubscription = AppState.addEventListener(
+    'change',
+    handleGenerationAppStateChange,
+  );
+}
+
+function stopGenerationActiveClock(): void {
+  settleGenerationActiveSegment();
+  generationClockSubscription?.remove();
+  generationClockSubscription = null;
 }
 
 function buildCachedResult(cached: TodayWorksheetCachedExport): TodayWorksheetExportResult {
@@ -372,6 +412,13 @@ export function getTodayWorksheetGenerationState(): TodayWorksheetGenerationStat
   return state;
 }
 
+export function getTodayWorksheetGenerationActiveElapsedMs(): number {
+  const currentSegmentMs = generationActiveSegmentStartedAt === null
+    ? 0
+    : Math.max(0, Date.now() - generationActiveSegmentStartedAt);
+  return Math.max(0, generationActiveElapsedMs + currentSegmentMs);
+}
+
 export function subscribeTodayWorksheetGeneration(listener: () => void): () => void {
   listeners.add(listener);
   return () => {
@@ -437,6 +484,7 @@ export function ensureTodayWorksheet(
   }
 
   activeGenerationOperation = 'prepare';
+  startGenerationActiveClock();
   activeGenerationPromise = runEnsureTodayWorksheet(options)
     .catch((error): TodayWorksheetExportResult => {
       const expectedPendingCount = toSafeCount(options.expectedPendingCount);
@@ -461,6 +509,7 @@ export function ensureTodayWorksheet(
       };
     })
     .finally(() => {
+      stopGenerationActiveClock();
       activeGenerationPromise = null;
       activeGenerationOperation = null;
     });
@@ -482,6 +531,7 @@ export function regenerateTodayWorksheet(
   }
 
   activeGenerationOperation = 'regenerate';
+  startGenerationActiveClock();
   activeGenerationPromise = runRegenerateTodayWorksheet(options)
     .catch((error): TodayWorksheetExportResult => {
       const cachedWorksheet = state.cachedWorksheet;
@@ -523,6 +573,7 @@ export function regenerateTodayWorksheet(
       };
     })
     .finally(() => {
+      stopGenerationActiveClock();
       activeGenerationPromise = null;
       activeGenerationOperation = null;
     });

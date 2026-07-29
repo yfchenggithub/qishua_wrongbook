@@ -1629,7 +1629,7 @@ export default function SettingsScreen() {
       : worksheetExportHintText;
   const worksheetExportProgressDetailText =
     isExportingWorksheet && worksheetExportProgress.total > 0
-      ? `已处理 ${worksheetExportProgress.current} / ${worksheetExportProgress.total} 题 · 用时 ${formatElapsedSeconds(worksheetExportProgress.elapsedSeconds)}`
+      ? `已处理 ${worksheetExportProgress.current} / ${worksheetExportProgress.total} 题 · 前台用时 ${formatElapsedSeconds(worksheetExportProgress.elapsedSeconds)}`
       : '';
   const backupButtonText = isSharingBackup ? '正在打开…' : '分享/导出';
   const automaticBackupSubtitle = automaticBackup
@@ -2539,7 +2539,7 @@ export default function SettingsScreen() {
                   <View style={styles.sheetSection}>
                     <Text style={styles.sheetSectionTitle}>缓存维护</Text>
                     <Text style={styles.sheetBodyText}>
-                      系统每天自动清理打印增强过程中产生的临时图片，不会删除错题正在使用的原图，也可随时手动清理。
+                      系统每天只清理超过 30 天的打印增强缓存，近期缓存会保留以加快练习卷生成。不会删除错题原图，也可随时手动清理全部缓存。
                     </Text>
                     <Pressable
                       accessibilityRole="button"

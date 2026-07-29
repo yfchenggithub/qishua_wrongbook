@@ -4,6 +4,7 @@ import { Logger } from '@/src/services/Logger';
 import {
   ensureTodayWorksheet,
   getCachedTodayWorksheetForOpening,
+  getTodayWorksheetGenerationActiveElapsedMs,
   getTodayWorksheetGenerationState,
   inspectTodayWorksheetCache,
   regenerateTodayWorksheet as requestTodayWorksheetRegeneration,
@@ -171,9 +172,10 @@ export function useTodayWorksheetExport(
       return undefined;
     }
 
-    const startedAt = generationState.startedAt;
     const updateElapsed = () => {
-      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startedAt) / 1000)));
+      setElapsedSeconds(
+        Math.max(0, Math.floor(getTodayWorksheetGenerationActiveElapsedMs() / 1000)),
+      );
     };
     updateElapsed();
     const timer = setInterval(updateElapsed, 1000);

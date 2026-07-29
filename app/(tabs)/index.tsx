@@ -272,7 +272,7 @@ export default function TodayScreen() {
   const exportProgressLabel = isExportingPdf
     ? `${exportPdfProgress.message || '系统正在准备练习卷…'}${
         exportPdfProgress.total > 0
-          ? ` · ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
+          ? ` · ${exportPdfProgress.current} / ${exportPdfProgress.total} 题 · 前台用时 ${formatElapsedSeconds(exportPdfProgress.elapsedSeconds)}`
           : ''
       }`
     : hasCachedWorksheet
