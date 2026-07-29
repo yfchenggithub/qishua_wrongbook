@@ -1,6 +1,7 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -110,6 +111,7 @@ export function OptionalInfoSheet({
   }
 
   function handleBack() {
+    Keyboard.dismiss();
     if (screen === 'newReason') {
       setScreen('reasons');
       return;
@@ -191,7 +193,7 @@ export function OptionalInfoSheet({
 
   return (
     <Modal transparent statusBarTranslucent animationType="slide" visible={visible} onRequestClose={handleRequestClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.layer}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.layer}>
         <Pressable accessibilityLabel="关闭可选信息" onPress={handleRequestClose} style={styles.backdrop} />
         <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 10) }]}>
           <View style={styles.handle} />
