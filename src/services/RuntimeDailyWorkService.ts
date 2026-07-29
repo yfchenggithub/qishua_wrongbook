@@ -2,6 +2,7 @@ import { AppState } from 'react-native';
 
 import { initDatabase } from '@/src/db';
 import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
+import { ensureDailyStorageMaintenance } from '@/src/services/DailyStorageMaintenanceService';
 import { Logger } from '@/src/services/Logger';
 import {
   ensureTodayWorksheet,
@@ -109,7 +110,7 @@ export async function runRuntimeDailyWork(trigger: RuntimeDailyWorkTrigger): Pro
     worksheetResult.status === 'fulfilled'
     && worksheetResult.value.generationActive
   ) {
-    Logger.info(SERVICE_SCOPE, 'Automatic backup deferred while worksheet generation is active.', {
+    Logger.info(SERVICE_SCOPE, 'Automatic backup and storage maintenance deferred while worksheet generation is active.', {
       trigger,
       worksheetOutcome: worksheetResult.value.outcome,
     });
@@ -117,6 +118,7 @@ export async function runRuntimeDailyWork(trigger: RuntimeDailyWorkTrigger): Pro
       trigger,
       elapsedMs: Date.now() - startedAt,
       backupDeferred: true,
+      storageMaintenanceDeferred: true,
     });
     return;
   }
@@ -135,6 +137,25 @@ export async function runRuntimeDailyWork(trigger: RuntimeDailyWorkTrigger): Pro
     Logger.error(SERVICE_SCOPE, 'App runtime automatic backup work failed.', {
       trigger,
       error: backupResult.reason,
+    });
+  }
+
+  const [storageMaintenanceResult] = await Promise.allSettled([
+    ensureDailyStorageMaintenance({ trigger }),
+  ]);
+  if (storageMaintenanceResult.status === 'fulfilled') {
+    Logger.info(SERVICE_SCOPE, 'App runtime daily storage maintenance finished.', {
+      trigger,
+      outcome: storageMaintenanceResult.value.outcome,
+      date: storageMaintenanceResult.value.date,
+      pdfDeletedCount: storageMaintenanceResult.value.pdfCleanup?.deletedCount ?? 0,
+      imageDeletedCount:
+        storageMaintenanceResult.value.imageCacheCleanup?.deletedCount ?? 0,
+    });
+  } else {
+    Logger.error(SERVICE_SCOPE, 'App runtime daily storage maintenance failed.', {
+      trigger,
+      error: storageMaintenanceResult.reason,
     });
   }
 

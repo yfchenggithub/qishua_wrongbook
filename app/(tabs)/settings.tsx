@@ -2506,7 +2506,7 @@ export default function SettingsScreen() {
                   <View style={styles.sheetSection}>
                     <Text style={styles.sheetSectionTitle}>PDF 维护</Text>
                     <Text style={styles.sheetBodyText}>
-                      扫描并清理以前日期的练习卷、旧索引和生成失败后遗留的 PDF。今天仍有效的练习卷不会删除，清理前会再次确认。
+                      系统每天自动清理以前日期的练习卷、旧索引和生成失败后遗留的 PDF。今天仍有效的练习卷不会删除，也可随时手动清理。
                     </Text>
                     <Pressable
                       accessibilityRole="button"
@@ -2531,7 +2531,7 @@ export default function SettingsScreen() {
                           ? '正在扫描历史 PDF…'
                           : isCleaningHistoricalPdfs
                             ? '正在清理历史 PDF…'
-                            : '清理历史 PDF'}
+                            : '立即清理历史 PDF'}
                       </Text>
                     </Pressable>
                   </View>
@@ -2539,7 +2539,7 @@ export default function SettingsScreen() {
                   <View style={styles.sheetSection}>
                     <Text style={styles.sheetSectionTitle}>缓存维护</Text>
                     <Text style={styles.sheetBodyText}>
-                      清理打印增强过程中产生的临时图片，不会删除错题正在使用的原图。
+                      系统每天自动清理打印增强过程中产生的临时图片，不会删除错题正在使用的原图，也可随时手动清理。
                     </Text>
                     <Pressable
                       accessibilityRole="button"
@@ -2557,7 +2557,7 @@ export default function SettingsScreen() {
                         ? <ActivityIndicator color={colors.accent} size="small" />
                         : <MaterialIcons color={colors.accent} name="cleaning-services" size={20} />}
                       <Text style={styles.secondarySheetButtonText}>
-                        {isClearingPrintEnhanceCache ? '正在清理…' : '清理图片缓存'}
+                        {isClearingPrintEnhanceCache ? '正在清理…' : '立即清理图片缓存'}
                       </Text>
                     </Pressable>
                   </View>

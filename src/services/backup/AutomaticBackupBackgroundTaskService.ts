@@ -3,6 +3,7 @@ import * as TaskManager from 'expo-task-manager';
 import { Platform } from 'react-native';
 
 import { initDatabase } from '@/src/db';
+import { ensureDailyStorageMaintenance } from '@/src/services/DailyStorageMaintenanceService';
 import { Logger } from '@/src/services/Logger';
 import { ensureDailyAutomaticBackup } from '@/src/services/backup/AutomaticBackupService';
 
@@ -23,13 +24,48 @@ if (!TaskManager.isTaskDefined(TASK_NAME)) {
 
     try {
       await initDatabase();
-      const result = await ensureDailyAutomaticBackup({ trigger: 'background' });
-      Logger.info(SERVICE_SCOPE, 'Background automatic backup task finished.', {
-        eventId: executionInfo.eventId,
-        outcome: result.outcome,
-        fileName: result.backup.fileName,
-        deletedCount: result.deletedCount,
-      });
+      const [backupResult, storageMaintenanceResult] = await Promise.allSettled([
+        ensureDailyAutomaticBackup({ trigger: 'background' }),
+        ensureDailyStorageMaintenance({ trigger: 'background_task' }),
+      ]);
+
+      if (backupResult.status === 'fulfilled') {
+        Logger.info(SERVICE_SCOPE, 'Background automatic backup task finished.', {
+          eventId: executionInfo.eventId,
+          outcome: backupResult.value.outcome,
+          fileName: backupResult.value.backup.fileName,
+          deletedCount: backupResult.value.deletedCount,
+        });
+      } else {
+        Logger.error(SERVICE_SCOPE, 'Background automatic backup task failed.', {
+          eventId: executionInfo.eventId,
+          error: backupResult.reason,
+        });
+      }
+
+      if (storageMaintenanceResult.status === 'fulfilled') {
+        Logger.info(SERVICE_SCOPE, 'Background daily storage maintenance finished.', {
+          eventId: executionInfo.eventId,
+          outcome: storageMaintenanceResult.value.outcome,
+          date: storageMaintenanceResult.value.date,
+          pdfDeletedCount:
+            storageMaintenanceResult.value.pdfCleanup?.deletedCount ?? 0,
+          imageDeletedCount:
+            storageMaintenanceResult.value.imageCacheCleanup?.deletedCount ?? 0,
+        });
+      } else {
+        Logger.error(SERVICE_SCOPE, 'Background daily storage maintenance failed.', {
+          eventId: executionInfo.eventId,
+          error: storageMaintenanceResult.reason,
+        });
+      }
+
+      if (
+        backupResult.status === 'rejected'
+        || storageMaintenanceResult.status === 'rejected'
+      ) {
+        return BackgroundTask.BackgroundTaskResult.Failed;
+      }
       return BackgroundTask.BackgroundTaskResult.Success;
     } catch (taskError) {
       Logger.error(SERVICE_SCOPE, 'Background automatic backup task failed.', {
