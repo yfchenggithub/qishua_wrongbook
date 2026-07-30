@@ -4685,7 +4685,11 @@ export default function MistakeDetailScreen() {
                 ]}>
                 <DetailSectionHeader
                   title="复做记录"
-                  actionLabel={showAllReviewRecords ? '收起' : '查看全部'}
+                  actionLabel={
+                    state.detail.reviewRecords.length > 3
+                      ? (showAllReviewRecords ? '收起' : '查看全部')
+                      : undefined
+                  }
                   onAction={() => setShowAllReviewRecords((current) => !current)}
                 />
 
