@@ -35,7 +35,7 @@ export interface ModulePickerSheetProps {
   recentIds: string[];
   busy?: boolean;
   onCancel: () => void;
-  onComplete: (option: ModulePickerOption | null) => void;
+  onSelect: (option: ModulePickerOption) => void;
   onCreateCustom: (name: string) => Promise<ModulePickerOption | null>;
 }
 
@@ -46,12 +46,11 @@ export function ModulePickerSheet({
   recentIds,
   busy = false,
   onCancel,
-  onComplete,
+  onSelect,
   onCreateCustom,
 }: ModulePickerSheetProps) {
   const insets = useSafeAreaInsets();
   const [screen, setScreen] = useState<'list' | 'create'>('list');
-  const [temporaryId, setTemporaryId] = useState<string | null>(selectedId);
   const [searchText, setSearchText] = useState('');
   const [customName, setCustomName] = useState('');
   const [message, setMessage] = useState<string | null>(null);
@@ -60,7 +59,6 @@ export function ModulePickerSheet({
   useEffect(() => {
     if (!visible) return;
     setScreen('list');
-    setTemporaryId(selectedId);
     setSearchText('');
     setCustomName('');
     setMessage(null);
@@ -78,7 +76,12 @@ export function ModulePickerSheet({
     .map((id) => options.find((option) => option.id === id))
     .filter((option): option is ModulePickerOption => !!option)
     .slice(0, 3);
-  const temporaryOption = options.find((option) => option.id === temporaryId) ?? null;
+
+  function handleSelect(id: string) {
+    if (busy) return;
+    const option = options.find((item) => item.id === id);
+    if (option) onSelect(option);
+  }
 
   async function handleCreate() {
     if (creating || busy) return;
@@ -92,9 +95,8 @@ export function ModulePickerSheet({
     try {
       const created = await onCreateCustom(name);
       if (!created) return;
-      setTemporaryId(created.id);
-      setScreen('list');
       setCustomName('');
+      onSelect(created);
     } finally {
       setCreating(false);
     }
@@ -119,12 +121,7 @@ export function ModulePickerSheet({
               <View style={styles.header}>
                 <Pressable onPress={onCancel} style={styles.headerAction}><Text style={styles.headerActionText}>取消</Text></Pressable>
                 <Text style={styles.headerTitle}>选择模块</Text>
-                <Pressable
-                  disabled={!temporaryOption || busy}
-                  onPress={() => onComplete(temporaryOption)}
-                  style={styles.headerAction}>
-                  <Text style={[styles.headerActionText, styles.green, (!temporaryOption || busy) && styles.disabledText]}>完成</Text>
-                </Pressable>
+                <View style={styles.headerAction} />
               </View>
               <View style={styles.searchWrap}>
                 <MaterialIcons name="search" size={22} color={SECONDARY} />
@@ -152,16 +149,16 @@ export function ModulePickerSheet({
                   <GridOptionSection
                     title={`搜索结果（${filteredOptions.length}）`}
                     options={filteredOptions}
-                    selectedId={temporaryId}
-                    onSelect={setTemporaryId}
+                    selectedId={selectedId}
+                    onSelect={handleSelect}
                   />
                 ) : (
                   <>
                     {recentOptions.length > 0 ? (
                       <RecentOptionSection
                         options={recentOptions}
-                        selectedId={temporaryId}
-                        onSelect={setTemporaryId}
+                        selectedId={selectedId}
+                        onSelect={handleSelect}
                       />
                     ) : (
                       <View style={styles.section}>
@@ -172,14 +169,14 @@ export function ModulePickerSheet({
                     <GridOptionSection
                       title="全部模块"
                       options={builtInOptions}
-                      selectedId={temporaryId}
-                      onSelect={setTemporaryId}
+                      selectedId={selectedId}
+                      onSelect={handleSelect}
                     />
                     <GridOptionSection
                       title="自定义"
                       options={customOptions}
-                      selectedId={temporaryId}
-                      onSelect={setTemporaryId}
+                      selectedId={selectedId}
+                      onSelect={handleSelect}
                     />
                   </>
                 )}

@@ -36,6 +36,10 @@ import type { CustomModule } from '@/src/models/CustomModule';
 import type { ImageBatchProgress, LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import { MistakeRepository } from '@/src/repositories/MistakeRepository';
 import { createEmptyAddMistakeDraft, validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
+import {
+  loadLastSelectedModuleId,
+  saveLastSelectedModuleId,
+} from '@/src/services/AddMistakePreferenceService';
 import { createMistakesFromDraft } from '@/src/services/CreateMistakeService';
 import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
@@ -153,11 +157,37 @@ export default function AddScreen() {
       CustomModuleService.listCustomModules(),
       CustomErrorReasonService.listCustomErrorReasons(),
       MistakeRepository.listRecentMistakes(12),
-    ]).then(([modules, reasons, recentMistakes]) => {
+      loadLastSelectedModuleId(),
+    ]).then(([modules, reasons, recentMistakes, lastSelectedModuleId]) => {
       if (!mounted) return;
+      const availableModuleOptions: ModulePickerOption[] = [
+        ...MODULE_OPTIONS.map((item) => ({ id: item.id, label: item.label })),
+        ...modules.map(customModuleOption),
+      ];
+      const lastSavedMistake = recentMistakes[0];
+      const rememberedOption = availableModuleOptions.find((option) => option.id === lastSelectedModuleId)
+        ?? availableModuleOptions.find((option) => (
+          option.id === lastSavedMistake?.module_id || option.label === lastSavedMistake?.module
+        ));
+      const recentNames = Array.from(new Set(recentMistakes.map((item) => item.module)));
+      if (rememberedOption) {
+        setDraft((current) => current.moduleId ? current : {
+          ...current,
+          moduleId: rememberedOption.id,
+          module: rememberedOption.label,
+        });
+        setRecentModuleNames([
+          rememberedOption.label,
+          ...recentNames.filter((name) => name !== rememberedOption.label),
+        ].slice(0, 3));
+        if (rememberedOption.id !== lastSelectedModuleId) {
+          void saveLastSelectedModuleId(rememberedOption.id);
+        }
+      } else {
+        setRecentModuleNames(recentNames.slice(0, 3));
+      }
       setCustomModules(modules);
       setCustomReasons(reasons);
-      setRecentModuleNames(Array.from(new Set(recentMistakes.map((item) => item.module))).slice(0, 3));
     }).catch((error) => {
       Logger.error(PAGE_SCOPE, 'Failed to load add-screen options.', { error });
       if (mounted) showToast('部分自定义选项加载失败', 'warning');
@@ -377,7 +407,11 @@ export default function AddScreen() {
       const count = result.mistakeIds?.length ?? 1;
       const moduleName = saveDraft.module?.trim();
       if (moduleName) setRecentModuleNames((current) => [moduleName, ...current.filter((item) => item !== moduleName)].slice(0, 3));
-      setDraft(createEmptyAddMistakeDraft());
+      setDraft({
+        ...createEmptyAddMistakeDraft(),
+        moduleId: saveDraft.moduleId,
+        module: saveDraft.module,
+      });
       setStage('QUESTION');
       setPreview(null);
       showToast(
@@ -515,9 +549,14 @@ export default function AddScreen() {
         recentIds={recentModuleIds}
         busy={busy}
         onCancel={() => setModuleSheetVisible(false)}
-        onComplete={(option) => {
-          setDraft((current) => ({ ...current, moduleId: option?.id ?? null, module: option?.label ?? null }));
+        onSelect={(option) => {
+          setDraft((current) => ({ ...current, moduleId: option.id, module: option.label }));
+          setRecentModuleNames((current) => [
+            option.label,
+            ...current.filter((item) => item !== option.label),
+          ].slice(0, 3));
           setModuleSheetVisible(false);
+          void saveLastSelectedModuleId(option.id);
         }}
         onCreateCustom={handleCreateModule}
       />
