@@ -593,7 +593,6 @@ export default function LibraryScreen() {
   const [joiningReviewPlanMistakeId, setJoiningReviewPlanMistakeId] = useState<string | null>(null);
 
   const [moduleSheetVisible, setModuleSheetVisible] = useState(false);
-  const [draftModule, setDraftModule] = useState<string | null>(null);
   const [tagSheetVisible, setTagSheetVisible] = useState(false);
   const [draftTag, setDraftTag] = useState<SelectedTag | null>(null);
   const [tagSearchText, setTagSearchText] = useState('');
@@ -815,7 +814,6 @@ export default function LibraryScreen() {
   const handleReset = useCallback(() => {
     setSearchText('');
     setFilters(DEFAULT_FILTER_STATE);
-    setDraftModule(null);
     setDraftTag(null);
     setTagSearchText('');
     setScheduledDate(null);
@@ -823,22 +821,21 @@ export default function LibraryScreen() {
   }, [scrollToTop]);
 
   const handleOpenModuleSheet = useCallback(() => {
-    setDraftModule(filters.module);
     setModuleSheetVisible(true);
-  }, [filters.module]);
+  }, []);
 
-  const handleApplyModule = useCallback(() => {
+  const handleSelectModule = useCallback((moduleName: string | null) => {
     const validTags = new Set(
-      buildTagOptions(items, draftModule).slice(1).map((option) => option.value),
+      buildTagOptions(items, moduleName).slice(1).map((option) => option.value),
     );
     setFilters((current) => ({
       ...current,
-      module: draftModule,
+      module: moduleName,
       tag: current.tag && !validTags.has(current.tag.key) ? null : current.tag,
     }));
     setModuleSheetVisible(false);
     scrollToTop();
-  }, [draftModule, items, scrollToTop]);
+  }, [items, scrollToTop]);
 
   const handleOpenTagSheet = useCallback(() => {
     setDraftTag(filters.tag);
@@ -1384,9 +1381,7 @@ export default function LibraryScreen() {
               <Text style={styles.manageModuleText}>管理自定义模块</Text>
             </Pressable>
           )}
-          headerActionLabel="完成"
           onClose={() => setModuleSheetVisible(false)}
-          onHeaderAction={handleApplyModule}
           title="选择模块"
           visible={moduleSheetVisible}>
           <FlatList
@@ -1397,8 +1392,8 @@ export default function LibraryScreen() {
               <OptionRow
                 count={option.count}
                 label={option.label}
-                onPress={() => setDraftModule(option.value)}
-                selected={draftModule === option.value}
+                onPress={() => handleSelectModule(option.value)}
+                selected={filters.module === option.value}
               />
             )}
             style={styles.sheetList}
