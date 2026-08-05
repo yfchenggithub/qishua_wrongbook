@@ -3,7 +3,7 @@ import { HeaderBackButton } from '@react-navigation/elements';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { File } from 'expo-file-system';
 import * as Print from 'expo-print';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -18,12 +18,14 @@ import Pdf from 'react-native-pdf';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Logger } from '@/src/services/Logger';
+import { prepareCachedTodayReviewPdfZip } from '@/src/services/TodayReviewPdfBundleService';
 import * as TodayReviewPdfExportService from '@/src/services/TodayReviewPdfExportService';
 import { colors, layout, radius, shadows, spacing, typography } from '@/src/styles/tokens';
 
 const PAGE_SCOPE = 'PdfPreviewScreen';
 
 type ShareSetStatus = 'idle' | 'success' | 'error';
+type ShareBundleStatus = 'preparing' | 'ready' | 'error';
 
 function normalizeParamText(value: string | string[] | undefined): string | null {
   if (Array.isArray(value)) {
@@ -173,9 +175,13 @@ export default function PdfPreviewScreen() {
   const [isSharingWholeSet, setIsSharingWholeSet] = useState(false);
   const [isSharingCurrentPdf, setIsSharingCurrentPdf] = useState(false);
   const [shareSetStatus, setShareSetStatus] = useState<ShareSetStatus>('idle');
+  const [shareBundleStatus, setShareBundleStatus] = useState<ShareBundleStatus>(
+    pdfUris.length > 1 ? 'preparing' : 'ready',
+  );
   const [isPrinting, setIsPrinting] = useState(false);
   const [isOpeningExternally, setIsOpeningExternally] = useState(false);
   const [isMoreMenuVisible, setIsMoreMenuVisible] = useState(false);
+  const shareBundleRequestIdRef = useRef(0);
 
   const pdfUri = pdfUris[selectedPdfIndex] ?? primaryPdfUri;
   const currentPdfPageCount = pageCounts[selectedPdfIndex] > 0
@@ -199,6 +205,56 @@ export default function PdfPreviewScreen() {
       (_, index) => routePageCounts[index] || previous[index] || 0,
     ));
   }, [pdfPartCount, routePageCounts]);
+
+  const prepareShareBundle = useCallback(async () => {
+    const requestId = shareBundleRequestIdRef.current + 1;
+    shareBundleRequestIdRef.current = requestId;
+    setShareSetStatus('idle');
+
+    if (pdfUris.length <= 0) {
+      setShareBundleStatus('error');
+      return;
+    }
+    if (pdfUris.length === 1) {
+      setShareBundleStatus('ready');
+      return;
+    }
+
+    const startedAt = Date.now();
+    setShareBundleStatus('preparing');
+    Logger.info(PAGE_SCOPE, 'pdf_preview_share_zip_prepare_start', {
+      pdfPartCount: pdfUris.length,
+    });
+    try {
+      const zipUri = await prepareCachedTodayReviewPdfZip(pdfUris);
+      if (shareBundleRequestIdRef.current !== requestId) {
+        return;
+      }
+      setShareBundleStatus('ready');
+      Logger.info(PAGE_SCOPE, 'pdf_preview_share_zip_prepare_success', {
+        pdfPartCount: pdfUris.length,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        zipUriPreview: toSafeUriPreview(zipUri),
+      });
+    } catch (error) {
+      if (shareBundleRequestIdRef.current !== requestId) {
+        return;
+      }
+      setShareBundleStatus('error');
+      Logger.error(PAGE_SCOPE, 'pdf_preview_share_zip_prepare_failed', {
+        pdfPartCount: pdfUris.length,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        error,
+      });
+    }
+  }, [pdfUris]);
+
+  useEffect(() => {
+    void prepareShareBundle();
+    return () => {
+      shareBundleRequestIdRef.current += 1;
+    };
+  }, [prepareShareBundle]);
 
   useEffect(() => {
     if (shareSetStatus !== 'success') {
@@ -332,7 +388,11 @@ export default function PdfPreviewScreen() {
   }, [isBusy, pdfPartCount, pdfUri, selectedPdfIndex]);
 
   const handleShareWholeSet = useCallback(async () => {
-    if (pdfUris.length <= 0 || isBusy) {
+    if (shareBundleStatus === 'error') {
+      await prepareShareBundle();
+      return;
+    }
+    if (pdfUris.length <= 0 || isBusy || shareBundleStatus !== 'ready') {
       return;
     }
 
@@ -375,7 +435,7 @@ export default function PdfPreviewScreen() {
     } finally {
       setIsSharingWholeSet(false);
     }
-  }, [isBusy, pdfUris, totalPageCount]);
+  }, [isBusy, pdfUris, prepareShareBundle, shareBundleStatus, totalPageCount]);
 
   const handlePrintPdf = useCallback(async () => {
     if (!pdfUri || isBusy) {
@@ -397,13 +457,19 @@ export default function PdfPreviewScreen() {
     }
   }, [isBusy, pdfPartCount, pdfUri, selectedPdfIndex]);
 
-  const shareButtonTitle = isSharingWholeSet
-    ? '正在打开分享面板…'
-    : shareSetStatus === 'error'
-      ? '重新分享整套 PDF'
-      : shareSetStatus === 'success'
-        ? '分享面板已打开'
-        : '分享整套 PDF';
+  const isShareBundlePreparing = shareBundleStatus === 'preparing';
+  const isShareSetButtonDisabled = isBusy || pdfUris.length <= 0 || isShareBundlePreparing;
+  const shareButtonTitle = isShareBundlePreparing
+    ? '正在准备分享文件…'
+    : shareBundleStatus === 'error'
+      ? '准备失败，点击重试'
+      : isSharingWholeSet
+        ? '正在打开分享面板…'
+        : shareSetStatus === 'error'
+          ? '重新分享整套 PDF'
+          : shareSetStatus === 'success'
+            ? '分享面板已打开'
+            : '分享整套 PDF';
 
   return (
     <>
@@ -613,18 +679,25 @@ export default function PdfPreviewScreen() {
 
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ disabled: isBusy || pdfUris.length <= 0 }}
-            disabled={isBusy || pdfUris.length <= 0}
+            accessibilityState={{
+              busy: isSharingWholeSet || isShareBundlePreparing,
+              disabled: isShareSetButtonDisabled,
+            }}
+            disabled={isShareSetButtonDisabled}
             onPress={() => void handleShareWholeSet()}
             style={({ pressed }) => [
               styles.shareSetButton,
-              pressed && !isBusy ? styles.shareSetButtonPressed : null,
-              isBusy || pdfUris.length <= 0 ? styles.shareSetButtonDisabled : null,
+              pressed && !isShareSetButtonDisabled ? styles.shareSetButtonPressed : null,
+              isShareSetButtonDisabled ? styles.shareSetButtonDisabled : null,
             ]}>
-            {isSharingWholeSet ? (
+            {isSharingWholeSet || isShareBundlePreparing ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
-              <MaterialIcons color={colors.white} name="ios-share" size={27} />
+              <MaterialIcons
+                color={colors.white}
+                name={shareBundleStatus === 'error' ? 'refresh' : 'ios-share'}
+                size={27}
+              />
             )}
             <View style={styles.shareSetCopy}>
               <Text numberOfLines={1} maxFontSizeMultiplier={1.1} style={styles.shareSetTitle}>

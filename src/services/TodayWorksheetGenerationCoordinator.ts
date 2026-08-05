@@ -9,6 +9,7 @@ import type {
   TodayWorksheetExportStage,
 } from '@/src/services/TodayWorksheetExportService';
 import * as TodayWorksheetExportService from '@/src/services/TodayWorksheetExportService';
+import { prepareCachedTodayReviewPdfZip } from '@/src/services/TodayReviewPdfBundleService';
 import type {
   PrintEnhanceClearPrintStrength,
   PrintEnhanceConcurrency,
@@ -151,6 +152,28 @@ function buildCachedResult(cached: TodayWorksheetCachedExport): TodayWorksheetEx
   };
 }
 
+function warmTodayWorksheetShareBundle(cached: TodayWorksheetCachedExport): void {
+  if (cached.fileUris.length <= 1) {
+    return;
+  }
+
+  const startedAt = Date.now();
+  void prepareCachedTodayReviewPdfZip(cached.fileUris)
+    .then(() => {
+      Logger.info(SERVICE_SCOPE, 'Today worksheet share ZIP is ready.', {
+        pdfPartCount: cached.fileUris.length,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+    })
+    .catch((error) => {
+      Logger.warn(SERVICE_SCOPE, 'Failed to warm today worksheet share ZIP.', {
+        pdfPartCount: cached.fileUris.length,
+        durationMs: Math.max(0, Date.now() - startedAt),
+        error,
+      });
+    });
+}
+
 async function resolvePrintEnhanceSettings(
   options: EnsureTodayWorksheetOptions,
 ): Promise<ResolvedPrintEnhanceSettings> {
@@ -187,6 +210,7 @@ async function runEnsureTodayWorksheet(
   const settings = await resolvePrintEnhanceSettings(options);
   const cached = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
   if (cached) {
+    warmTodayWorksheetShareBundle(cached);
     const cachedCount = Math.max(1, toSafeCount(cached.exportedCount));
     updateState({
       status: 'ready',
@@ -253,6 +277,7 @@ async function runEnsureTodayWorksheet(
       });
       return cacheMissingResult;
     }
+    warmTodayWorksheetShareBundle(cachedWorksheet);
     const completedCount = Math.max(1, toSafeCount(result.exportedCount));
     updateState({
       status: 'ready',
@@ -346,6 +371,7 @@ async function runRegenerateTodayWorksheet(
   if (result.outcome === 'success') {
     const refreshedCache = await TodayWorksheetExportService.getCachedTodayWorksheet(settings.mode);
     if (refreshedCache) {
+      warmTodayWorksheetShareBundle(refreshedCache);
       const completedCount = Math.max(1, toSafeCount(refreshedCache.exportedCount));
       updateState({
         status: 'ready',
@@ -436,6 +462,7 @@ export async function inspectTodayWorksheetCache(
     return cached;
   }
   if (cached) {
+    warmTodayWorksheetShareBundle(cached);
     const count = Math.max(1, toSafeCount(cached.exportedCount));
     updateState({
       status: 'ready',

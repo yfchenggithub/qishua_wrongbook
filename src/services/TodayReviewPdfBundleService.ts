@@ -2,8 +2,9 @@ import { Directory, File, Paths, type FileHandle } from 'expo-file-system';
 import { Zip, ZipPassThrough } from 'fflate';
 
 const SHARE_CACHE_DIR_NAME = 'qishua_wrongbook_pdf_share';
-const COMPLETE_ZIP_FILE_PREFIX = 'qishua_today_review_complete';
+const COMPLETE_ZIP_FILE_PREFIX = 'qishua_today_review_complete_v2';
 const ZIP_READ_CHUNK_BYTES = 512 * 1024;
+const MINIMUM_ZIP_FILE_SIZE_BYTES = 22;
 const activeCachedBundlePromises = new Map<string, Promise<string>>();
 
 function ensureShareCacheDirectory(): Directory {
@@ -39,7 +40,9 @@ function toArchiveFileName(index: number, total: number): string {
 function isUsableFile(file: File): boolean {
   try {
     const info = file.info();
-    return info.exists && typeof info.size === 'number' && info.size > 0;
+    return info.exists
+      && typeof info.size === 'number'
+      && info.size >= MINIMUM_ZIP_FILE_SIZE_BYTES;
   } catch {
     return false;
   }
@@ -131,7 +134,8 @@ async function createOrderedPdfZipFile(fileUris: string[], outputFile: File): Pr
     throw new Error('One or more PDF files no longer exist.');
   }
 
-  outputFile.create({ intermediates: true, overwrite: true });
+  const temporaryOutputFile = new File(`${outputFile.uri}.next`);
+  temporaryOutputFile.create({ intermediates: true, overwrite: true });
 
   let outputHandle: FileHandle | null = null;
   let zipError: unknown | null = null;
@@ -150,7 +154,7 @@ async function createOrderedPdfZipFile(fileUris: string[], outputFile: File): Pr
   });
 
   try {
-    outputHandle = outputFile.open();
+    outputHandle = temporaryOutputFile.open();
     for (let index = 0; index < sourceFiles.length; index += 1) {
       pushSourceFile(
         zip,
@@ -168,17 +172,29 @@ async function createOrderedPdfZipFile(fileUris: string[], outputFile: File): Pr
     if (!zipFinalized) {
       throw new Error('PDF share archive was not finalized.');
     }
-    return outputFile.uri;
   } catch (error) {
     zip.terminate();
     closeFileHandle(outputHandle);
     outputHandle = null;
-    if (outputFile.exists) {
-      outputFile.delete();
+    if (temporaryOutputFile.exists) {
+      temporaryOutputFile.delete();
     }
     throw error;
   } finally {
     closeFileHandle(outputHandle);
+  }
+
+  try {
+    if (outputFile.exists) {
+      outputFile.delete();
+    }
+    temporaryOutputFile.move(outputFile);
+    return outputFile.uri;
+  } catch (error) {
+    if (temporaryOutputFile.exists) {
+      temporaryOutputFile.delete();
+    }
+    throw error;
   }
 }
 

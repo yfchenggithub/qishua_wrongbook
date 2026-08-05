@@ -2304,29 +2304,6 @@ export async function shareTodayReviewPdfSet(
       : result;
   }
 
-  try {
-    const sharedAsMultipleFiles = await AndroidFileShareService.shareFiles(
-      normalizedUris,
-      PDF_MIME_TYPE,
-      SHARE_SET_DIALOG_TITLE,
-    );
-    if (sharedAsMultipleFiles) {
-      Logger.info(SERVICE_SCOPE, 'Opened one Android share sheet for the complete PDF set.', {
-        pdfPartCount: normalizedUris.length,
-        shareMode: 'multiple_pdf',
-      });
-      return {
-        success: true,
-        mode: 'multiple_pdf',
-      };
-    }
-  } catch (error) {
-    Logger.warn(SERVICE_SCOPE, 'Multiple PDF sharing is unavailable; falling back to ZIP.', {
-      pdfPartCount: normalizedUris.length,
-      error,
-    });
-  }
-
   let zipUri: string;
   try {
     zipUri = await prepareCachedTodayReviewPdfZip(normalizedUris);
