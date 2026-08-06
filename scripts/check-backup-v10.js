@@ -138,6 +138,19 @@ function buildSourceFixture(database) {
       updated_at: FIXTURE_TIMESTAMP,
     },
     {
+      id: 2,
+      type: 'system',
+      name: 'sequence',
+      display_code: 'B',
+      custom_no: null,
+      icon: 'label',
+      color: '#34C759',
+      sort_order: 1,
+      is_active: 1,
+      created_at: FIXTURE_TIMESTAMP,
+      updated_at: FIXTURE_TIMESTAMP,
+    },
+    {
       id: 1001,
       type: 'custom',
       name: '专项模块',
@@ -153,12 +166,18 @@ function buildSourceFixture(database) {
   ]);
   insertRows(database, 'mistakes', MISTAKE_FIELDS, [
     buildMistake('system-a001', '函数', 1, 1),
+    buildMistake('system-b001', 'sequence', 2, 1),
     buildMistake('custom-u016-001', '专项模块', 1001, 1),
   ]);
   insertRows(database, 'module_question_counters', COUNTER_FIELDS, [
     {
       module_id: 1,
       last_question_no: 2,
+      updated_at: FIXTURE_TIMESTAMP,
+    },
+    {
+      module_id: 2,
+      last_question_no: 1,
       updated_at: FIXTURE_TIMESTAMP,
     },
     {
@@ -365,6 +384,7 @@ ORDER BY mistakes.id ASC;`,
       [
         { id: 'custom-u016-001', moduleId: 1001, displayCode: 'U016-001' },
         { id: 'system-a001', moduleId: 1, displayCode: 'A001' },
+        { id: 'system-b001', moduleId: 2, displayCode: 'B001' },
       ],
       '恢复后系统/自定义模块关联或显示编号不一致',
     );
@@ -381,7 +401,14 @@ ORDER BY mistakes.id ASC;`,
       'custom-u016-002',
       '专项模块',
     );
+    const nextSecondSystemQuestionNo = reserveNextQuestionNumber(
+      targetDatabase,
+      2,
+      'system-b002',
+      'sequence',
+    );
     assert.equal(nextSystemQuestionNo, 3, '已删除的 A002 被错误复用');
+    assert.equal(nextSecondSystemQuestionNo, 2, 'B module did not continue independently from B001.');
     assert.equal(nextCustomQuestionNo, 2, '自定义模块计数器未从 U016-001 继续');
 
     const finalCounters = selectRows(
@@ -392,6 +419,7 @@ ORDER BY mistakes.id ASC;`,
     ).map(({ module_id, last_question_no }) => ({ module_id, last_question_no }));
     assert.deepEqual(finalCounters, [
       { module_id: 1, last_question_no: 3 },
+      { module_id: 2, last_question_no: 2 },
       { module_id: 1001, last_question_no: 2 },
     ]);
   } finally {
