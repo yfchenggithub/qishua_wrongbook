@@ -8,6 +8,11 @@ export interface SystemModuleDefinition {
   sortOrder: number;
 }
 
+export interface ParsedMistakeDisplayCode {
+  moduleDisplayCode: string;
+  questionNo: number;
+}
+
 export const SYSTEM_MODULE_DEFINITIONS = [
   { id: 1, legacyId: 'builtin:module:function', name: '函数', displayCode: 'A', sortOrder: 0 },
   { id: 2, legacyId: 'builtin:module:sequence', name: '数列', displayCode: 'B', sortOrder: 1 },
@@ -56,6 +61,40 @@ export function formatMistakeDisplayCode(
   return isCustomCode
     ? `${normalizedModuleCode}-${questionCode}`
     : `${normalizedModuleCode}${questionCode}`;
+}
+
+export function parseMistakeDisplayCode(
+  value: string | null | undefined,
+): ParsedMistakeDisplayCode | null {
+  const normalizedValue = value?.trim().toUpperCase() ?? '';
+  const systemMatch = /^([A-JZ])(\d{3})$/.exec(normalizedValue);
+  if (systemMatch) {
+    const questionNo = Number(systemMatch[2]);
+    return questionNo >= 1 && questionNo <= MODULE_QUESTION_MAX_NUMBER
+      ? { moduleDisplayCode: systemMatch[1], questionNo }
+      : null;
+  }
+
+  const customMatch = /^(U\d{3})-(\d{3})$/.exec(normalizedValue);
+  if (!customMatch) {
+    return null;
+  }
+
+  const customModuleNo = Number(customMatch[1].slice(1));
+  const questionNo = Number(customMatch[2]);
+  if (
+    customModuleNo < 1
+    || customModuleNo > CUSTOM_MODULE_MAX_NUMBER
+    || questionNo < 1
+    || questionNo > MODULE_QUESTION_MAX_NUMBER
+  ) {
+    return null;
+  }
+
+  return {
+    moduleDisplayCode: customMatch[1],
+    questionNo,
+  };
 }
 
 export function resolveSystemModuleByLegacyIdOrName(

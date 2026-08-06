@@ -1,6 +1,6 @@
 import { getDatabase, initDatabase, withDatabaseTransaction } from '@/src/db';
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
-import { MODULE_QUESTION_MAX_NUMBER } from '@/src/constants/modules';
+import { MODULE_QUESTION_MAX_NUMBER, parseMistakeDisplayCode } from '@/src/constants/modules';
 import type {
   CreateMistakeInput,
   Mistake,
@@ -649,9 +649,24 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
 
   const keyword = normalizeKeyword(options?.keyword);
   if (keyword) {
-    const likeKeyword = `%${keyword}%`;
-    const likeTagKeyword = `%${keyword.toLocaleLowerCase()}%`;
-    whereClauses.push(`(
+    const parsedQuestionCode = parseMistakeDisplayCode(keyword);
+    if (parsedQuestionCode) {
+      whereClauses.push(`(
+  question_no = ?
+  AND EXISTS (
+    SELECT 1 FROM modules module_code_search
+    WHERE module_code_search.id = mistakes.module_id
+      AND UPPER(module_code_search.display_code) = ?
+  )
+)`);
+      bindParams.push(
+        parsedQuestionCode.questionNo,
+        parsedQuestionCode.moduleDisplayCode,
+      );
+    } else {
+      const likeKeyword = `%${keyword}%`;
+      const likeTagKeyword = `%${keyword.toLocaleLowerCase()}%`;
+      whereClauses.push(`(
   title LIKE ?
   OR EXISTS (
     SELECT 1 FROM modules module_search
@@ -677,17 +692,18 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
       )
   )
 )`);
-    bindParams.push(
-      likeKeyword,
-      likeKeyword,
-      likeKeyword,
-      likeKeyword,
-      likeKeyword,
-      likeKeyword,
-      likeKeyword,
-      likeKeyword,
-      likeTagKeyword,
-    );
+      bindParams.push(
+        likeKeyword,
+        likeKeyword,
+        likeKeyword,
+        likeKeyword,
+        likeKeyword,
+        likeKeyword,
+        likeKeyword,
+        likeKeyword,
+        likeTagKeyword,
+      );
+    }
   }
 
   const tagKeys = normalizeTagKeys(options?.tagKeys);

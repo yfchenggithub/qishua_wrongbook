@@ -1256,10 +1256,10 @@ export default function LibraryScreen() {
       <View style={styles.searchBox}>
         <MaterialIcons name="search" size={23} color={colors.textMuted} />
         <TextInput
-          accessibilityLabel="搜索题目、模块或标签"
+          accessibilityLabel="搜索编号、题目、模块或标签"
           maxFontSizeMultiplier={1.2}
           onChangeText={setSearchText}
-          placeholder="搜索题目、模块或标签"
+          placeholder="搜索编号、题目、模块或标签"
           placeholderTextColor={colors.textMuted}
           returnKeyType="search"
           style={styles.searchInput}
