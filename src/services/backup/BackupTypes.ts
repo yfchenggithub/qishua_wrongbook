@@ -138,6 +138,7 @@ export interface RestoreFromBackupResult {
   restoreSessionId: string;
   restoredMistakes: number;
   restoredImages: number;
+  skippedImageCount: number;
   restoredReviewRecords: number;
   voiceNoteCount: number;
   voiceFileCount: number;

@@ -186,6 +186,9 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - 备份时图片记录必须映射到 `backupRelativePath`。
 - 恢复时必须将图片复制到当前设备 App 本地图片目录。
 - 恢复后数据库中的 `uri` 必须是当前设备可访问的新 `uri`。
+- 备份包中缺少对应文件的图片记录必须产生恢复告警，并跳过该图片记录，不得写入指向不存在文件的数据库记录。
+- 恢复数量校验以包内实际存在且可复制的图片文件数为准；已知缺失图片不得造成其余数据恢复失败或触发回滚。
+- 包内存在但复制到当前设备失败的图片仍视为恢复错误，必须进入失败处理和安全回滚流程。
 - 不恢复旧字段：`question_image_uri`、`answer_image_uri`、`solution_image_uri`。
 - 图片数据以 `mistake_images` 表为准。
 

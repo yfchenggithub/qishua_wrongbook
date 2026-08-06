@@ -278,8 +278,62 @@ function verifyProductionContracts() {
     'FROM module_question_counters',
     'MistakeRepository.ts',
   );
+  assertSourceContains(
+    backupServiceSource,
+    'function toRestoreExpectedCounts(',
+    'BackupService.ts',
+  );
+  assertSourceContains(
+    backupServiceSource,
+    'mistakeImages: restorableImageCount,',
+    'BackupService.ts',
+  );
+  assertSourceContains(
+    backupServiceSource,
+    'imageFiles: restorableImageCount,',
+    'BackupService.ts',
+  );
+  assertSourceContains(
+    backupServiceSource,
+    'skippedImageCount = imageResult.skippedCount;',
+    'BackupService.ts',
+  );
 
   return schemaSource;
+}
+
+function verifyMissingImageCountPolicy() {
+  const backupImageRecords = [
+    { id: 'image-present', backupRelativePath: 'images/image-present.jpg' },
+    { id: 'image-missing', backupRelativePath: 'images/image-missing.jpg' },
+  ];
+  const archiveImagePaths = new Set(['images/image-present.jpg']);
+  const restorableImages = backupImageRecords.filter((image) => (
+    archiveImagePaths.has(image.backupRelativePath)
+  ));
+  const expectedCounts = {
+    mistakes: 1,
+    mistakeImages: restorableImages.length,
+    reviewRecords: 0,
+    imageFiles: restorableImages.length,
+  };
+  const actualCountsAfterRestore = {
+    mistakes: 1,
+    mistakeImages: 1,
+    reviewRecords: 0,
+    imageFiles: 1,
+  };
+
+  assert.deepEqual(
+    actualCountsAfterRestore,
+    expectedCounts,
+    '缺失图片应从恢复预期数量中排除，其余图片应正常通过校验',
+  );
+  assert.equal(
+    backupImageRecords.length - restorableImages.length,
+    1,
+    '缺失图片数量计算错误',
+  );
 }
 
 function runRoundTrip(schemaSource) {
@@ -345,11 +399,13 @@ ORDER BY mistakes.id ASC;`,
 function main() {
   const schemaSource = verifyProductionContracts();
   runRoundTrip(schemaSource);
+  verifyMissingImageCountPolicy();
   console.log('[backup-v10] 检查通过：');
   console.log('  - schemaVersion 10 关键导出/恢复字段存在');
   console.log('  - 系统模块 A 与自定义模块 U016 按永久 module_id 恢复');
   console.log('  - 恢复后计数器继续递增，已删除编号 A002 不复用');
   console.log('  - 系统模块与自定义模块题号序列互相独立');
+  console.log('  - 缺失图片从恢复预期数量中排除，其余图片可正常通过校验');
 }
 
 try {

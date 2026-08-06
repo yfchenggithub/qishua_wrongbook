@@ -379,6 +379,10 @@ function buildRestorePreviewMessage(manifest: BackupManifest, warnings: string[]
     `复做记录数量：${manifest.counts.reviewRecords}`,
   ];
 
+  if (manifest.counts.imageFiles !== manifest.counts.mistakeImages) {
+    lines.splice(4, 0, `备份内图片文件：${manifest.counts.imageFiles}`);
+  }
+
   if (warnings.length > 0) {
     lines.push('该备份存在部分图片缺失记录');
   }
@@ -918,6 +922,7 @@ export default function SettingsScreen() {
             reviewRecords: restoreResult.restoredReviewRecords,
             imageFiles: restoreResult.restoredImages,
           },
+          skippedImageCount: restoreResult.skippedImageCount,
           voiceNoteCount: restoreResult.voiceNoteCount,
           voiceFileCount: restoreResult.voiceFileCount,
           voiceWarningCount: restoreResult.voiceWarningCount,
@@ -928,7 +933,14 @@ export default function SettingsScreen() {
           errorMessage: null,
         });
 
-        if (!hasShownRestoreSuccessToast) {
+        if (restoreResult.skippedImageCount > 0) {
+          showToast(
+            `恢复完成，已跳过 ${restoreResult.skippedImageCount} 张缺失图片`,
+            'warning',
+            TOAST_DURATION_LONG,
+          );
+          hasShownRestoreSuccessToast = true;
+        } else if (!hasShownRestoreSuccessToast) {
           showToast('恢复完成', 'success', TOAST_DURATION_LONG);
           hasShownRestoreSuccessToast = true;
         }

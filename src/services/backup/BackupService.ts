@@ -1897,12 +1897,25 @@ function ensureValidCounts(counts: BackupCounts): BackupCounts {
   return counts;
 }
 
-function toCountsFromData(data: BackupDataPayload): BackupCounts {
+function toRestoreExpectedCounts(
+  data: BackupDataPayload,
+  restorableImageCount: number,
+): BackupCounts {
+  if (
+    !Number.isInteger(restorableImageCount)
+    || restorableImageCount < 0
+    || restorableImageCount > data.mistakeImages.length
+  ) {
+    throw new BackupRestoreError(
+      'CORRUPTED_BACKUP_FILE',
+      getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+    );
+  }
   return ensureValidCounts({
     mistakes: data.mistakes.length,
-    mistakeImages: data.mistakeImages.length,
+    mistakeImages: restorableImageCount,
     reviewRecords: data.reviewRecords.length,
-    imageFiles: data.mistakeImages.length,
+    imageFiles: restorableImageCount,
   });
 }
 
@@ -2259,12 +2272,17 @@ function validateRestorePackage(options: {
     });
   }
 
-  const counts = toCountsFromData(data);
   const referencedImageSet = new Set<string>();
+  let restorableImageCount = 0;
   for (const image of data.mistakeImages) {
     const relativePath = normalizeArchiveEntryPath(ensureBackupImageRelativePath(ensureRecordId(image.backupRelativePath)));
     referencedImageSet.add(relativePath);
+    const sourceFile = archiveFileMap.get(relativePath);
+    if (sourceFile?.exists) {
+      restorableImageCount += 1;
+    }
   }
+  const counts = toRestoreExpectedCounts(data, restorableImageCount);
 
   const orphanImageSamples: string[] = [];
   for (const archivePath of archiveFileMap.keys()) {
@@ -3323,6 +3341,7 @@ export async function restoreFromBackup(
   let beforeRestoreBackupUri: string | undefined;
   let orphanImageSamples: string[] = [];
   let missingImageSamples: string[] = [];
+  let skippedImageCount = 0;
   let restoredVoiceNoteCount = 0;
   let restoredVoiceFileCount = 0;
   let tempCopyStartedAt: number | null = null;
@@ -3495,6 +3514,7 @@ export async function restoreFromBackup(
     });
     durations.imageRestoreDurationMs = nowMs() - imageRestoreStartedAt;
     missingImageSamples = imageResult.missingRelativePaths.slice(0, 5);
+    skippedImageCount = imageResult.skippedCount;
 
     logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_images_success', {
       restoreSessionId,
@@ -3602,6 +3622,7 @@ export async function restoreFromBackup(
       restoreSessionId,
       restoredMistakes: importedCounts.mistakes,
       restoredImages: importedCounts.mistakeImages,
+      skippedImageCount,
       restoredReviewRecords: importedCounts.reviewRecords,
       voiceNoteCount: restoredVoiceNoteCount,
       voiceFileCount: restoredVoiceFileCount,
