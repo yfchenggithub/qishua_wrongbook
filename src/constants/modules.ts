@@ -34,6 +34,30 @@ export function formatCustomModuleDisplayCode(customNo: number): string {
   return `U${customNo.toString().padStart(3, '0')}`;
 }
 
+export function formatMistakeDisplayCode(
+  moduleDisplayCode: string | null | undefined,
+  questionNo: number,
+): string {
+  const normalizedModuleCode = moduleDisplayCode?.trim().toUpperCase() ?? '';
+  const normalizedQuestionNo = Math.floor(questionNo);
+  const isSystemOrUnclassifiedCode = /^[A-Z]$/.test(normalizedModuleCode);
+  const isCustomCode = /^U\d{3}$/.test(normalizedModuleCode);
+
+  if (
+    (!isSystemOrUnclassifiedCode && !isCustomCode)
+    || !Number.isFinite(normalizedQuestionNo)
+    || normalizedQuestionNo < 1
+    || normalizedQuestionNo > MODULE_QUESTION_MAX_NUMBER
+  ) {
+    return '';
+  }
+
+  const questionCode = normalizedQuestionNo.toString().padStart(3, '0');
+  return isCustomCode
+    ? `${normalizedModuleCode}-${questionCode}`
+    : `${normalizedModuleCode}${questionCode}`;
+}
+
 export function resolveSystemModuleByLegacyIdOrName(
   legacyId: string | null | undefined,
   name: string | null | undefined,
@@ -44,4 +68,3 @@ export function resolveSystemModuleByLegacyIdOrName(
     item.legacyId === normalizedLegacyId || item.name === normalizedName
   )) ?? null;
 }
-

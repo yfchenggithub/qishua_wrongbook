@@ -1,6 +1,10 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import { ERROR_REASON_OPTIONS, MISTAKE_NOTE_MAX_LENGTH, MODULE_OPTIONS } from '@/src/constants/mistakeOptions';
-import { UNCLASSIFIED_MODULE_ID, UNCLASSIFIED_MODULE_NAME } from '@/src/constants/modules';
+import {
+  formatMistakeDisplayCode,
+  UNCLASSIFIED_MODULE_ID,
+  UNCLASSIFIED_MODULE_NAME,
+} from '@/src/constants/modules';
 import type {
   DetailImageSlot,
   DetailPreviewImageItem,
@@ -441,6 +445,7 @@ async function mapMistakeToDetailViewModel(
     id: mistake.id,
     module: mistake.module,
     moduleId: mistake.module_id ?? null,
+    questionCode: formatMistakeDisplayCode(mistake.module_display_code, mistake.question_no),
     title: buildDetailTitle(mistake.module, mistake.title),
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,

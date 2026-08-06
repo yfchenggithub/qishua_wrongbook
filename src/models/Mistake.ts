@@ -10,6 +10,7 @@ export interface Mistake {
   subject: string;
   module: string;
   module_id: number;
+  module_display_code?: string | null;
   question_no: number;
   title?: string | null;
   error_reason?: string | null;

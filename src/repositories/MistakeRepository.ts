@@ -52,6 +52,8 @@ SELECT
     module
   ) AS module,
   module_id,
+  (SELECT module_lookup.display_code FROM modules module_lookup WHERE module_lookup.id = mistakes.module_id)
+    AS module_display_code,
   question_no,
   title,
   error_reason,

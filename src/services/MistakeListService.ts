@@ -1,4 +1,5 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
+import { formatMistakeDisplayCode } from '@/src/constants/modules';
 import type { Mistake, MistakeStatus } from '@/src/models/Mistake';
 import type { MistakeTag } from '@/src/models/MistakeTag';
 import type {
@@ -292,6 +293,7 @@ async function mapMistakeWithCoverToListItem(mistake: Mistake): Promise<MistakeL
   return {
     id: mistake.id,
     module: mistake.module,
+    questionCode: formatMistakeDisplayCode(mistake.module_display_code, mistake.question_no),
     title: buildTitle(mistake.module, mistake.title),
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,
@@ -320,6 +322,7 @@ export function mapMistakeToListItem(
   return {
     id: mistake.id,
     module: mistake.module,
+    questionCode: formatMistakeDisplayCode(mistake.module_display_code, mistake.question_no),
     title: buildTitle(mistake.module, mistake.title),
     subtitle: buildSubtitle(mistake),
     errorReason: mistake.error_reason ?? null,

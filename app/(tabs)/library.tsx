@@ -442,7 +442,7 @@ function MistakeCard({
   return (
     <SurfaceCard padding={0} style={[styles.card, isDeleting ? styles.cardDisabled : null]}>
       <Pressable
-        accessibilityLabel={`${item.title}，第 ${item.reviewCount} / ${item.maxReviewCount} 刷`}
+        accessibilityLabel={`${item.questionCode ? `${item.questionCode}，` : ''}${item.title}，第 ${item.reviewCount} / ${item.maxReviewCount} 刷`}
         disabled={isDeleting}
         onLongPress={() => {
           didLongPressRef.current = true;
@@ -470,9 +470,16 @@ function MistakeCard({
 
         <View style={styles.cardBody}>
           <View style={styles.cardTopRow}>
-            <Text numberOfLines={1} style={styles.moduleText}>
-              {item.module}
-            </Text>
+            <View style={styles.moduleInfoRow}>
+              {item.questionCode ? (
+                <View style={styles.questionCodeBadge}>
+                  <Text style={styles.questionCodeText}>{item.questionCode}</Text>
+                </View>
+              ) : null}
+              <Text numberOfLines={1} style={styles.moduleText}>
+                {item.module}
+              </Text>
+            </View>
             <View style={styles.cardTopActions}>
               {item.isPinned ? <MaterialIcons name="star" size={16} color="#D58A18" /> : null}
               <Pressable
@@ -1702,6 +1709,29 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
+  },
+  moduleInfoRow: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  questionCodeBadge: {
+    flexShrink: 0,
+    borderRadius: radius.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  questionCodeText: {
+    color: colors.success,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '800',
+    letterSpacing: 0.25,
   },
   moduleText: {
     flex: 1,

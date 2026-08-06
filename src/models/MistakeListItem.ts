@@ -6,6 +6,7 @@ export type MistakeListStatus = 'collected' | 'due_today' | 'upcoming' | 'master
 export interface MistakeListItem {
   id: string;
   module: string;
+  questionCode: string;
   title: string;
   subtitle: string;
   errorReason?: string | null;

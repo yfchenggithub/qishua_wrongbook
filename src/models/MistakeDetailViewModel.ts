@@ -51,6 +51,7 @@ export interface MistakeDetailViewModel {
   id: string;
   module: string;
   moduleId: number;
+  questionCode: string;
   title: string;
   subtitle: string;
   errorReason?: string | null;

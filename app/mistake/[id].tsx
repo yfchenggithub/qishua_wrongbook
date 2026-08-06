@@ -4308,6 +4308,15 @@ export default function MistakeDetailScreen() {
           {state.kind === 'success' ? (
             <>
               <View style={styles.detailTitleSection}>
+                {state.detail.questionCode ? (
+                  <View
+                    accessibilityLabel={`错题编号 ${state.detail.questionCode}`}
+                    style={styles.detailQuestionCodeBadge}>
+                    <Text selectable style={styles.detailQuestionCodeText}>
+                      {state.detail.questionCode}
+                    </Text>
+                  </View>
+                ) : null}
                 <View style={styles.detailTitleRow}>
                   {isTitleEditing ? (
                     <TextInput
@@ -5136,6 +5145,24 @@ const styles = StyleSheet.create({
   detailTitleSection: {
     gap: spacing.sm,
     paddingHorizontal: spacing.xs,
+  },
+  detailQuestionCodeBadge: {
+    alignSelf: 'flex-start',
+    minHeight: 30,
+    borderRadius: 9,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accentBorder,
+    backgroundColor: colors.accentSoft,
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  detailQuestionCodeText: {
+    color: mistakeDetailPalette.green,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
   detailTitleRow: {
     minWidth: 0,
