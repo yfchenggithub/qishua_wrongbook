@@ -9,7 +9,12 @@ import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { ReviewRecord } from '@/src/models/ReviewRecord';
-import { MistakeImageRepository, MistakeRepository, ReviewRecordRepository } from '@/src/repositories';
+import {
+  MistakeImageRepository,
+  MistakeRepository,
+  ModuleRepository,
+  ReviewRecordRepository,
+} from '@/src/repositories';
 import type { MistakeStats } from '@/src/repositories';
 import { getImageInfo } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
@@ -20,6 +25,9 @@ type MistakeDebugItem = {
   id: string;
   title?: string | null;
   module: string;
+  module_id: number;
+  module_display_code: string;
+  question_no: number;
   error_reason?: string | null;
   difficulty: number;
   review_count: number;
@@ -436,8 +444,11 @@ export default function DevDatabasePage() {
 
   async function handleInsertSampleMistake() {
     await runAction('insert', async () => {
+      const [questionNo] = await MistakeRepository.reserveNextQuestionNumbersByModule(4, 1);
       const created = await MistakeRepository.createMistake({
-        module: 'conic',
+        module: '圆锥曲线',
+        module_id: 4,
+        question_no: questionNo,
         title: 'sample mistake',
         error_reason: 'dev debug seed',
         difficulty: 3,
@@ -464,6 +475,10 @@ export default function DevDatabasePage() {
         sortBy: 'created_at',
         sortOrder: 'desc',
       });
+      const modules = await ModuleRepository.listAllModules();
+      const moduleDisplayCodeById = new Map(
+        modules.map((moduleItem) => [moduleItem.id, moduleItem.display_code]),
+      );
 
       const items = await Promise.all(
         rows.map(async (row) => {
@@ -473,6 +488,9 @@ export default function DevDatabasePage() {
             id: row.id,
             title: row.title,
             module: row.module,
+            module_id: row.module_id,
+            module_display_code: moduleDisplayCodeById.get(row.module_id) ?? '(missing)',
+            question_no: row.question_no,
             error_reason: row.error_reason,
             difficulty: row.difficulty,
             review_count: row.review_count,
@@ -681,6 +699,9 @@ export default function DevDatabasePage() {
                 <Text style={styles.monoText}>id: {item.id}</Text>
                 <Text style={styles.monoText}>title: {formatNullable(item.title)}</Text>
                 <Text style={styles.monoText}>module: {formatNullable(item.module)}</Text>
+                <Text style={styles.monoText}>module_id: {formatNullable(item.module_id)}</Text>
+                <Text style={styles.monoText}>module_display_code: {item.module_display_code}</Text>
+                <Text style={styles.monoText}>question_no: {formatNullable(item.question_no)}</Text>
                 <Text style={styles.monoText}>error_reason: {formatNullable(item.error_reason)}</Text>
                 <Text style={styles.monoText}>difficulty: {formatNullable(item.difficulty)}</Text>
                 <Text style={styles.monoText}>review_count: {formatNullable(item.review_count)}</Text>

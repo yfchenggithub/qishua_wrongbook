@@ -2,6 +2,11 @@ import * as SQLite from 'expo-sqlite';
 import { Platform } from 'react-native';
 
 import { DATABASE_NAME, DATABASE_VERSION } from '@/src/db/constants';
+import {
+  isPermanentModuleSchemaReady,
+  migrateLegacyModulesAndQuestionNumbers,
+  seedPermanentModules,
+} from '@/src/db/moduleMigration';
 import { CREATE_MISTAKES_TABLE_SQL, CREATE_SCHEMA_SQL } from '@/src/db/schema';
 import { Logger } from '@/src/services/Logger';
 
@@ -12,8 +17,8 @@ const REQUIRED_TABLES = [
   'review_records',
   'review_sheets',
   'review_sheet_items',
+  'modules',
   'module_question_counters',
-  'custom_modules',
   'custom_error_reasons',
   'mistake_relations',
   'mistake_tags',
@@ -146,7 +151,7 @@ CREATE INDEX IF NOT EXISTS idx_mistakes_last_viewed_at ON mistakes(last_viewed_a
 }
 
 async function ensureAddMistakeSupplementColumns(db: SQLite.SQLiteDatabase): Promise<void> {
-  await ensureColumn(db, 'mistakes', 'module_id', 'ALTER TABLE mistakes ADD COLUMN module_id TEXT;');
+  await ensureColumn(db, 'mistakes', 'module_id', 'ALTER TABLE mistakes ADD COLUMN module_id INTEGER;');
   await ensureColumn(
     db,
     'mistakes',
@@ -194,6 +199,7 @@ INSERT INTO mistakes_new (
   subject,
   module,
   module_id,
+  question_no,
   title,
   error_reason,
   error_reason_ids,
@@ -217,6 +223,7 @@ SELECT
   subject,
   module,
   module_id,
+  question_no,
   title,
   error_reason,
   error_reason_ids,
@@ -250,6 +257,15 @@ async function ensureBackwardCompatibleColumns(db: SQLite.SQLiteDatabase): Promi
   await ensureMistakesCollectedStatusSupport(db);
 }
 
+async function ensureLegacyColumnsBeforePermanentModuleMigration(
+  db: SQLite.SQLiteDatabase,
+): Promise<void> {
+  await ensureReviewRecordsVoiceNoteColumn(db);
+  await ensureTextHighlightColumns(db);
+  await ensureLibraryColumns(db);
+  await ensureAddMistakeSupplementColumns(db);
+}
+
 async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
 PRAGMA foreign_keys = OFF;
@@ -261,11 +277,13 @@ DROP TABLE IF EXISTS mistake_relations;
 DROP TABLE IF EXISTS mistake_tags;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
+DROP TABLE IF EXISTS modules;
 DROP TABLE IF EXISTS custom_modules;
 DROP TABLE IF EXISTS custom_error_reasons;
 PRAGMA foreign_keys = ON;
 `);
   await applyBaseSchema(db);
+  await seedPermanentModules(db);
 }
 
 async function runMigrationToCurrentVersion(
@@ -282,6 +300,7 @@ async function runMigrationToCurrentVersion(
 
   if (currentVersion === DATABASE_VERSION) {
     await applyBaseSchema(db);
+    await seedPermanentModules(db);
     await ensureBackwardCompatibleColumns(db);
     return;
   }
@@ -295,8 +314,13 @@ async function runMigrationToCurrentVersion(
     await rebuildDomainSchema(db);
     await ensureBackwardCompatibleColumns(db);
   } else {
-    await ensureBackwardCompatibleColumns(db);
+    await ensureLegacyColumnsBeforePermanentModuleMigration(db);
+    if (!(await isPermanentModuleSchemaReady(db))) {
+      await migrateLegacyModulesAndQuestionNumbers(db);
+    }
     await applyBaseSchema(db);
+    await seedPermanentModules(db);
+    await ensureBackwardCompatibleColumns(db);
   }
   await setUserVersion(db, DATABASE_VERSION);
 }
@@ -539,6 +563,7 @@ DROP TABLE IF EXISTS mistake_relations;
 DROP TABLE IF EXISTS mistake_tags;
 DROP TABLE IF EXISTS mistakes;
 DROP TABLE IF EXISTS module_question_counters;
+DROP TABLE IF EXISTS modules;
 DROP TABLE IF EXISTS custom_modules;
 DROP TABLE IF EXISTS custom_error_reasons;
 PRAGMA user_version = 0;
@@ -560,7 +585,7 @@ export async function checkDatabaseHealth(): Promise<DatabaseHealthReport> {
     const version = await readUserVersion(db);
 
     const tableRows = await db.getAllAsync<TableRow>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'module_question_counters', 'custom_modules', 'custom_error_reasons', 'mistake_relations', 'mistake_tags')`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'modules', 'module_question_counters', 'custom_error_reasons', 'mistake_relations', 'mistake_tags')`,
     );
     const tables = tableRows.map((row) => row.name);
 

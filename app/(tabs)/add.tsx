@@ -86,7 +86,7 @@ function moveItem<T>(items: T[], from: number, to: number): T[] {
 }
 
 function customModuleOption(item: CustomModule): ModulePickerOption {
-  return { id: `custom:${item.id}`, label: item.name, isCustom: true };
+  return { id: String(item.id), label: item.name, isCustom: true };
 }
 
 function customReasonOption(item: CustomErrorReason): ErrorReasonOption {
@@ -167,7 +167,7 @@ export default function AddScreen() {
       const lastSavedMistake = recentMistakes[0];
       const rememberedOption = availableModuleOptions.find((option) => option.id === lastSelectedModuleId)
         ?? availableModuleOptions.find((option) => (
-          option.id === lastSavedMistake?.module_id || option.label === lastSavedMistake?.module
+          option.id === String(lastSavedMistake?.module_id ?? '') || option.label === lastSavedMistake?.module
         ));
       const recentNames = Array.from(new Set(recentMistakes.map((item) => item.module)));
       if (rememberedOption) {

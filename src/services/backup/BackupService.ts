@@ -6,9 +6,20 @@ import { Platform } from 'react-native';
 
 import { withDatabaseTransaction } from '@/src/db';
 import { DATABASE_VERSION } from '@/src/db/constants';
+import {
+  CUSTOM_MODULE_ID_START,
+  CUSTOM_MODULE_MAX_NUMBER,
+  SYSTEM_MODULE_DEFINITIONS,
+  UNCLASSIFIED_MODULE_DISPLAY_CODE,
+  UNCLASSIFIED_MODULE_ID,
+  UNCLASSIFIED_MODULE_NAME,
+  formatCustomModuleDisplayCode,
+  resolveSystemModuleByLegacyIdOrName,
+} from '@/src/constants/modules';
 import type { Mistake } from '@/src/models/Mistake';
 import type { MistakeImage } from '@/src/models/MistakeImage';
 import type { MistakeTag } from '@/src/models/MistakeTag';
+import type { ModuleRecord } from '@/src/models/Module';
 import type { ReviewRecord, ReviewRecordVoiceNote } from '@/src/models/ReviewRecord';
 import {
   CustomErrorReasonRepository,
@@ -17,10 +28,12 @@ import {
   MistakeRelationRepository,
   MistakeRepository,
   MistakeTagRepository,
+  ModuleRepository,
   ReviewRecordRepository,
 } from '@/src/repositories';
 import { ensureMistakeImageDir } from '@/src/services/ImageStorageService';
 import { Logger } from '@/src/services/Logger';
+import { BRAND_ACCENT } from '@/src/styles/tokens';
 import {
   BACKUP_DATA_FILE_NAME,
   BACKUP_IMAGES_DIR_NAME,
@@ -55,6 +68,8 @@ import {
   type BackupCustomModuleRecord,
   type BackupImageArchiveFile,
   type BackupManifest,
+  type BackupModuleQuestionCounterRecord,
+  type BackupModuleRecord,
   type BackupMistakeImageRecord,
   type BackupMistakeRelationRecord,
   type BackupMistakeTagRecord,
@@ -94,7 +109,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, 7, 8, DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, 7, 8, 9, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -108,6 +123,7 @@ INSERT INTO mistakes (
   subject,
   module,
   module_id,
+  question_no,
   title,
   error_reason,
   error_reason_ids,
@@ -125,7 +141,31 @@ INSERT INTO mistakes (
   last_review_result,
   is_pinned,
   last_viewed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_MODULE_SQL = `
+INSERT INTO modules (
+  id,
+  type,
+  name,
+  display_code,
+  custom_no,
+  icon,
+  color,
+  sort_order,
+  is_active,
+  created_at,
+  updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_MODULE_QUESTION_COUNTER_SQL = `
+INSERT INTO module_question_counters (
+  module_id,
+  last_question_no,
+  updated_at
+) VALUES (?, ?, ?);
 `;
 
 const INSERT_REVIEW_RECORD_SQL = `
@@ -169,18 +209,6 @@ INSERT INTO mistake_tags (
   mistake_id,
   name,
   normalized_name,
-  sort_order,
-  created_at,
-  updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?);
-`;
-
-const INSERT_CUSTOM_MODULE_SQL = `
-INSERT INTO custom_modules (
-  id,
-  name,
-  icon,
-  color,
   sort_order,
   created_at,
   updated_at
@@ -571,6 +599,12 @@ export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
     mistakeTags: Array.isArray(input.mistakeTags)
       ? input.mistakeTags as BackupDataPayload['mistakeTags']
       : [],
+    modules: Array.isArray(input.modules)
+      ? input.modules as BackupDataPayload['modules']
+      : [],
+    moduleQuestionCounters: Array.isArray(input.moduleQuestionCounters)
+      ? input.moduleQuestionCounters as BackupDataPayload['moduleQuestionCounters']
+      : [],
     customModules: Array.isArray(input.customModules)
       ? input.customModules as BackupDataPayload['customModules']
       : [],
@@ -605,10 +639,313 @@ function ensureOptionalRecordId(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+type LegacyBackupCustomModuleShape = {
+  id?: unknown;
+  name?: unknown;
+  icon?: unknown;
+  color?: unknown;
+  sort_order?: unknown;
+  created_at?: unknown;
+  updated_at?: unknown;
+};
+
+function toLegacyText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildBackupSystemModules(timestamp: string): ModuleRecord[] {
+  const systemModules: ModuleRecord[] = SYSTEM_MODULE_DEFINITIONS.map((item) => ({
+    id: item.id,
+    type: 'system',
+    name: item.name,
+    display_code: item.displayCode,
+    custom_no: null,
+    icon: 'label',
+    color: BRAND_ACCENT,
+    sort_order: item.sortOrder,
+    is_active: true,
+    created_at: timestamp,
+    updated_at: timestamp,
+  }));
+  systemModules.push({
+    id: UNCLASSIFIED_MODULE_ID,
+    type: 'unclassified',
+    name: UNCLASSIFIED_MODULE_NAME,
+    display_code: UNCLASSIFIED_MODULE_DISPLAY_CODE,
+    custom_no: null,
+    icon: 'label',
+    color: BRAND_ACCENT,
+    sort_order: SYSTEM_MODULE_DEFINITIONS.length,
+    is_active: true,
+    created_at: timestamp,
+    updated_at: timestamp,
+  });
+  return systemModules;
+}
+
+function parseBackupLegacyQuestionNo(title: unknown): number | null {
+  const matched = toLegacyText(title).match(/第\s*(\d+)\s*题\s*$/u);
+  if (!matched) {
+    return null;
+  }
+  const parsed = Number.parseInt(matched[1], 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 999 ? parsed : null;
+}
+
+function normalizeBackupModulesForCurrentSchema(
+  data: BackupDataPayload,
+  schemaVersion: number,
+  timestamp: string,
+): BackupDataPayload {
+  if (schemaVersion >= 10 && data.modules.length > 0) {
+    if (data.moduleQuestionCounters.length === 0) {
+      const maxByModule = new Map<number, number>();
+      data.mistakes.forEach((mistake) => {
+        maxByModule.set(
+          Number(mistake.module_id),
+          Math.max(maxByModule.get(Number(mistake.module_id)) ?? 0, Number(mistake.question_no)),
+        );
+      });
+      data.moduleQuestionCounters = Array.from(maxByModule, ([module_id, last_question_no]) => ({
+        module_id,
+        last_question_no,
+        updated_at: timestamp,
+      }));
+    }
+    return data;
+  }
+
+  const modules = buildBackupSystemModules(timestamp);
+  const legacyIdToPermanentId = new Map<string, number>();
+  const moduleNameToPermanentId = new Map<string, number>(
+    modules.map((item) => [item.name, item.id]),
+  );
+  const legacyCustomRows = (data.customModules as unknown as LegacyBackupCustomModuleShape[])
+    .slice()
+    .sort((left, right) => (
+      Number(left.sort_order ?? 0) - Number(right.sort_order ?? 0)
+      || toLegacyText(left.created_at).localeCompare(toLegacyText(right.created_at))
+      || toLegacyText(left.id).localeCompare(toLegacyText(right.id))
+    ));
+
+  legacyCustomRows.forEach((legacyRow) => {
+    const name = toLegacyText(legacyRow.name);
+    if (!name || moduleNameToPermanentId.has(name)) {
+      return;
+    }
+    const customNo = modules.filter((item) => item.type === 'custom').length + 1;
+    if (customNo > CUSTOM_MODULE_MAX_NUMBER) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        `备份中的自定义模块超过 ${CUSTOM_MODULE_MAX_NUMBER} 个。`,
+      );
+    }
+    const id = CUSTOM_MODULE_ID_START + customNo - 1;
+    const legacyId = toLegacyText(legacyRow.id);
+    modules.push({
+      id,
+      type: 'custom',
+      name,
+      display_code: formatCustomModuleDisplayCode(customNo),
+      custom_no: customNo,
+      icon: toLegacyText(legacyRow.icon) || 'label',
+      color: toLegacyText(legacyRow.color) || BRAND_ACCENT,
+      sort_order: Number(legacyRow.sort_order ?? customNo - 1),
+      is_active: true,
+      created_at: toLegacyText(legacyRow.created_at) || timestamp,
+      updated_at: toLegacyText(legacyRow.updated_at) || timestamp,
+    });
+    moduleNameToPermanentId.set(name, id);
+    if (legacyId) {
+      legacyIdToPermanentId.set(legacyId, id);
+      legacyIdToPermanentId.set(`custom:${legacyId}`, id);
+    }
+  });
+
+  const legacyMistakes = data.mistakes as unknown as (Omit<Mistake, 'module_id' | 'question_no'> & {
+    module_id?: string | number | null;
+    question_no?: number;
+  })[];
+  legacyMistakes.forEach((mistake) => {
+    const moduleName = toLegacyText(mistake.module) || UNCLASSIFIED_MODULE_NAME;
+    const legacyModuleId = typeof mistake.module_id === 'string' ? mistake.module_id.trim() : '';
+    const system = resolveSystemModuleByLegacyIdOrName(legacyModuleId, moduleName);
+    if (
+      system
+      || moduleName === UNCLASSIFIED_MODULE_NAME
+      || moduleNameToPermanentId.has(moduleName)
+      || (legacyModuleId && legacyIdToPermanentId.has(legacyModuleId))
+    ) {
+      return;
+    }
+    const customNo = modules.filter((item) => item.type === 'custom').length + 1;
+    if (customNo > CUSTOM_MODULE_MAX_NUMBER) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        `备份中的自定义模块超过 ${CUSTOM_MODULE_MAX_NUMBER} 个。`,
+      );
+    }
+    const id = CUSTOM_MODULE_ID_START + customNo - 1;
+    modules.push({
+      id,
+      type: 'custom',
+      name: moduleName,
+      display_code: formatCustomModuleDisplayCode(customNo),
+      custom_no: customNo,
+      icon: 'label',
+      color: BRAND_ACCENT,
+      sort_order: customNo - 1,
+      is_active: false,
+      created_at: mistake.created_at || timestamp,
+      updated_at: mistake.updated_at || timestamp,
+    });
+    moduleNameToPermanentId.set(moduleName, id);
+    if (legacyModuleId) {
+      legacyIdToPermanentId.set(legacyModuleId, id);
+    }
+  });
+
+  const normalizedMistakes = legacyMistakes.map((mistake) => {
+    const moduleName = toLegacyText(mistake.module) || UNCLASSIFIED_MODULE_NAME;
+    const rawModuleId = mistake.module_id;
+    const numericModuleId = typeof rawModuleId === 'number' && modules.some((item) => item.id === rawModuleId)
+      ? rawModuleId
+      : null;
+    const legacyModuleId = typeof rawModuleId === 'string' ? rawModuleId.trim() : '';
+    const system = resolveSystemModuleByLegacyIdOrName(legacyModuleId, moduleName);
+    const moduleId = numericModuleId
+      ?? system?.id
+      ?? legacyIdToPermanentId.get(legacyModuleId)
+      ?? moduleNameToPermanentId.get(moduleName)
+      ?? UNCLASSIFIED_MODULE_ID;
+    return {
+      ...mistake,
+      module_id: moduleId,
+      question_no: 0,
+    } as Mistake;
+  });
+
+  const grouped = new Map<number, Mistake[]>();
+  normalizedMistakes.forEach((mistake) => {
+    const list = grouped.get(mistake.module_id) ?? [];
+    list.push(mistake);
+    grouped.set(mistake.module_id, list);
+  });
+  const moduleQuestionCounters: BackupModuleQuestionCounterRecord[] = [];
+  grouped.forEach((mistakes, moduleId) => {
+    mistakes.sort((left, right) => (
+      left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id)
+    ));
+    const used = new Set<number>();
+    mistakes.forEach((mistake) => {
+      const parsed = parseBackupLegacyQuestionNo(mistake.title);
+      if (parsed && !used.has(parsed)) {
+        mistake.question_no = parsed;
+        used.add(parsed);
+      }
+    });
+    let lastQuestionNo = Math.max(0, ...used);
+    mistakes.forEach((mistake) => {
+      if (mistake.question_no > 0) {
+        return;
+      }
+      do {
+        lastQuestionNo += 1;
+      } while (used.has(lastQuestionNo));
+      if (lastQuestionNo > 999) {
+        throw new BackupRestoreError('CORRUPTED_BACKUP_FILE', '备份中的模块题号超过 999。');
+      }
+      mistake.question_no = lastQuestionNo;
+      used.add(lastQuestionNo);
+    });
+    moduleQuestionCounters.push({
+      module_id: moduleId,
+      last_question_no: Math.max(lastQuestionNo, ...used),
+      updated_at: timestamp,
+    });
+  });
+
+  return {
+    ...data,
+    mistakes: normalizedMistakes,
+    modules,
+    moduleQuestionCounters,
+    customModules: modules
+      .filter((item): item is ModuleRecord & { type: 'custom'; custom_no: number } => (
+        item.type === 'custom' && item.custom_no !== null && item.is_active
+      ))
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        display_code: item.display_code,
+        custom_no: item.custom_no,
+        icon: item.icon,
+        color: item.color,
+        sort_order: item.sort_order,
+        is_active: item.is_active,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      })),
+  };
+}
+
 function ensureBackupPayloadRelations(data: BackupDataPayload): void {
+  const moduleIds = new Set<number>();
+  const moduleDisplayCodes = new Set<string>();
+  for (const moduleItem of data.modules) {
+    const moduleId = Number(moduleItem.id);
+    const displayCode = normalizeRequiredText(moduleItem.display_code);
+    if (
+      !Number.isInteger(moduleId)
+      || moduleId <= 0
+      || moduleIds.has(moduleId)
+      || moduleDisplayCodes.has(displayCode)
+    ) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+    moduleIds.add(moduleId);
+    moduleDisplayCodes.add(displayCode);
+  }
+
   const mistakeIds = new Set<string>();
+  const questionKeys = new Set<string>();
   for (const mistake of data.mistakes) {
     mistakeIds.add(ensureRecordId((mistake as Partial<Mistake>).id));
+    const moduleId = Number((mistake as Partial<Mistake>).module_id);
+    const questionNo = Number((mistake as Partial<Mistake>).question_no);
+    const questionKey = `${moduleId}:${questionNo}`;
+    if (
+      !moduleIds.has(moduleId)
+      || !Number.isInteger(questionNo)
+      || questionNo < 1
+      || questionNo > 999
+      || questionKeys.has(questionKey)
+    ) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+    questionKeys.add(questionKey);
+  }
+
+  for (const counter of data.moduleQuestionCounters) {
+    const moduleId = Number(counter.module_id);
+    const lastQuestionNo = Number(counter.last_question_no);
+    if (
+      !moduleIds.has(moduleId)
+      || !Number.isInteger(lastQuestionNo)
+      || lastQuestionNo < 0
+      || lastQuestionNo > 999
+    ) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
   }
 
   const reviewIds = new Set<string>();
@@ -1249,6 +1586,14 @@ async function listAllCustomModules(): Promise<BackupCustomModuleRecord[]> {
   return CustomModuleRepository.listCustomModules();
 }
 
+async function listAllModules(): Promise<BackupModuleRecord[]> {
+  return ModuleRepository.listAllModules();
+}
+
+async function listAllModuleQuestionCounters(): Promise<BackupModuleQuestionCounterRecord[]> {
+  return ModuleRepository.listQuestionCounters();
+}
+
 async function listAllCustomErrorReasons(): Promise<BackupCustomErrorReasonRecord[]> {
   return CustomErrorReasonRepository.listCustomErrorReasons();
 }
@@ -1809,6 +2154,11 @@ async function readBackupPackageFromTemp(options: {
   let data: BackupDataPayload;
   try {
     data = validateBackupDataPayload(parsedDataRaw);
+    data = normalizeBackupModulesForCurrentSchema(
+      data,
+      manifest.schemaVersion,
+      manifest.createdAt,
+    );
   } catch (error) {
     throw buildRestoreError({
       errorCode: 'RESTORE_DATA_VALIDATE_FAILED',
@@ -1960,7 +2310,8 @@ function validateRestorePackage(options: {
 
   for (const customModule of data.customModules) {
     if (
-      !normalizeOptionalText(customModule.id)
+      !Number.isInteger(Number(customModule.id))
+      || Number(customModule.id) <= 0
       || !normalizeOptionalText(customModule.name)
       || !normalizeOptionalText(customModule.icon)
       || !normalizeOptionalText(customModule.color)
@@ -2261,8 +2612,14 @@ async function runRestoreDatabaseTransaction(options: {
         await db.runAsync('DELETE FROM mistake_images;');
         await db.runAsync('DELETE FROM mistakes;');
         if (shouldRestoreCustomConfiguration) {
-          await db.runAsync('DELETE FROM custom_modules;');
+          await db.runAsync('DELETE FROM module_question_counters;');
+          await db.runAsync('DELETE FROM modules;');
           await db.runAsync('DELETE FROM custom_error_reasons;');
+        } else {
+          await db.runAsync(
+            "DELETE FROM module_question_counters WHERE module_id IN (SELECT id FROM modules WHERE type <> 'custom');",
+          );
+          await db.runAsync("DELETE FROM modules WHERE type <> 'custom';");
         }
       } catch (error) {
         appendError(errors, {
@@ -2295,31 +2652,28 @@ async function runRestoreDatabaseTransaction(options: {
       dbClearDurationMs = nowMs() - dbClearStartedAt;
 
       try {
-        if (shouldRestoreCustomConfiguration) {
-          for (let index = 0; index < data.customModules.length; index += 1) {
-            const customModule = data.customModules[index];
-            await db.runAsync(
-              INSERT_CUSTOM_MODULE_SQL,
-              customModule.id,
-              customModule.name,
-              customModule.icon,
-              customModule.color,
-              customModule.sort_order,
-              customModule.created_at,
-              customModule.updated_at,
-            );
-
-            if ((index + 1) % DB_IMPORT_PROGRESS_INTERVAL === 0 || index === data.customModules.length - 1) {
-              logRestoreEvent(SERVICE_SCOPE, 'info', 'restore_db_import_progress', {
-                restoreSessionId,
-                tableName: 'custom_modules',
-                importedCount: index + 1,
-                totalCount: data.customModules.length,
-                durationMs: nowMs() - importStartedAt,
-              });
-            }
+        for (let index = 0; index < data.modules.length; index += 1) {
+          const moduleItem = data.modules[index];
+          if (!shouldRestoreCustomConfiguration && moduleItem.type === 'custom') {
+            continue;
           }
+          await db.runAsync(
+            INSERT_MODULE_SQL,
+            moduleItem.id,
+            moduleItem.type,
+            moduleItem.name,
+            moduleItem.display_code,
+            moduleItem.custom_no,
+            moduleItem.icon,
+            moduleItem.color,
+            moduleItem.sort_order,
+            moduleItem.is_active ? 1 : 0,
+            moduleItem.created_at,
+            moduleItem.updated_at,
+          );
+        }
 
+        if (shouldRestoreCustomConfiguration) {
           for (let index = 0; index < data.customErrorReasons.length; index += 1) {
             const customErrorReason = data.customErrorReasons[index];
             await db.runAsync(
@@ -2352,7 +2706,8 @@ async function runRestoreDatabaseTransaction(options: {
             mistake.id,
             mistake.subject,
             mistake.module,
-            mistake.module_id ?? null,
+            mistake.module_id,
+            mistake.question_no,
             mistake.title ?? null,
             mistake.error_reason ?? null,
             mistake.error_reason_ids ?? null,
@@ -2381,6 +2736,22 @@ async function runRestoreDatabaseTransaction(options: {
               durationMs: nowMs() - importStartedAt,
             });
           }
+        }
+
+        for (let index = 0; index < data.moduleQuestionCounters.length; index += 1) {
+          const counter = data.moduleQuestionCounters[index];
+          if (
+            !shouldRestoreCustomConfiguration
+            && data.modules.some((item) => item.id === counter.module_id && item.type === 'custom')
+          ) {
+            continue;
+          }
+          await db.runAsync(
+            INSERT_MODULE_QUESTION_COUNTER_SQL,
+            counter.module_id,
+            counter.last_question_no,
+            counter.updated_at,
+          );
         }
 
         for (let index = 0; index < data.reviewRecords.length; index += 1) {
@@ -2615,6 +2986,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       reviewRecords,
       mistakeRelations,
       mistakeTags,
+      modules,
+      moduleQuestionCounters,
       customModules,
       customErrorReasons,
     ] = await Promise.all([
@@ -2623,6 +2996,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       listAllReviewRecords(),
       listAllMistakeRelations(),
       listAllMistakeTags(),
+      listAllModules(),
+      listAllModuleQuestionCounters(),
       listAllCustomModules(),
       listAllCustomErrorReasons(),
     ]);
@@ -2675,12 +3050,16 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       reviewRecords,
       mistakeRelations,
       mistakeTags,
+      modules,
+      moduleQuestionCounters,
       customModules,
       customErrorReasons,
       extra: {
         reason,
         mistakeRelationCount: mistakeRelations.length,
         mistakeTagCount: mistakeTags.length,
+        moduleCount: modules.length,
+        moduleQuestionCounterCount: moduleQuestionCounters.length,
         customModuleCount: customModules.length,
         customErrorReasonCount: customErrorReasons.length,
         voiceNoteCount: voiceArtifacts.backupVoiceNotes.length,

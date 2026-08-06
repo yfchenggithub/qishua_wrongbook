@@ -50,7 +50,7 @@ export interface DetailReviewRecordItem {
 export interface MistakeDetailViewModel {
   id: string;
   module: string;
-  moduleId?: string | null;
+  moduleId: number;
   title: string;
   subtitle: string;
   errorReason?: string | null;

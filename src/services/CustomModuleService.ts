@@ -4,7 +4,7 @@ import { CustomModuleRepository } from '@/src/repositories/CustomModuleRepositor
 import { Logger } from '@/src/services/Logger';
 
 const SERVICE_SCOPE = 'CustomModuleService';
-export const MAX_CUSTOM_MODULE_COUNT = 2000;
+export const MAX_CUSTOM_MODULE_COUNT = 999;
 export const MAX_CUSTOM_MODULE_NAME_LENGTH = 16;
 
 export const CUSTOM_MODULE_TEMPLATES = [
@@ -53,7 +53,7 @@ function isDefaultModuleName(name: string): boolean {
 function hasDuplicateCustomModuleName(
   modules: CustomModule[],
   name: string,
-  ignoredId?: string,
+  ignoredId?: number,
 ): boolean {
   return modules.some((moduleItem) => moduleItem.id !== ignoredId && isSameModuleName(moduleItem.name, name));
 }
@@ -121,7 +121,7 @@ export const CustomModuleService = {
   },
 
   async updateCustomModuleName(
-    id: string,
+    id: number,
     name: string,
   ): Promise<CustomModuleActionResult> {
     try {
@@ -164,7 +164,7 @@ export const CustomModuleService = {
     }
   },
 
-  async deleteCustomModule(id: string): Promise<CustomModuleActionResult> {
+  async deleteCustomModule(id: number): Promise<CustomModuleActionResult> {
     try {
       const deleted = await CustomModuleRepository.deleteCustomModule(id);
       if (!deleted) {
@@ -190,7 +190,7 @@ export const CustomModuleService = {
   },
 
   async moveCustomModule(
-    id: string,
+    id: number,
     direction: MoveCustomModuleDirection,
   ): Promise<CustomModuleActionResult> {
     try {

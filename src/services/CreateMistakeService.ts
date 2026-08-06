@@ -1,6 +1,10 @@
 import { withDatabaseTransaction } from '@/src/db';
 import { REVIEW_STATUS } from '@/src/constants/review';
 import { UNCLASSIFIED_MODULE } from '@/src/constants/mistakeOptions';
+import {
+  UNCLASSIFIED_MODULE_ID,
+  resolveSystemModuleByLegacyIdOrName,
+} from '@/src/constants/modules';
 import type { AddMistakeDraft } from '@/src/models/AddMistakeDraft';
 import type { ImageType } from '@/src/models/Mistake';
 import { MistakeImageRepository, MistakeRepository } from '@/src/repositories';
@@ -56,14 +60,32 @@ function normalizeOptionalText(value: string | null | undefined): string | undef
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveDraftModule(draft: AddMistakeDraft): { moduleName: string; moduleId: string | null } {
+function parseSelectedModuleId(value: string | null | undefined): number | null {
+  const normalized = typeof value === 'string' ? value.trim() : '';
+  if (!normalized) {
+    return null;
+  }
+  const direct = Number.parseInt(normalized, 10);
+  if (/^\d+$/u.test(normalized) && direct > 0) {
+    return direct;
+  }
+  const customMatched = normalized.match(/^custom:(\d+)$/u);
+  if (customMatched) {
+    return Number.parseInt(customMatched[1], 10);
+  }
+  return null;
+}
+
+function resolveDraftModule(draft: AddMistakeDraft): { moduleName: string; moduleId: number } {
   const moduleName = normalizeOptionalText(draft.module);
   if (!moduleName) {
-    return { moduleName: UNCLASSIFIED_MODULE, moduleId: null };
+    return { moduleName: UNCLASSIFIED_MODULE, moduleId: UNCLASSIFIED_MODULE_ID };
   }
+  const selectedModuleId = parseSelectedModuleId(draft.moduleId);
+  const systemModule = resolveSystemModuleByLegacyIdOrName(draft.moduleId, moduleName);
   return {
     moduleName,
-    moduleId: normalizeOptionalText(draft.moduleId) ?? null,
+    moduleId: selectedModuleId ?? systemModule?.id ?? UNCLASSIFIED_MODULE_ID,
   };
 }
 
@@ -202,6 +224,7 @@ async function persistDraft(
     subject: draft.subject?.trim() || DEFAULT_SUBJECT,
     module: moduleName,
     module_id: moduleId,
+    question_no: normalizeQuestionNo(questionNo),
     title: normalizeOptionalText(draft.title) ?? buildCanonicalQuestionTitle(moduleName, questionNo),
     error_reason: buildDisplayErrorReason(draft),
     error_reason_ids: serializeIds(draft.errorReasonIds) ?? null,
@@ -239,11 +262,11 @@ async function resolveQuestionNoForDraft(
     return normalizeQuestionNo(options.questionNo);
   }
 
-  const { moduleName } = resolveDraftModule(draft);
+  const { moduleId } = resolveDraftModule(draft);
 
   const reservedQuestionNumbers = await MistakeRepository.reserveNextQuestionNumbersByModuleInTransaction(
     db,
-    moduleName,
+    moduleId,
     1,
   );
   return normalizeQuestionNo(reservedQuestionNumbers[0]);
@@ -369,7 +392,7 @@ export async function createMistakesFromDraft(
     return { ok: false, errorMessage: validation.errors.join('\n') };
   }
 
-  const { moduleName } = resolveDraftModule(draft);
+  const { moduleId } = resolveDraftModule(draft);
 
   const mistakeIds = questionImages.map((_, index) =>
     index === 0 ? draft.draftId : createMistakeId(),
@@ -378,7 +401,7 @@ export async function createMistakesFromDraft(
     await withDatabaseTransaction(async (db) => {
       const questionNumbers = await MistakeRepository.reserveNextQuestionNumbersByModuleInTransaction(
         db,
-        moduleName,
+        moduleId,
         questionImages.length,
       );
       for (let index = 0; index < questionImages.length; index += 1) {

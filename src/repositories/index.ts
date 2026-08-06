@@ -7,6 +7,7 @@ export {
   type UpdateReviewProgressParams,
 } from '@/src/repositories/MistakeRepository';
 export { CustomModuleRepository } from '@/src/repositories/CustomModuleRepository';
+export { ModuleRepository } from '@/src/repositories/ModuleRepository';
 export { CustomErrorReasonRepository } from '@/src/repositories/CustomErrorReasonRepository';
 export { MistakeImageRepository } from '@/src/repositories/MistakeImageRepository';
 export { MistakeRelationRepository } from '@/src/repositories/MistakeRelationRepository';

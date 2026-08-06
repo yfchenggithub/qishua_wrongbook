@@ -1,5 +1,6 @@
 import { getDatabase, initDatabase, withDatabaseTransaction } from '@/src/db';
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
+import { MODULE_QUESTION_MAX_NUMBER } from '@/src/constants/modules';
 import type {
   CreateMistakeInput,
   Mistake,
@@ -21,6 +22,7 @@ INSERT INTO mistakes (
   subject,
   module,
   module_id,
+  question_no,
   title,
   error_reason,
   error_reason_ids,
@@ -38,15 +40,19 @@ INSERT INTO mistakes (
   last_review_result,
   is_pinned,
   last_viewed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `;
 
 const SELECT_MISTAKE_FIELDS_SQL = `
 SELECT
   id,
   subject,
-  module,
+  COALESCE(
+    (SELECT module_lookup.name FROM modules module_lookup WHERE module_lookup.id = mistakes.module_id),
+    module
+  ) AS module,
   module_id,
+  question_no,
   title,
   error_reason,
   error_reason_ids,
@@ -139,6 +145,12 @@ export interface UpdateLastReviewResultInTransactionParams {
   updatedAt: string;
 }
 
+export interface MoveMistakeToModuleParams {
+  mistakeId: string;
+  module: string;
+  moduleId: number;
+}
+
 type MistakeStatsRow = {
   total: number | null;
   collected: number | null;
@@ -167,8 +179,8 @@ type ModuleQuestionCounterRow = {
   last_question_no: number | null;
 };
 
-type MistakeTitleRow = {
-  title: string | null;
+type MaxQuestionNoRow = {
+  max_question_no: number | null;
 };
 
 type QueryConditions = {
@@ -286,10 +298,18 @@ function normalizePositiveInteger(value: number, fieldName: string): number {
   return normalized;
 }
 
-function normalizeRequiredModule(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) {
-    throw new Error('module must be a non-empty string.');
+function normalizeRequiredModuleId(value: number): number {
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    throw new Error('moduleId must be a positive integer.');
+  }
+  return normalized;
+}
+
+function normalizeQuestionNo(value: number): number {
+  const normalized = Math.floor(value);
+  if (!Number.isFinite(normalized) || normalized < 1 || normalized > MODULE_QUESTION_MAX_NUMBER) {
+    throw new Error(`question_no must be an integer between 1 and ${MODULE_QUESTION_MAX_NUMBER}.`);
   }
   return normalized;
 }
@@ -312,90 +332,54 @@ function toPinnedInteger(value: boolean | number | null | undefined): number {
   return normalizePinnedFlag(value) ? 1 : 0;
 }
 
-function parseQuestionNoFromTitle(title: string | null | undefined): number | null {
-  if (typeof title !== 'string') {
-    return null;
-  }
-  const normalized = title.trim();
-  if (!normalized) {
-    return null;
-  }
-  const matched = normalized.match(/第\s*(\d+)\s*题\s*$/u);
-  if (!matched) {
-    return null;
-  }
-  const parsed = Number.parseInt(matched[1], 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return null;
-  }
-  return parsed;
-}
-
 async function resolveBootstrapLastQuestionNoByModule(
   db: SQLite.SQLiteDatabase,
-  moduleName: string,
+  moduleId: number,
 ): Promise<number> {
-  const countRow = await db.getFirstAsync<CountRow>(
-    `SELECT COUNT(*) AS total
+  const row = await db.getFirstAsync<MaxQuestionNoRow>(
+    `SELECT MAX(question_no) AS max_question_no
 FROM mistakes
-WHERE module = ?;`,
-    moduleName,
+WHERE module_id = ?;`,
+    moduleId,
   );
-  const totalCount = Number(countRow?.total ?? 0);
-
-  const titleRows = await db.getAllAsync<MistakeTitleRow>(
-    `SELECT title
-FROM mistakes
-WHERE module = ?;`,
-    moduleName,
-  );
-
-  let maxTitleQuestionNo = 0;
-  for (const row of titleRows) {
-    const parsedQuestionNo = parseQuestionNoFromTitle(row.title);
-    if (!parsedQuestionNo) {
-      continue;
-    }
-    if (parsedQuestionNo > maxTitleQuestionNo) {
-      maxTitleQuestionNo = parsedQuestionNo;
-    }
-  }
-
-  return Math.max(totalCount, maxTitleQuestionNo);
+  return Math.max(0, Math.floor(Number(row?.max_question_no ?? 0)));
 }
 
 async function reserveQuestionNumbersByModuleInTransactionInternal(
   db: SQLite.SQLiteDatabase,
-  moduleInput: string,
+  moduleIdInput: number,
   countInput: number,
 ): Promise<number[]> {
-  const moduleName = normalizeRequiredModule(moduleInput);
+  const moduleId = normalizeRequiredModuleId(moduleIdInput);
   const count = normalizePositiveInteger(countInput, 'count');
   const now = nowIso();
 
   const counterRow = await db.getFirstAsync<ModuleQuestionCounterRow>(
     `SELECT last_question_no
 FROM module_question_counters
-WHERE module = ?
+WHERE module_id = ?
 LIMIT 1;`,
-    moduleName,
+    moduleId,
   );
 
   let currentLastQuestionNo: number;
   if (counterRow && typeof counterRow.last_question_no === 'number') {
     currentLastQuestionNo = Math.max(0, Math.floor(counterRow.last_question_no));
   } else {
-    currentLastQuestionNo = await resolveBootstrapLastQuestionNoByModule(db, moduleName);
+    currentLastQuestionNo = await resolveBootstrapLastQuestionNoByModule(db, moduleId);
   }
 
   const nextLastQuestionNo = currentLastQuestionNo + count;
+  if (nextLastQuestionNo > MODULE_QUESTION_MAX_NUMBER) {
+    throw new Error(`该模块最多只能录入 ${MODULE_QUESTION_MAX_NUMBER} 道错题。`);
+  }
   await db.runAsync(
-    `INSERT INTO module_question_counters (module, last_question_no, updated_at)
+    `INSERT INTO module_question_counters (module_id, last_question_no, updated_at)
 VALUES (?, ?, ?)
-ON CONFLICT(module) DO UPDATE
+ON CONFLICT(module_id) DO UPDATE
 SET last_question_no = excluded.last_question_no,
     updated_at = excluded.updated_at;`,
-    moduleName,
+    moduleId,
     nextLastQuestionNo,
     now,
   );
@@ -432,12 +416,34 @@ function normalizeIsoDateTime(value: string, fieldName: string): string {
 function mapMistakeRow(row: Mistake): Mistake {
   return {
     ...row,
+    module_id: Number(row.module_id),
+    question_no: Number(row.question_no),
     difficulty: Number(row.difficulty),
     review_count: Number(row.review_count),
     status: row.status as MistakeStatus,
     is_pinned: normalizePinnedFlag(row.is_pinned as unknown as boolean | number | null | undefined),
     last_viewed_at: row.last_viewed_at ?? null,
   };
+}
+
+function buildTitleAfterModuleMove(
+  currentTitle: string | null | undefined,
+  currentModule: string,
+  nextModule: string,
+  nextQuestionNo: number,
+): string | null {
+  const normalizedTitle = typeof currentTitle === 'string' ? currentTitle.trim() : '';
+  if (!normalizedTitle) {
+    return currentTitle ?? null;
+  }
+  const canonicalPrefix = `${currentModule.trim()} · `;
+  if (normalizedTitle.startsWith(canonicalPrefix)) {
+    const suffix = normalizedTitle.slice(canonicalPrefix.length);
+    if (/^第\s*\d+\s*题$/u.test(suffix)) {
+      return `${nextModule} · 第 ${nextQuestionNo} 题`;
+    }
+  }
+  return currentTitle ?? null;
 }
 
 async function getByIdInternal(
@@ -475,7 +481,8 @@ async function createMistakeInDatabase(
     id: inputId && inputId.length > 0 ? inputId : buildMistakeId(),
     subject: input.subject?.trim() || DEFAULT_SUBJECT,
     module: input.module,
-    module_id: input.module_id ?? null,
+    module_id: normalizeRequiredModuleId(input.module_id),
+    question_no: normalizeQuestionNo(input.question_no),
     title: input.title ?? null,
     error_reason: input.error_reason ?? null,
     error_reason_ids: input.error_reason_ids ?? null,
@@ -500,7 +507,8 @@ async function createMistakeInDatabase(
     record.id,
     record.subject,
     record.module,
-    record.module_id ?? null,
+    record.module_id,
+    record.question_no,
     record.title ?? null,
     record.error_reason ?? null,
     record.error_reason_ids ?? null,
@@ -631,7 +639,9 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
 
   const moduleFilter = normalizeModuleFilter(options?.module);
   if (moduleFilter) {
-    whereClauses.push('module = ?');
+    whereClauses.push(`module_id = (
+  SELECT module_filter.id FROM modules module_filter WHERE module_filter.name = ? LIMIT 1
+)`);
     bindParams.push(moduleFilter);
   }
 
@@ -641,7 +651,10 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
     const likeTagKeyword = `%${keyword.toLocaleLowerCase()}%`;
     whereClauses.push(`(
   title LIKE ?
-  OR module LIKE ?
+  OR EXISTS (
+    SELECT 1 FROM modules module_search
+    WHERE module_search.id = mistakes.module_id AND module_search.name LIKE ?
+  )
   OR error_reason LIKE ?
   OR note LIKE ?
   OR my_solution_text LIKE ?
@@ -710,17 +723,17 @@ function buildMistakesSubqueryWhere(conditions: QueryConditions, relationSql: st
 
 export const MistakeRepository = {
   async reserveNextQuestionNumbersByModule(
-    moduleName: string,
+    moduleId: number,
     count = 1,
   ): Promise<number[]> {
     try {
       await ensureDatabaseReady();
       return await withDatabaseTransaction(async (db) =>
-        reserveQuestionNumbersByModuleInTransactionInternal(db, moduleName, count),
+        reserveQuestionNumbersByModuleInTransactionInternal(db, moduleId, count),
       );
     } catch (error) {
       Logger.error(REPO_SCOPE, 'reserveNextQuestionNumbersByModule failed.', {
-        moduleName,
+        moduleId,
         count,
         error,
       });
@@ -730,14 +743,14 @@ export const MistakeRepository = {
 
   async reserveNextQuestionNumbersByModuleInTransaction(
     db: SQLite.SQLiteDatabase,
-    moduleName: string,
+    moduleId: number,
     count = 1,
   ): Promise<number[]> {
     try {
-      return await reserveQuestionNumbersByModuleInTransactionInternal(db, moduleName, count);
+      return await reserveQuestionNumbersByModuleInTransactionInternal(db, moduleId, count);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'reserveNextQuestionNumbersByModuleInTransaction failed.', {
-        moduleName,
+        moduleId,
         count,
         error,
       });
@@ -764,6 +777,60 @@ export const MistakeRepository = {
       return await createMistakeInDatabase(db, input);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createMistakeInTransaction failed.', error);
+      throw error;
+    }
+  },
+
+  async moveMistakeToModule(params: MoveMistakeToModuleParams): Promise<Mistake | null> {
+    try {
+      await ensureDatabaseReady();
+      return await withDatabaseTransaction(async (db) => {
+        const current = await getByIdInternal(db, params.mistakeId);
+        if (!current) {
+          return null;
+        }
+        const moduleId = normalizeRequiredModuleId(params.moduleId);
+        const moduleName = params.module.trim();
+        if (!moduleName) {
+          throw new Error('module must be a non-empty string.');
+        }
+        if (current.module_id === moduleId) {
+          await db.runAsync(
+            `UPDATE mistakes
+SET module = ?, updated_at = ?
+WHERE id = ?;`,
+            moduleName,
+            nowIso(),
+            params.mistakeId,
+          );
+          return getByIdInternal(db, params.mistakeId);
+        }
+        const [questionNo] = await reserveQuestionNumbersByModuleInTransactionInternal(
+          db,
+          moduleId,
+          1,
+        );
+        const nextTitle = buildTitleAfterModuleMove(
+          current.title,
+          current.module,
+          moduleName,
+          questionNo,
+        );
+        await db.runAsync(
+          `UPDATE mistakes
+SET module = ?, module_id = ?, question_no = ?, title = ?, updated_at = ?
+WHERE id = ?;`,
+          moduleName,
+          moduleId,
+          questionNo,
+          nextTitle,
+          nowIso(),
+          params.mistakeId,
+        );
+        return getByIdInternal(db, params.mistakeId);
+      });
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'moveMistakeToModule failed.', { params, error });
       throw error;
     }
   },
@@ -844,9 +911,10 @@ FROM mistakes${conditions.whereSql};`,
       const conditions = buildListConditions(options);
 
       const rows = await db.getAllAsync<ModuleCountRow>(
-        `SELECT module, COUNT(*) AS total
-FROM mistakes${conditions.whereSql}
-GROUP BY module
+        `SELECT COALESCE(module_lookup.name, mistakes.module) AS module, COUNT(*) AS total
+FROM mistakes
+LEFT JOIN modules module_lookup ON module_lookup.id = mistakes.module_id${conditions.whereSql}
+GROUP BY mistakes.module_id, COALESCE(module_lookup.name, mistakes.module)
 ORDER BY total DESC, module ASC;`,
         ...conditions.bindParams,
       );
@@ -1149,6 +1217,7 @@ FROM mistakes;`,
         'subject',
         'module',
         'module_id',
+        'question_no',
         'title',
         'error_reason',
         'error_reason_ids',
@@ -1185,6 +1254,18 @@ FROM mistakes;`,
         if (field === 'review_count') {
           setClauses.push(`${field} = ?`);
           bindParams.push(normalizeReviewCount(fieldValue as number));
+          continue;
+        }
+
+        if (field === 'module_id') {
+          setClauses.push(`${field} = ?`);
+          bindParams.push(normalizeRequiredModuleId(fieldValue as number));
+          continue;
+        }
+
+        if (field === 'question_no') {
+          setClauses.push(`${field} = ?`);
+          bindParams.push(normalizeQuestionNo(fieldValue as number));
           continue;
         }
 

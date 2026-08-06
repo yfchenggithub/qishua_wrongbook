@@ -9,7 +9,8 @@ export interface Mistake {
   id: string;
   subject: string;
   module: string;
-  module_id?: string | null;
+  module_id: number;
+  question_no: number;
   title?: string | null;
   error_reason?: string | null;
   error_reason_ids?: string | null;
@@ -32,7 +33,8 @@ export interface Mistake {
 export interface CreateMistakeInput {
   id?: string;
   module: string;
-  module_id?: string | null;
+  module_id: number;
+  question_no: number;
   title?: string;
   error_reason?: string;
   error_reason_ids?: string | null;
@@ -53,7 +55,8 @@ export interface CreateMistakeInput {
 export interface UpdateMistakeInput {
   subject?: string;
   module?: string;
-  module_id?: string | null;
+  module_id?: number;
+  question_no?: number;
   title?: string | null;
   error_reason?: string | null;
   error_reason_ids?: string | null;

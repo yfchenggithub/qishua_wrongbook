@@ -53,9 +53,9 @@ export interface CustomModuleManagerModalProps {
   onClose: () => void;
   onSelectModule: (moduleName: string) => void;
   onCreateModule: (moduleName: string) => Promise<boolean>;
-  onUpdateModule: (moduleId: string, moduleName: string) => Promise<boolean>;
+  onUpdateModule: (moduleId: number, moduleName: string) => Promise<boolean>;
   onDeleteModule: (module: CustomModule) => void;
-  onMoveModule: (moduleId: string, direction: MoveCustomModuleDirection) => void;
+  onMoveModule: (moduleId: number, direction: MoveCustomModuleDirection) => void;
   onUseTemplate: (moduleName: string) => Promise<boolean>;
 }
 

@@ -1,5 +1,6 @@
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import { ERROR_REASON_OPTIONS, MISTAKE_NOTE_MAX_LENGTH, MODULE_OPTIONS } from '@/src/constants/mistakeOptions';
+import { UNCLASSIFIED_MODULE_ID, UNCLASSIFIED_MODULE_NAME } from '@/src/constants/modules';
 import type {
   DetailImageSlot,
   DetailPreviewImageItem,
@@ -277,13 +278,16 @@ function parseStoredStringArray(value?: string | null): string[] {
   }
 }
 
-async function resolveStoredModuleId(moduleName: string): Promise<string | null> {
+async function resolveStoredModuleId(moduleName: string): Promise<number | null> {
+  if (moduleName === UNCLASSIFIED_MODULE_NAME) {
+    return UNCLASSIFIED_MODULE_ID;
+  }
   const builtIn = MODULE_OPTIONS.find((option) => option.value === moduleName);
   if (builtIn) {
-    return builtIn.id;
+    return Number.parseInt(builtIn.id, 10);
   }
   const custom = await CustomModuleRepository.findCustomModuleByName(moduleName);
-  return custom ? `custom:${custom.id}` : null;
+  return custom?.id ?? null;
 }
 
 async function resolveStoredErrorReasonIds(errorReason: string | null): Promise<string | null> {
@@ -328,32 +332,6 @@ function buildDetailTitle(moduleName: string, title?: string | null): string {
     return normalizedTitle;
   }
   return `${moduleName}错题`;
-}
-
-function buildTitleAfterModuleUpdate(
-  currentTitle: string | null | undefined,
-  currentModule: string,
-  nextModule: string,
-): string | null | undefined {
-  const normalizedTitle = normalizeOptionalText(currentTitle);
-  const normalizedCurrentModule = normalizeOptionalText(currentModule);
-  if (!normalizedTitle || !normalizedCurrentModule || normalizedCurrentModule === nextModule) {
-    return currentTitle;
-  }
-
-  const canonicalPrefix = `${normalizedCurrentModule} · `;
-  if (normalizedTitle.startsWith(canonicalPrefix)) {
-    const suffix = normalizedTitle.slice(canonicalPrefix.length);
-    if (/^第\s*\d+\s*题$/u.test(suffix)) {
-      return `${nextModule} · ${suffix}`;
-    }
-  }
-
-  if (normalizedTitle === `${normalizedCurrentModule}错题`) {
-    return `${nextModule}错题`;
-  }
-
-  return currentTitle;
 }
 
 function normalizeDetailDifficulty(value: number): number | null {
@@ -1136,16 +1114,17 @@ export async function updateMistakeModule(
       };
     }
 
-    const nextTitle = buildTitleAfterModuleUpdate(
-      currentMistake.title,
-      currentMistake.module,
-      nextModule,
-    );
     const nextModuleId = await resolveStoredModuleId(nextModule);
-    const updated = await MistakeRepository.updateMistake(mistakeId, {
+    if (!nextModuleId) {
+      return {
+        ok: false,
+        errorMessage: '未找到对应模块。',
+      };
+    }
+    const updated = await MistakeRepository.moveMistakeToModule({
+      mistakeId,
       module: nextModule,
-      module_id: nextModuleId,
-      title: nextTitle ?? null,
+      moduleId: nextModuleId,
     });
     if (!updated) {
       return {

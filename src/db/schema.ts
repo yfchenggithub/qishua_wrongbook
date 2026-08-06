@@ -1,12 +1,32 @@
 import { MAX_REVIEW_COUNT } from '@/src/constants/review';
 import { BRAND_ACCENT } from '@/src/styles/tokens';
 
+export const CREATE_MODULES_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS modules (
+  id INTEGER PRIMARY KEY,
+  type TEXT NOT NULL CHECK (type IN ('system', 'custom', 'unclassified')),
+  name TEXT NOT NULL UNIQUE,
+  display_code TEXT NOT NULL UNIQUE,
+  custom_no INTEGER UNIQUE CHECK (
+    (type = 'custom' AND custom_no BETWEEN 1 AND 999)
+    OR (type <> 'custom' AND custom_no IS NULL)
+  ),
+  icon TEXT NOT NULL DEFAULT 'label',
+  color TEXT NOT NULL DEFAULT '${BRAND_ACCENT}',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
 export const CREATE_MISTAKES_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS mistakes (
   id TEXT PRIMARY KEY,
   subject TEXT NOT NULL DEFAULT 'math',
   module TEXT NOT NULL,
-  module_id TEXT,
+  module_id INTEGER NOT NULL,
+  question_no INTEGER NOT NULL CHECK (question_no BETWEEN 1 AND 999),
   title TEXT,
   error_reason TEXT,
   error_reason_ids TEXT,
@@ -26,7 +46,9 @@ CREATE TABLE IF NOT EXISTS mistakes (
     OR last_review_result IN ('mastered', 'unsure', 'wrong')
   ),
   is_pinned INTEGER NOT NULL DEFAULT 0 CHECK (is_pinned IN (0, 1)),
-  last_viewed_at TEXT
+  last_viewed_at TEXT,
+  UNIQUE(module_id, question_no),
+  FOREIGN KEY(module_id) REFERENCES modules(id)
 );
 `;
 
@@ -81,21 +103,10 @@ CREATE TABLE IF NOT EXISTS review_sheet_items (
 
 export const CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS module_question_counters (
-  module TEXT PRIMARY KEY,
-  last_question_no INTEGER NOT NULL CHECK (last_question_no >= 0),
-  updated_at TEXT NOT NULL
-);
-`;
-
-export const CREATE_CUSTOM_MODULES_TABLE_SQL = `
-CREATE TABLE IF NOT EXISTS custom_modules (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL UNIQUE,
-  icon TEXT NOT NULL DEFAULT 'label',
-  color TEXT NOT NULL DEFAULT '${BRAND_ACCENT}',
-  sort_order INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  module_id INTEGER PRIMARY KEY,
+  last_question_no INTEGER NOT NULL CHECK (last_question_no BETWEEN 0 AND 999),
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(module_id) REFERENCES modules(id)
 );
 `;
 
@@ -140,9 +151,12 @@ CREATE TABLE IF NOT EXISTS mistake_tags (
 `;
 
 export const CREATE_INDEXES_SQL = `
-  CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
+CREATE INDEX IF NOT EXISTS idx_modules_type_active_order ON modules(type, is_active, sort_order, created_at);
+CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
 CREATE INDEX IF NOT EXISTS idx_mistakes_next_review_at ON mistakes(next_review_at);
 CREATE INDEX IF NOT EXISTS idx_mistakes_module ON mistakes(module);
+CREATE INDEX IF NOT EXISTS idx_mistakes_module_id ON mistakes(module_id);
+CREATE INDEX IF NOT EXISTS idx_mistakes_module_question_no ON mistakes(module_id, question_no);
 CREATE INDEX IF NOT EXISTS idx_mistakes_status_next_review_at ON mistakes(status, next_review_at);
 CREATE INDEX IF NOT EXISTS idx_review_records_mistake_id ON review_records(mistake_id);
 CREATE INDEX IF NOT EXISTS idx_review_records_created_at ON review_records(created_at);
@@ -155,7 +169,6 @@ CREATE INDEX IF NOT EXISTS idx_mistake_images_cover ON mistake_images(mistake_id
 CREATE INDEX IF NOT EXISTS idx_review_sheets_is_submitted ON review_sheets(is_submitted, created_at);
 CREATE INDEX IF NOT EXISTS idx_review_sheet_items_sheet_order ON review_sheet_items(sheet_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_review_sheet_items_mistake_id ON review_sheet_items(mistake_id);
-CREATE INDEX IF NOT EXISTS idx_custom_modules_sort_order ON custom_modules(sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_custom_error_reasons_sort_order ON custom_error_reasons(sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_source_mistake ON mistake_relations(source_mistake_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_relations_target_mistake ON mistake_relations(target_mistake_id, created_at);
@@ -166,13 +179,13 @@ CREATE INDEX IF NOT EXISTS idx_mistake_tags_normalized_mistake ON mistake_tags(n
 `;
 
 export const CREATE_SCHEMA_SQL = `
+${CREATE_MODULES_TABLE_SQL}
 ${CREATE_MISTAKES_TABLE_SQL}
 ${CREATE_REVIEW_RECORDS_TABLE_SQL}
 ${CREATE_MISTAKE_IMAGES_TABLE_SQL}
 ${CREATE_REVIEW_SHEETS_TABLE_SQL}
 ${CREATE_REVIEW_SHEET_ITEMS_TABLE_SQL}
 ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
-${CREATE_CUSTOM_MODULES_TABLE_SQL}
 ${CREATE_CUSTOM_ERROR_REASONS_TABLE_SQL}
 ${CREATE_MISTAKE_RELATIONS_TABLE_SQL}
 ${CREATE_MISTAKE_TAGS_TABLE_SQL}

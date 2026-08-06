@@ -1,15 +1,17 @@
 export interface CustomModule {
-  id: string;
+  id: number;
   name: string;
+  display_code: string;
+  custom_no: number;
   icon: string;
   color: string;
   sort_order: number;
+  is_active: boolean;
   created_at: string;
   updated_at: string;
 }
 
 export interface CreateCustomModuleInput {
-  id?: string;
   name: string;
   icon?: string;
   color?: string;

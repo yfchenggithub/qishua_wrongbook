@@ -44,7 +44,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "appName": "七刷错题本",
   "appVersion": "0.1.0",
   "createdAt": "2026-05-17T21:30:45.123+08:00",
-  "schemaVersion": 8,
+  "schemaVersion": 10,
   "devicePlatform": "android",
   "counts": {
     "mistakes": 128,
@@ -77,6 +77,8 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "reviewRecords": [],
   "mistakeRelations": [],
   "mistakeTags": [],
+  "modules": [],
+  "moduleQuestionCounters": [],
   "customModules": [],
   "customErrorReasons": [],
   "extra": {}
@@ -88,6 +90,8 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `id`
 - `subject`
 - `module`
+- `module_id`
+- `question_no`
 - `title`
 - `error_reason`
 - `difficulty`
@@ -142,7 +146,11 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `created_at`
 - `updated_at`
 
-### 5.7 customModules（按当前 schema 字段）
+### 5.7 modules 与 moduleQuestionCounters
+
+`modules` 保存完整模块表（包括系统、自定义、未分类和已停用模块）；`moduleQuestionCounters` 保存各永久 `module_id` 已分配的最大题号。两者必须随 schemaVersion 10 及以上备份完整恢复，确保模块关联和已使用题号不被复用。
+
+### 5.8 customModules（兼容字段）
 每条记录字段：
 - `id`
 - `name`
@@ -152,7 +160,7 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - `created_at`
 - `updated_at`
 
-### 5.8 customErrorReasons（按当前 schema 字段）
+### 5.9 customErrorReasons（按当前 schema 字段）
 每条记录字段：
 - `id`
 - `name`
@@ -167,8 +175,10 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - 恢复 schemaVersion 7 及以上备份时，自定义配置随备份全量覆盖。
 - 恢复 schemaVersion 6 及更早备份时，因为旧包没有自定义配置，本机已有自定义模块和自定义错因会保留。
 - schemaVersion 8 起，`mistakes.status` 支持 `collected`，表示已记录但尚未加入七刷。
+- schemaVersion 10 起，模块统一使用永久数字 `module_id`，并备份 `modules`、`question_no` 与 `moduleQuestionCounters`。
+- 恢复 schemaVersion 3-9 的旧备份时，恢复流程会按稳定顺序生成永久模块 ID 和模块内题号。
 
-### 5.9 extra
+### 5.10 extra
 - 预留扩展字段，当前可为空对象 `{}`。
 
 ## 6. 图片处理规则
@@ -196,6 +206,8 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 | `mistakes.id` | `mistakes[].id` | 直接映射 |
 | `mistakes.subject` | `mistakes[].subject` | 直接映射 |
 | `mistakes.module` | `mistakes[].module` | 直接映射 |
+| `mistakes.module_id` | `mistakes[].module_id` | 永久数字模块 ID |
+| `mistakes.question_no` | `mistakes[].question_no` | 模块内题号 |
 | `mistakes.title` | `mistakes[].title` | 直接映射 |
 | `mistakes.error_reason` | `mistakes[].error_reason` | 直接映射 |
 | `mistakes.difficulty` | `mistakes[].difficulty` | 直接映射 |
@@ -239,18 +251,21 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 | `mistake_relations.source` | `mistakeRelations[].source` | 直接映射 |
 | `mistake_relations.created_at` | `mistakeRelations[].created_at` | 直接映射 |
 
-### 8.5 custom_modules
+### 8.5 modules 与 module_question_counters
+
 | 数据库表字段 | data.json 字段 | 说明 |
 | --- | --- | --- |
-| `custom_modules.id` | `customModules[].id` | 直接映射 |
-| `custom_modules.name` | `customModules[].name` | 直接映射 |
-| `custom_modules.icon` | `customModules[].icon` | 直接映射 |
-| `custom_modules.color` | `customModules[].color` | 直接映射 |
-| `custom_modules.sort_order` | `customModules[].sort_order` | 直接映射 |
-| `custom_modules.created_at` | `customModules[].created_at` | 直接映射 |
-| `custom_modules.updated_at` | `customModules[].updated_at` | 直接映射 |
+| `modules.*` | `modules[]` | 完整映射，包括已停用模块 |
+| `module_question_counters.module_id` | `moduleQuestionCounters[].module_id` | 永久数字模块 ID |
+| `module_question_counters.last_question_no` | `moduleQuestionCounters[].last_question_no` | 已分配最大题号 |
+| `module_question_counters.updated_at` | `moduleQuestionCounters[].updated_at` | 直接映射 |
 
-### 8.6 custom_error_reasons
+### 8.6 customModules（兼容字段）
+| 数据库表字段 | data.json 字段 | 说明 |
+| --- | --- | --- |
+| `modules(type=custom)` | `customModules[]` | 为旧备份读取逻辑保留的冗余兼容数据；新恢复逻辑以 `modules[]` 为准 |
+
+### 8.7 custom_error_reasons
 | 数据库表字段 | data.json 字段 | 说明 |
 | --- | --- | --- |
 | `custom_error_reasons.id` | `customErrorReasons[].id` | 直接映射 |

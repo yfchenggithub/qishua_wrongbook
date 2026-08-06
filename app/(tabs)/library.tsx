@@ -1095,7 +1095,7 @@ export default function LibraryScreen() {
   }, [customModuleBusy, showToast]);
 
   const handleUpdateCustomModule = useCallback(async (
-    moduleId: string,
+    moduleId: number,
     moduleName: string,
   ): Promise<boolean> => {
     if (customModuleBusy) {
@@ -1165,7 +1165,7 @@ export default function LibraryScreen() {
     ]);
   }, [customModuleBusy, showToast]);
 
-  const handleMoveCustomModule = useCallback((moduleId: string, direction: 'up' | 'down') => {
+  const handleMoveCustomModule = useCallback((moduleId: number, direction: 'up' | 'down') => {
     if (customModuleBusy) {
       return;
     }
