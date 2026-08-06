@@ -1,4 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -4081,6 +4082,34 @@ export default function MistakeDetailScreen() {
     }, TITLE_DOUBLE_TAP_WINDOW_MS);
   }, [handleStartTitleEdit]);
 
+  const handleCopyQuestionCode = useCallback(async () => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    const questionCode = state.detail.questionCode.trim();
+    if (!questionCode) {
+      return;
+    }
+
+    if (typeof Clipboard.setStringAsync !== 'function') {
+      showToast('当前设备不支持复制编号。', 'error');
+      return;
+    }
+
+    try {
+      await Clipboard.setStringAsync(questionCode);
+      showToast(`已复制编号 ${questionCode}`, 'success', TOAST_DURATION_SHORT);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to copy mistake question code.', {
+        mistakeId: state.detail.id,
+        questionCode,
+        error,
+      });
+      showToast('编号复制失败，请重试。', 'error');
+    }
+  }, [showToast, state]);
+
   const handleSaveTitle = useCallback(async () => {
     if (state.kind !== 'success' || isSavingTitle) {
       return;
@@ -4309,13 +4338,25 @@ export default function MistakeDetailScreen() {
             <>
               <View style={styles.detailTitleSection}>
                 {state.detail.questionCode ? (
-                  <View
+                  <Pressable
+                    accessibilityHint="点击复制编号"
                     accessibilityLabel={`错题编号 ${state.detail.questionCode}`}
-                    style={styles.detailQuestionCodeBadge}>
-                    <Text selectable style={styles.detailQuestionCodeText}>
+                    accessibilityRole="button"
+                    hitSlop={6}
+                    onPress={() => void handleCopyQuestionCode()}
+                    style={({ pressed }) => [
+                      styles.detailQuestionCodeBadge,
+                      pressed && styles.detailQuestionCodeBadgePressed,
+                    ]}>
+                    <Text style={styles.detailQuestionCodeText}>
                       {state.detail.questionCode}
                     </Text>
-                  </View>
+                    <MaterialIcons
+                      name="content-copy"
+                      size={14}
+                      color={mistakeDetailPalette.green}
+                    />
+                  </Pressable>
                 ) : null}
                 <View style={styles.detailTitleRow}>
                   {isTitleEditing ? (
@@ -5153,9 +5194,15 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.accentBorder,
     backgroundColor: colors.accentSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 4,
+  },
+  detailQuestionCodeBadgePressed: {
+    opacity: 0.62,
   },
   detailQuestionCodeText: {
     color: mistakeDetailPalette.green,
