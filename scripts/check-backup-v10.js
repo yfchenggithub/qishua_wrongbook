@@ -278,6 +278,10 @@ function verifyProductionContracts() {
     'FROM module_question_counters',
     'MistakeRepository.ts',
   );
+  assert.ok(
+    !mistakeRepositorySource.includes('${SELECT_MISTAKE_FIELDS_SQL} m'),
+    'MistakeRepository.ts must not alias the shared mistakes query because it references mistakes.module_id.',
+  );
   assertSourceContains(
     backupServiceSource,
     'function toRestoreExpectedCounts(',

@@ -1108,29 +1108,29 @@ ORDER BY next_review_at ASC, created_at ASC;`,
       }
 
       const rows = await db.getAllAsync<Mistake>(
-        `${SELECT_MISTAKE_FIELDS_SQL} m
-WHERE m.status = ?
-  AND m.next_review_at IS NOT NULL
-  AND m.next_review_at <= ?
+        `${SELECT_MISTAKE_FIELDS_SQL}
+WHERE mistakes.status = ?
+  AND mistakes.next_review_at IS NOT NULL
+  AND mistakes.next_review_at <= ?
   AND NOT EXISTS (
     SELECT 1
     FROM review_records r
-    WHERE r.mistake_id = m.id
+    WHERE r.mistake_id = mistakes.id
       AND r.created_at >= ?
       AND r.created_at <= ?
       AND r.review_index = CASE
-        WHEN m.review_count + 1 > ? THEN ?
-        ELSE m.review_count + 1
+        WHEN mistakes.review_count + 1 > ? THEN ?
+        ELSE mistakes.review_count + 1
       END
   )
 ORDER BY
-  m.next_review_at ASC,
-  CASE m.last_review_result
+  mistakes.next_review_at ASC,
+  CASE mistakes.last_review_result
     WHEN 'wrong' THEN 0
     WHEN 'unsure' THEN 1
     ELSE 2
   END ASC,
-  m.created_at ASC${paginationSql};`,
+  mistakes.created_at ASC${paginationSql};`,
         REVIEW_STATUS.ACTIVE,
         normalizedEnd,
         normalizedStart,
