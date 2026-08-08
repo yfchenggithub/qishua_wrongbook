@@ -17,6 +17,7 @@
     "check:module-import-v11": "node ./scripts/check-module-import-v11.js",
     "check:module-export-v1": "node ./scripts/check-module-export-v1.js",
     "check:module-archive-v1": "node ./scripts/check-module-archive-v1.js",
+    "check:module-preview-v1": "node ./scripts/check-module-preview-v1.js",
     "preflight": "npm run check:encoding && npm run typecheck && npm run lint",
     "setup:hooks": "git config core.hooksPath .githooks",
     "typecheck": "tsc --noEmit",
