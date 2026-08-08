@@ -27,4 +27,5 @@ export * as VoiceNoteService from "./VoiceNoteService";
 export * as BackupService from "./backup/BackupService";
 export * as BackupManifest from "./backup/BackupManifest";
 export * as BackupTypes from "./backup/BackupTypes";
+export * as ModuleTransfer from "./moduleTransfer";
 export { Logger } from "./Logger";
