@@ -79,6 +79,8 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
   "mistakeTags": [],
   "modules": [],
   "moduleQuestionCounters": [],
+  "moduleImports": [],
+  "moduleImportItems": [],
   "customModules": [],
   "customErrorReasons": [],
   "extra": {}
@@ -176,9 +178,17 @@ qishua-backup-YYYYMMDD-HHmmss.qsbk
 - 恢复 schemaVersion 6 及更早备份时，因为旧包没有自定义配置，本机已有自定义模块和自定义错因会保留。
 - schemaVersion 8 起，`mistakes.status` 支持 `collected`，表示已记录但尚未加入七刷。
 - schemaVersion 10 起，模块统一使用永久数字 `module_id`，并备份 `modules`、`question_no` 与 `moduleQuestionCounters`。
+- schemaVersion 11 起，备份包必须包含 `moduleImports` 与 `moduleImportItems`，确保题包来源和重复导入检测在恢复后继续有效。
 - 恢复 schemaVersion 3-9 的旧备份时，恢复流程会按稳定顺序生成永久模块 ID 和模块内题号。
 
-### 5.10 extra
+### 5.10 moduleImports 与 moduleImportItems
+
+- `moduleImports` 对应 `module_imports`，保存题包 ID、来源模块信息、作者展示名、本机模块映射和导入时间。
+- `moduleImportItems` 对应 `module_import_items`，保存包内题目键、顺序和本机错题 ID 映射。
+- 恢复时必须先写入 `modules` 与 `mistakes`，再写入两张来源表。
+- schemaVersion 10 及更早备份没有来源表数据，恢复后两张表为空，不推测历史来源。
+
+### 5.11 extra
 - 预留扩展字段，当前可为空对象 `{}`。
 
 ## 6. 图片处理规则

@@ -4,6 +4,7 @@ import type { CustomModule } from '@/src/models/CustomModule';
 import type { MistakeRelation } from '@/src/models/MistakeRelation';
 import type { MistakeTag } from '@/src/models/MistakeTag';
 import type { ModuleQuestionCounter, ModuleRecord } from '@/src/models/Module';
+import type { ModuleImportItemRecord, ModuleImportRecord } from '@/src/models/ModuleImport';
 import type { ReviewRecord } from '@/src/models/ReviewRecord';
 
 export const BACKUP_FILE_EXTENSION = '.qsbk' as const;
@@ -53,6 +54,8 @@ export type BackupMistakeTagRecord = MistakeTag;
 export type BackupCustomModuleRecord = CustomModule;
 export type BackupModuleRecord = ModuleRecord;
 export type BackupModuleQuestionCounterRecord = ModuleQuestionCounter;
+export type BackupModuleImportRecord = ModuleImportRecord;
+export type BackupModuleImportItemRecord = ModuleImportItemRecord;
 export type BackupCustomErrorReasonRecord = CustomErrorReason;
 
 export interface BackupVoiceNoteRecord {
@@ -74,6 +77,8 @@ export interface BackupDataPayload {
   mistakeTags: BackupMistakeTagRecord[];
   modules: BackupModuleRecord[];
   moduleQuestionCounters: BackupModuleQuestionCounterRecord[];
+  moduleImports: BackupModuleImportRecord[];
+  moduleImportItems: BackupModuleImportItemRecord[];
   customModules: BackupCustomModuleRecord[];
   customErrorReasons: BackupCustomErrorReasonRecord[];
   extra: Record<string, unknown>;

@@ -251,3 +251,52 @@
 - 迁移后 `module_question_counters.last_question_no` 必须至少等于该模块已存在题号和旧计数器中的最大值。
 - 新版备份必须保存完整 `modules`、`mistakes.module_id`、`mistakes.question_no` 以及模块计数器，确保恢复后模块关联稳定且旧号码不会复用。
 - 恢复旧版备份时，必须按与数据库升级相同的规则生成永久模块 ID 和模块内题号；不得静默生成重复关联或重复题号。
+
+## 十八、module_imports 表
+
+`module_imports` 记录已经成功导入的 `.qsm` 题包及其本机模块映射，用于重复导入检测和来源追踪。只有题包的全部图片与业务数据都成功落盘后，才允许在同一数据库事务中写入本表。
+
+| 字段名 | 类型 | 约束/默认值 | 说明 |
+| --- | --- | --- | --- |
+| id | string | 主键，必填 | 本机导入记录 ID，不使用题包 `packageId` 代替 |
+| package_id | string | 必填，唯一 | `.qsm` manifest 中的不可变题包 ID；同一题包在本机只允许导入一次 |
+| content_version | number | 必填，范围 `>= 1` | 题包内容版本；V1 固定为 `1` |
+| module_id | number | 必填，唯一，外键关联 `modules.id` | 导入后新建的本机自定义模块 ID |
+| source_module_name | string | 必填 | 包内原始模块名称；本机模块改名后仍保留 |
+| description | string | 可空 | 包内模块简介 |
+| creator_name | string | 可空 | 作者展示昵称，不代表经过身份认证 |
+| package_created_at | string | 必填 | 题包创建时间（ISO 8601，包含时区） |
+| imported_at | string | 必填 | 本机成功导入时间（ISO 8601） |
+
+- `package_id` 是 V1 重复导入检测的唯一依据；不得通过模块名称、文件名或本机模块 ID 判断重复。
+- 导入题包时必须创建新的 `modules(type=custom)` 记录；不得把来源记录关联到系统模块或未分类模块。
+- 模块采用停用语义时，`module_imports` 继续保留，以免停用后绕过重复导入检测。
+- 物理删除模块时，数据库通过外键级联删除对应导入来源记录。
+- `creator_name` 只用于展示；业务逻辑不得把它当作用户账号、可信身份或权限依据。
+
+## 十九、module_import_items 表
+
+`module_import_items` 保存题包内部题目键到本机错题 ID 的映射，为来源展示、问题定位以及未来可能的版本更新保留稳定关系。
+
+| 字段名 | 类型 | 约束/默认值 | 说明 |
+| --- | --- | --- | --- |
+| import_id | string | 必填，联合主键，外键关联 `module_imports.id` | 所属本机导入记录 ID |
+| item_id | string | 必填，联合主键 | `.qsm` 包内稳定题目键，如 `Q001` |
+| mistake_id | string | 必填，唯一，外键关联 `mistakes.id` | 导入后生成的本机错题 ID |
+| position | number | 必填，范围 `1-999`，与 `import_id` 联合唯一 | 题目在原题包中的连续顺序 |
+
+- 联合主键为 `(import_id, item_id)`。
+- 同一次导入中的 `position` 必须从 `1` 开始连续且不可重复；数据库保证唯一性，连续性由导入 Service 在事务前校验。
+- 同一个本机错题最多对应一条题包来源映射。
+- 删除 `module_imports` 时级联删除其全部 item 映射。
+- 删除错题时级联删除对应 item 映射，但不删除 `module_imports`，确保题包仍被视为已经导入。
+- `item_id`、题包原题号和本机 `mistakes.question_no` 相互独立；导入后题号仍按本机模块计数器分配。
+
+## 二十、题包来源数据兼容原则
+
+- 数据库 schemaVersion 11 起新增 `module_imports` 与 `module_import_items`。
+- 从 schemaVersion 10 及更早版本升级时，两表初始化为空，不推测历史错题是否来自题包。
+- schemaVersion 11 及以上的完整备份必须保存并恢复两张来源表；恢复时先写入 `modules` 和 `mistakes`，再写入来源记录及 item 映射。
+- 恢复 schemaVersion 10 及更早备份时，两张来源表保持为空。
+- 题包导入失败或事务回滚时，两张来源表不得留下任何记录。
+- 页面层不得直接查询或写入两张表；重复检测和来源读取统一通过 Repository/Service 完成。

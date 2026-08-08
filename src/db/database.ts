@@ -22,6 +22,8 @@ const REQUIRED_TABLES = [
   'custom_error_reasons',
   'mistake_relations',
   'mistake_tags',
+  'module_imports',
+  'module_import_items',
 ] as const;
 
 type UserVersionRow = {
@@ -269,6 +271,8 @@ async function ensureLegacyColumnsBeforePermanentModuleMigration(
 async function rebuildDomainSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
 PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS module_import_items;
+DROP TABLE IF EXISTS module_imports;
 DROP TABLE IF EXISTS mistake_images;
 DROP TABLE IF EXISTS review_records;
 DROP TABLE IF EXISTS review_sheet_items;
@@ -555,6 +559,8 @@ export async function resetDatabaseForDev(): Promise<void> {
 
     await db.execAsync(`
 PRAGMA foreign_keys = OFF;
+DROP TABLE IF EXISTS module_import_items;
+DROP TABLE IF EXISTS module_imports;
 DROP TABLE IF EXISTS review_records;
 DROP TABLE IF EXISTS mistake_images;
 DROP TABLE IF EXISTS review_sheet_items;
@@ -585,7 +591,7 @@ export async function checkDatabaseHealth(): Promise<DatabaseHealthReport> {
     const version = await readUserVersion(db);
 
     const tableRows = await db.getAllAsync<TableRow>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'modules', 'module_question_counters', 'custom_error_reasons', 'mistake_relations', 'mistake_tags')`,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('mistakes', 'mistake_images', 'review_records', 'review_sheets', 'review_sheet_items', 'modules', 'module_question_counters', 'custom_error_reasons', 'mistake_relations', 'mistake_tags', 'module_imports', 'module_import_items')`,
     );
     const tables = tableRows.map((row) => row.name);
 

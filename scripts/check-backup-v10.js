@@ -276,7 +276,7 @@ function verifyProductionContracts() {
   const backupServiceSource = readProjectFile('src/services/backup/BackupService.ts');
   const mistakeRepositorySource = readProjectFile('src/repositories/MistakeRepository.ts');
 
-  assert.match(databaseVersionSource, /DATABASE_VERSION\s*=\s*10\b/u);
+  assert.match(databaseVersionSource, /DATABASE_VERSION\s*=\s*11\b/u);
   assertSourceContains(schemaSource, 'UNIQUE(module_id, question_no)', 'schema.ts');
   assertSourceContains(backupTypesSource, 'modules: BackupModuleRecord[];', 'BackupTypes.ts');
   assertSourceContains(

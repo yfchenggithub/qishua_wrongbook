@@ -28,6 +28,7 @@ import {
   MistakeRelationRepository,
   MistakeRepository,
   MistakeTagRepository,
+  ModuleImportRepository,
   ModuleRepository,
   ReviewRecordRepository,
 } from '@/src/repositories';
@@ -68,6 +69,8 @@ import {
   type BackupCustomModuleRecord,
   type BackupImageArchiveFile,
   type BackupManifest,
+  type BackupModuleImportItemRecord,
+  type BackupModuleImportRecord,
   type BackupModuleQuestionCounterRecord,
   type BackupModuleRecord,
   type BackupMistakeImageRecord,
@@ -109,7 +112,7 @@ const RESTORE_TEMP_DIR_NAME = 'qishua_wrongbook_restore_tmp';
 const RESTORE_IMAGE_EXTENSION_FALLBACK = 'jpg';
 const RESTORE_VOICE_EXTENSION_FALLBACK = 'm4a';
 const VOICE_NOTES_DIR_NAME = 'voice-notes';
-const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, 7, 8, 9, DATABASE_VERSION];
+const SUPPORTED_SCHEMA_VERSIONS = [3, 4, 5, 6, 7, 8, 9, 10, DATABASE_VERSION];
 const DB_IMPORT_PROGRESS_INTERVAL = 50;
 const IMAGE_RESTORE_PROGRESS_INTERVAL = 10;
 const BACKUP_IMAGE_PROGRESS_INTERVAL = 10;
@@ -225,6 +228,29 @@ INSERT INTO custom_error_reasons (
   created_at,
   updated_at
 ) VALUES (?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_MODULE_IMPORT_SQL = `
+INSERT INTO module_imports (
+  id,
+  package_id,
+  content_version,
+  module_id,
+  source_module_name,
+  description,
+  creator_name,
+  package_created_at,
+  imported_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+`;
+
+const INSERT_MODULE_IMPORT_ITEM_SQL = `
+INSERT INTO module_import_items (
+  import_id,
+  item_id,
+  mistake_id,
+  position
+) VALUES (?, ?, ?, ?);
 `;
 
 type BackupCollectContext = {
@@ -573,7 +599,10 @@ function ensureManifestRequiredFields(manifest: BackupManifest): BackupManifest 
   return manifest;
 }
 
-export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
+export function validateBackupDataPayload(
+  raw: unknown,
+  schemaVersion = 0,
+): BackupDataPayload {
   if (!raw || typeof raw !== 'object') {
     throw new BackupRestoreError(
       'CORRUPTED_BACKUP_FILE',
@@ -583,6 +612,16 @@ export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
 
   const input = raw as Partial<BackupDataPayload>;
   if (!Array.isArray(input.mistakes) || !Array.isArray(input.mistakeImages) || !Array.isArray(input.reviewRecords)) {
+    throw new BackupRestoreError(
+      'CORRUPTED_BACKUP_FILE',
+      getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+    );
+  }
+
+  if (
+    schemaVersion >= 11
+    && (!Array.isArray(input.moduleImports) || !Array.isArray(input.moduleImportItems))
+  ) {
     throw new BackupRestoreError(
       'CORRUPTED_BACKUP_FILE',
       getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
@@ -604,6 +643,12 @@ export function validateBackupDataPayload(raw: unknown): BackupDataPayload {
       : [],
     moduleQuestionCounters: Array.isArray(input.moduleQuestionCounters)
       ? input.moduleQuestionCounters as BackupDataPayload['moduleQuestionCounters']
+      : [],
+    moduleImports: Array.isArray(input.moduleImports)
+      ? (input.moduleImports as BackupDataPayload['moduleImports'])
+      : [],
+    moduleImportItems: Array.isArray(input.moduleImportItems)
+      ? (input.moduleImportItems as BackupDataPayload['moduleImportItems'])
       : [],
     customModules: Array.isArray(input.customModules)
       ? input.customModules as BackupDataPayload['customModules']
@@ -891,6 +936,7 @@ function normalizeBackupModulesForCurrentSchema(
 
 function ensureBackupPayloadRelations(data: BackupDataPayload): void {
   const moduleIds = new Set<number>();
+  const customModuleIds = new Set<number>();
   const moduleDisplayCodes = new Set<string>();
   for (const moduleItem of data.modules) {
     const moduleId = Number(moduleItem.id);
@@ -907,13 +953,18 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
       );
     }
     moduleIds.add(moduleId);
+    if (moduleItem.type === 'custom') {
+      customModuleIds.add(moduleId);
+    }
     moduleDisplayCodes.add(displayCode);
   }
 
   const mistakeIds = new Set<string>();
+  const mistakeModuleIds = new Map<string, number>();
   const questionKeys = new Set<string>();
   for (const mistake of data.mistakes) {
-    mistakeIds.add(ensureRecordId((mistake as Partial<Mistake>).id));
+    const mistakeId = ensureRecordId((mistake as Partial<Mistake>).id);
+    mistakeIds.add(mistakeId);
     const moduleId = Number((mistake as Partial<Mistake>).module_id);
     const questionNo = Number((mistake as Partial<Mistake>).question_no);
     const questionKey = `${moduleId}:${questionNo}`;
@@ -929,6 +980,7 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
         getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
       );
     }
+    mistakeModuleIds.set(mistakeId, moduleId);
     questionKeys.add(questionKey);
   }
 
@@ -1017,6 +1069,89 @@ function ensureBackupPayloadRelations(data: BackupDataPayload): void {
         getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
       );
     }
+  }
+
+  const importIds = new Set<string>();
+  const packageIds = new Set<string>();
+  const importedModuleIds = new Set<number>();
+  const importModuleIds = new Map<string, number>();
+  for (const importRecord of data.moduleImports) {
+    const importId = ensureRecordId((importRecord as Partial<BackupModuleImportRecord>).id);
+    const packageId = ensureRecordId(
+      (importRecord as Partial<BackupModuleImportRecord>).package_id,
+    );
+    const contentVersion = Number(
+      (importRecord as Partial<BackupModuleImportRecord>).content_version,
+    );
+    const moduleId = Number((importRecord as Partial<BackupModuleImportRecord>).module_id);
+    const sourceModuleName = normalizeRequiredText(
+      (importRecord as Partial<BackupModuleImportRecord>).source_module_name,
+    );
+    const packageCreatedAt = normalizeRequiredText(
+      (importRecord as Partial<BackupModuleImportRecord>).package_created_at,
+    );
+    const importedAt = normalizeRequiredText(
+      (importRecord as Partial<BackupModuleImportRecord>).imported_at,
+    );
+    const description = (importRecord as Partial<BackupModuleImportRecord>).description;
+    const creatorName = (importRecord as Partial<BackupModuleImportRecord>).creator_name;
+    if (
+      importIds.has(importId)
+      || packageIds.has(packageId)
+      || importedModuleIds.has(moduleId)
+      || !Number.isInteger(contentVersion)
+      || contentVersion < 1
+      || !customModuleIds.has(moduleId)
+      || !sourceModuleName
+      || !isValidIsoDateTime(packageCreatedAt)
+      || !isValidIsoDateTime(importedAt)
+      || (description !== null && description !== undefined && typeof description !== 'string')
+      || (creatorName !== null && creatorName !== undefined && typeof creatorName !== 'string')
+    ) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+    importIds.add(importId);
+    packageIds.add(packageId);
+    importedModuleIds.add(moduleId);
+    importModuleIds.set(importId, moduleId);
+  }
+
+  const importItemKeys = new Set<string>();
+  const importedMistakeIds = new Set<string>();
+  const importPositions = new Set<string>();
+  for (const item of data.moduleImportItems) {
+    const importId = ensureRecordId(
+      (item as Partial<BackupModuleImportItemRecord>).import_id,
+    );
+    const itemId = ensureRecordId((item as Partial<BackupModuleImportItemRecord>).item_id);
+    const mistakeId = ensureRecordId(
+      (item as Partial<BackupModuleImportItemRecord>).mistake_id,
+    );
+    const position = Number((item as Partial<BackupModuleImportItemRecord>).position);
+    const itemKey = `${importId}:${itemId}`;
+    const positionKey = `${importId}:${position}`;
+    if (
+      !importIds.has(importId)
+      || !mistakeIds.has(mistakeId)
+      || mistakeModuleIds.get(mistakeId) !== importModuleIds.get(importId)
+      || !Number.isInteger(position)
+      || position < 1
+      || position > 999
+      || importItemKeys.has(itemKey)
+      || importPositions.has(positionKey)
+      || importedMistakeIds.has(mistakeId)
+    ) {
+      throw new BackupRestoreError(
+        'CORRUPTED_BACKUP_FILE',
+        getBackupErrorUserMessage('CORRUPTED_BACKUP_FILE'),
+      );
+    }
+    importItemKeys.add(itemKey);
+    importPositions.add(positionKey);
+    importedMistakeIds.add(mistakeId);
   }
 
   for (const customModule of data.customModules) {
@@ -1594,6 +1729,40 @@ async function listAllModuleQuestionCounters(): Promise<BackupModuleQuestionCoun
   return ModuleRepository.listQuestionCounters();
 }
 
+async function listAllModuleImports(): Promise<BackupModuleImportRecord[]> {
+  const collected: BackupModuleImportRecord[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await ModuleImportRepository.listImports({
+      limit: BACKUP_QUERY_PAGE_SIZE,
+      offset,
+    });
+    collected.push(...page);
+    if (page.length < BACKUP_QUERY_PAGE_SIZE) {
+      break;
+    }
+    offset += page.length;
+  }
+  return collected;
+}
+
+async function listAllModuleImportItems(): Promise<BackupModuleImportItemRecord[]> {
+  const collected: BackupModuleImportItemRecord[] = [];
+  let offset = 0;
+  while (true) {
+    const page = await ModuleImportRepository.listAllImportItems({
+      limit: BACKUP_QUERY_PAGE_SIZE,
+      offset,
+    });
+    collected.push(...page);
+    if (page.length < BACKUP_QUERY_PAGE_SIZE) {
+      break;
+    }
+    offset += page.length;
+  }
+  return collected;
+}
+
 async function listAllCustomErrorReasons(): Promise<BackupCustomErrorReasonRecord[]> {
   return CustomErrorReasonRepository.listCustomErrorReasons();
 }
@@ -2166,7 +2335,7 @@ async function readBackupPackageFromTemp(options: {
 
   let data: BackupDataPayload;
   try {
-    data = validateBackupDataPayload(parsedDataRaw);
+    data = validateBackupDataPayload(parsedDataRaw, manifest.schemaVersion);
     data = normalizeBackupModulesForCurrentSchema(
       data,
       manifest.schemaVersion,
@@ -2624,6 +2793,8 @@ async function runRestoreDatabaseTransaction(options: {
     await withDatabaseTransaction(async (db) => {
       const dbClearStartedAt = nowMs();
       try {
+        await db.runAsync('DELETE FROM module_import_items;');
+        await db.runAsync('DELETE FROM module_imports;');
         await db.runAsync('DELETE FROM mistake_relations;');
         await db.runAsync('DELETE FROM mistake_tags;');
         await db.runAsync('DELETE FROM review_records;');
@@ -2769,6 +2940,33 @@ async function runRestoreDatabaseTransaction(options: {
             counter.module_id,
             counter.last_question_no,
             counter.updated_at,
+          );
+        }
+
+        for (let index = 0; index < data.moduleImports.length; index += 1) {
+          const importRecord = data.moduleImports[index];
+          await db.runAsync(
+            INSERT_MODULE_IMPORT_SQL,
+            importRecord.id,
+            importRecord.package_id,
+            importRecord.content_version,
+            importRecord.module_id,
+            importRecord.source_module_name,
+            importRecord.description,
+            importRecord.creator_name,
+            importRecord.package_created_at,
+            importRecord.imported_at,
+          );
+        }
+
+        for (let index = 0; index < data.moduleImportItems.length; index += 1) {
+          const item = data.moduleImportItems[index];
+          await db.runAsync(
+            INSERT_MODULE_IMPORT_ITEM_SQL,
+            item.import_id,
+            item.item_id,
+            item.mistake_id,
+            item.position,
           );
         }
 
@@ -3006,6 +3204,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       mistakeTags,
       modules,
       moduleQuestionCounters,
+      moduleImports,
+      moduleImportItems,
       customModules,
       customErrorReasons,
     ] = await Promise.all([
@@ -3016,6 +3216,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       listAllMistakeTags(),
       listAllModules(),
       listAllModuleQuestionCounters(),
+      listAllModuleImports(),
+      listAllModuleImportItems(),
       listAllCustomModules(),
       listAllCustomErrorReasons(),
     ]);
@@ -3070,6 +3272,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
       mistakeTags,
       modules,
       moduleQuestionCounters,
+      moduleImports,
+      moduleImportItems,
       customModules,
       customErrorReasons,
       extra: {
@@ -3078,6 +3282,8 @@ export async function createBackup(options?: CreateBackupOptions): Promise<Creat
         mistakeTagCount: mistakeTags.length,
         moduleCount: modules.length,
         moduleQuestionCounterCount: moduleQuestionCounters.length,
+        moduleImportCount: moduleImports.length,
+        moduleImportItemCount: moduleImportItems.length,
         customModuleCount: customModules.length,
         customErrorReasonCount: customErrorReasons.length,
         voiceNoteCount: voiceArtifacts.backupVoiceNotes.length,

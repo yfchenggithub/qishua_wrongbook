@@ -150,6 +150,34 @@ CREATE TABLE IF NOT EXISTS mistake_tags (
 );
 `;
 
+export const CREATE_MODULE_IMPORTS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS module_imports (
+  id TEXT PRIMARY KEY,
+  package_id TEXT NOT NULL UNIQUE,
+  content_version INTEGER NOT NULL CHECK (content_version >= 1),
+  module_id INTEGER NOT NULL UNIQUE,
+  source_module_name TEXT NOT NULL,
+  description TEXT,
+  creator_name TEXT,
+  package_created_at TEXT NOT NULL,
+  imported_at TEXT NOT NULL,
+  FOREIGN KEY(module_id) REFERENCES modules(id) ON DELETE CASCADE
+);
+`;
+
+export const CREATE_MODULE_IMPORT_ITEMS_TABLE_SQL = `
+CREATE TABLE IF NOT EXISTS module_import_items (
+  import_id TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  mistake_id TEXT NOT NULL UNIQUE,
+  position INTEGER NOT NULL CHECK (position BETWEEN 1 AND 999),
+  PRIMARY KEY(import_id, item_id),
+  UNIQUE(import_id, position),
+  FOREIGN KEY(import_id) REFERENCES module_imports(id) ON DELETE CASCADE,
+  FOREIGN KEY(mistake_id) REFERENCES mistakes(id) ON DELETE CASCADE
+);
+`;
+
 export const CREATE_INDEXES_SQL = `
 CREATE INDEX IF NOT EXISTS idx_modules_type_active_order ON modules(type, is_active, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistakes_status ON mistakes(status);
@@ -176,6 +204,8 @@ CREATE INDEX IF NOT EXISTS idx_mistake_relations_source ON mistake_relations(sou
 CREATE INDEX IF NOT EXISTS idx_mistake_tags_mistake_order ON mistake_tags(mistake_id, sort_order, created_at);
 CREATE INDEX IF NOT EXISTS idx_mistake_tags_normalized_name ON mistake_tags(normalized_name);
 CREATE INDEX IF NOT EXISTS idx_mistake_tags_normalized_mistake ON mistake_tags(normalized_name, mistake_id);
+CREATE INDEX IF NOT EXISTS idx_module_imports_imported_at ON module_imports(imported_at DESC);
+CREATE INDEX IF NOT EXISTS idx_module_import_items_import_position ON module_import_items(import_id, position);
 `;
 
 export const CREATE_SCHEMA_SQL = `
@@ -189,5 +219,7 @@ ${CREATE_MODULE_QUESTION_COUNTERS_TABLE_SQL}
 ${CREATE_CUSTOM_ERROR_REASONS_TABLE_SQL}
 ${CREATE_MISTAKE_RELATIONS_TABLE_SQL}
 ${CREATE_MISTAKE_TAGS_TABLE_SQL}
+${CREATE_MODULE_IMPORTS_TABLE_SQL}
+${CREATE_MODULE_IMPORT_ITEMS_TABLE_SQL}
 ${CREATE_INDEXES_SQL}
 `;
