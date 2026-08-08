@@ -78,6 +78,7 @@ FROM mistakes
 export interface ListMistakesOptions {
   status?: MistakeStatus | 'all';
   module?: string | null;
+  moduleId?: number | null;
   keyword?: string | null;
   tagKeys?: string[];
   dueOnly?: boolean;
@@ -645,6 +646,14 @@ function buildListConditions(options?: ListMistakesOptions): QueryConditions {
   SELECT module_filter.id FROM modules module_filter WHERE module_filter.name = ? LIMIT 1
 )`);
     bindParams.push(moduleFilter);
+  }
+
+  if (options?.moduleId !== null && options?.moduleId !== undefined) {
+    if (!Number.isInteger(options.moduleId) || options.moduleId <= 0) {
+      throw new Error('moduleId must be a positive integer.');
+    }
+    whereClauses.push('module_id = ?');
+    bindParams.push(options.moduleId);
   }
 
   const keyword = normalizeKeyword(options?.keyword);

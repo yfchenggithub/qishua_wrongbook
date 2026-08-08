@@ -290,6 +290,39 @@ ORDER BY created_at DESC;`,
     }
   },
 
+  async listRelationsWithinModule(moduleIdInput: number): Promise<MistakeRelation[]> {
+    try {
+      if (!Number.isInteger(moduleIdInput) || moduleIdInput <= 0) {
+        throw new Error('moduleId must be a positive integer.');
+      }
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const rows = await db.getAllAsync<MistakeRelation>(
+        `SELECT
+  mistake_relations.id,
+  mistake_relations.source_mistake_id,
+  mistake_relations.target_mistake_id,
+  mistake_relations.source,
+  mistake_relations.created_at
+FROM mistake_relations
+JOIN mistakes source_mistake ON source_mistake.id = mistake_relations.source_mistake_id
+JOIN mistakes target_mistake ON target_mistake.id = mistake_relations.target_mistake_id
+WHERE source_mistake.module_id = ?
+  AND target_mistake.module_id = ?
+ORDER BY mistake_relations.created_at ASC, mistake_relations.id ASC;`,
+        moduleIdInput,
+        moduleIdInput,
+      );
+      return rows.map(mapRelationRow);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'listRelationsWithinModule failed.', {
+        moduleIdInput,
+        error,
+      });
+      throw error;
+    }
+  },
+
   async getRelationSummaryByMistakeId(mistakeIdInput: string): Promise<MistakeRelationSummary> {
     try {
       await ensureDatabaseReady();

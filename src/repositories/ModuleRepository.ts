@@ -39,6 +39,29 @@ function mapModuleRow(row: ModuleDatabaseRow): ModuleRecord {
 }
 
 export const ModuleRepository = {
+  async getModuleById(moduleId: number): Promise<ModuleRecord | null> {
+    try {
+      if (!Number.isInteger(moduleId) || moduleId <= 0) {
+        throw new Error('moduleId must be a positive integer.');
+      }
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const row = await db.getFirstAsync<ModuleDatabaseRow>(
+        `SELECT
+  id, type, name, display_code, custom_no, icon, color,
+  sort_order, is_active, created_at, updated_at
+FROM modules
+WHERE id = ?
+LIMIT 1;`,
+        moduleId,
+      );
+      return row ? mapModuleRow(row) : null;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'getModuleById failed.', { moduleId, error });
+      throw error;
+    }
+  },
+
   async listAllModules(): Promise<ModuleRecord[]> {
     try {
       await ensureDatabaseReady();

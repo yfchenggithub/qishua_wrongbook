@@ -5,6 +5,7 @@ import { Logger } from '@/src/services/Logger';
 import type * as SQLite from 'expo-sqlite';
 
 const REPO_SCOPE = 'MistakeImageRepository';
+const BATCH_QUERY_SIZE = 200;
 
 type InsertableMistakeImageType = Exclude<ImageType, 'review_solution'>;
 type MistakeImageUriRow = {
@@ -506,6 +507,39 @@ WHERE id = ?;`,
       Logger.error(REPO_SCOPE, 'upsertReviewSolutionImageByReviewRecordId failed.', {
         mistakeId,
         reviewRecordId,
+        error,
+      });
+      throw error;
+    }
+  },
+
+  async getImagesByMistakeIds(mistakeIds: string[]): Promise<Map<string, MistakeImage[]>> {
+    try {
+      await ensureDatabaseReady();
+      const db = await getDatabase();
+      const normalizedMistakeIds = normalizeMistakeIdsForBatch(mistakeIds);
+      const result = new Map<string, MistakeImage[]>();
+      normalizedMistakeIds.forEach((mistakeId) => result.set(mistakeId, []));
+
+      for (let offset = 0; offset < normalizedMistakeIds.length; offset += BATCH_QUERY_SIZE) {
+        const chunk = normalizedMistakeIds.slice(offset, offset + BATCH_QUERY_SIZE);
+        const placeholders = chunk.map(() => '?').join(', ');
+        const rows = await db.getAllAsync<MistakeImage>(
+          `${SELECT_MISTAKE_IMAGE_FIELDS_SQL}
+WHERE mistake_id IN (${placeholders})
+ORDER BY mistake_id ASC, type ASC, sort_order ASC, created_at ASC, id ASC;`,
+          ...chunk,
+        );
+        for (const row of rows.map(mapMistakeImageRow)) {
+          const images = result.get(row.mistake_id) ?? [];
+          images.push(row);
+          result.set(row.mistake_id, images);
+        }
+      }
+      return result;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'getImagesByMistakeIds failed.', {
+        count: mistakeIds.length,
         error,
       });
       throw error;
