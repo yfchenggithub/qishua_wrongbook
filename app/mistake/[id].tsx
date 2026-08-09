@@ -76,7 +76,10 @@ import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { useMusicInterruption } from '@/src/music';
 import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
-import { buildDetailSwitchRouteParams } from '@/src/services/DetailBrowseNavigation';
+import {
+  buildDetailSwitchRouteParams,
+  resolveLibraryBrowseTarget,
+} from '@/src/services/DetailBrowseNavigation';
 import { removeMistakesFromLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
@@ -3722,83 +3725,61 @@ export default function MistakeDetailScreen() {
         return;
       }
 
-      const reachedLibraryStart =
-        browseContext.mode === 'library_filter'
-        && direction === 'prev'
-        && currentIndex === 0;
-      const reachedLibraryEnd =
-        browseContext.mode === 'library_filter'
-        && direction === 'next'
-        && currentIndex === ids.length - 1;
-      if (reachedLibraryStart || reachedLibraryEnd) {
-        const boundary = reachedLibraryStart ? 'start' : 'end';
-        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
-          reason: 'library_filter_boundary',
-          boundary,
-          trigger,
-          direction,
-          mode: browseContext.mode,
-          totalIds: ids.length,
-          currentIndex,
-          currentMistakeId: state.detail.id,
-        });
-        showToast(
-          reachedLibraryStart
-            ? '已经是当前筛选的第一题'
-            : '已经是当前筛选的最后一题',
-          'info',
-          TOAST_DURATION_SHORT,
-        );
-        return;
-      }
-
-      if (ids.length <= 1) {
-        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
-          reason: 'insufficient_candidates',
-          trigger,
-          direction,
-          mode: browseContext.mode,
-          totalIds: ids.length,
-          currentMistakeId: state.detail.id,
-        });
-        return;
-      }
-
-      let targetIndex =
-        direction === 'next'
-          ? (currentIndex + 1) % ids.length
-          : (currentIndex - 1 + ids.length) % ids.length;
-      let targetId: string | undefined = ids[targetIndex];
+      let targetIndex = -1;
+      let targetId: string | undefined;
       let skippedUnavailableCount = 0;
 
       if (browseContext.mode === 'library_filter') {
         const requestId = browseNavigationRequestIdRef.current + 1;
         browseNavigationRequestIdRef.current = requestId;
         isBrowseTargetResolvingRef.current = true;
-        const step = direction === 'next' ? 1 : -1;
-        const skippedIds: string[] = [];
-        targetIndex = currentIndex + step;
-        targetId = undefined;
 
         try {
-          while (targetIndex >= 0 && targetIndex < ids.length) {
-            const candidateId = ids[targetIndex];
-            const available = candidateId
-              ? await MistakeDetailService.isMistakeAvailableForDetailBrowse(candidateId)
-              : false;
-            if (requestId !== browseNavigationRequestIdRef.current) {
-              return;
-            }
-            if (candidateId && available) {
-              targetId = candidateId;
-              break;
-            }
-            if (candidateId) {
-              skippedIds.push(candidateId);
-            }
-            targetIndex += step;
+          const resolution = await resolveLibraryBrowseTarget({
+            ids,
+            currentMistakeId: state.detail.id,
+            direction,
+            isCandidateAvailable: (mistakeId) =>
+              MistakeDetailService.isMistakeAvailableForDetailBrowse(mistakeId),
+            isCancelled: () => requestId !== browseNavigationRequestIdRef.current,
+          });
+
+          if (resolution.kind === 'cancelled') {
+            return;
+          }
+          if (resolution.kind === 'invalid_current') {
+            Logger.warn(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+              reason: 'current_not_in_candidates_after_resolution',
+              trigger,
+              direction,
+              mode: browseContext.mode,
+              totalIds: ids.length,
+              currentMistakeId: state.detail.id,
+            });
+            return;
+          }
+          if (resolution.kind === 'boundary') {
+            Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+              reason: 'library_filter_boundary',
+              boundary: resolution.boundary,
+              trigger,
+              direction,
+              mode: browseContext.mode,
+              totalIds: ids.length,
+              currentIndex: resolution.currentIndex,
+              currentMistakeId: state.detail.id,
+            });
+            showToast(
+              resolution.boundary === 'start'
+                ? '已经是当前筛选的第一题'
+                : '已经是当前筛选的最后一题',
+              'info',
+              TOAST_DURATION_SHORT,
+            );
+            return;
           }
 
+          const skippedIds = resolution.skippedIds;
           if (skippedIds.length > 0) {
             skippedUnavailableCount = skippedIds.length;
             const remainingSessionIds = removeMistakesFromLibraryBrowseSession(
@@ -3821,7 +3802,7 @@ export default function MistakeDetailScreen() {
             });
           }
 
-          if (!targetId) {
+          if (resolution.kind === 'no_available') {
             Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
               reason: 'no_available_library_filter_candidate',
               trigger,
@@ -3841,11 +3822,31 @@ export default function MistakeDetailScreen() {
             }
             return;
           }
+
+          targetIndex = resolution.targetIndex;
+          targetId = resolution.targetId;
         } finally {
           if (requestId === browseNavigationRequestIdRef.current) {
             isBrowseTargetResolvingRef.current = false;
           }
         }
+      } else {
+        if (ids.length <= 1) {
+          Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+            reason: 'insufficient_candidates',
+            trigger,
+            direction,
+            mode: browseContext.mode,
+            totalIds: ids.length,
+            currentMistakeId: state.detail.id,
+          });
+          return;
+        }
+        targetIndex =
+          direction === 'next'
+            ? (currentIndex + 1) % ids.length
+            : (currentIndex - 1 + ids.length) % ids.length;
+        targetId = ids[targetIndex];
       }
 
       if (!targetId || targetId === state.detail.id) {

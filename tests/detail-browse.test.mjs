@@ -4,7 +4,10 @@ import test from 'node:test';
 import {
   resolveDetailBrowseContext,
 } from '../src/services/DetailBrowseContextResolver.ts';
-import { buildDetailSwitchRouteParams } from '../src/services/DetailBrowseNavigation.ts';
+import {
+  buildDetailSwitchRouteParams,
+  resolveLibraryBrowseTarget,
+} from '../src/services/DetailBrowseNavigation.ts';
 import {
   createLibraryBrowseSession,
   getLibraryBrowseSession,
@@ -107,4 +110,93 @@ test('有效错题库会话优先于今日复做队列', async () => {
     currentIndex: 1,
   });
   assert.equal(todayQueueLoadCount, 0);
+});
+
+test('连续失效题目会被按顺序跳过并定位到下一道可用题', async () => {
+  const checkedIds = [];
+  const result = await resolveLibraryBrowseTarget({
+    ids: ['M-current', 'M-missing', 'M-archived', 'M-next'],
+    currentMistakeId: 'M-current',
+    direction: 'next',
+    isCandidateAvailable: async (mistakeId) => {
+      checkedIds.push(mistakeId);
+      return mistakeId === 'M-next';
+    },
+  });
+
+  assert.deepEqual(checkedIds, ['M-missing', 'M-archived', 'M-next']);
+  assert.deepEqual(result, {
+    kind: 'target',
+    currentIndex: 0,
+    targetId: 'M-next',
+    targetIndex: 3,
+    skippedIds: ['M-missing', 'M-archived'],
+  });
+});
+
+test('当前方向剩余题目全部失效时停止切换并返回全部跳过项', async () => {
+  const result = await resolveLibraryBrowseTarget({
+    ids: ['M-current', 'M-missing', 'M-archived'],
+    currentMistakeId: 'M-current',
+    direction: 'next',
+    isCandidateAvailable: async () => false,
+  });
+
+  assert.deepEqual(result, {
+    kind: 'no_available',
+    currentIndex: 0,
+    targetId: null,
+    targetIndex: -1,
+    skippedIds: ['M-missing', 'M-archived'],
+  });
+});
+
+test('单题筛选在两个方向都返回边界且不会检查候选题', async () => {
+  let availabilityCheckCount = 0;
+  const isCandidateAvailable = async () => {
+    availabilityCheckCount += 1;
+    return true;
+  };
+
+  const [previousResult, nextResult] = await Promise.all([
+    resolveLibraryBrowseTarget({
+      ids: ['M-only'],
+      currentMistakeId: 'M-only',
+      direction: 'prev',
+      isCandidateAvailable,
+    }),
+    resolveLibraryBrowseTarget({
+      ids: ['M-only'],
+      currentMistakeId: 'M-only',
+      direction: 'next',
+      isCandidateAvailable,
+    }),
+  ]);
+
+  assert.equal(previousResult.kind, 'boundary');
+  assert.equal(previousResult.boundary, 'start');
+  assert.equal(nextResult.kind, 'boundary');
+  assert.equal(nextResult.boundary, 'end');
+  assert.equal(availabilityCheckCount, 0);
+});
+
+test('多题筛选的第一题和最后一题不会首尾循环', async () => {
+  const isCandidateAvailable = async () => true;
+  const firstResult = await resolveLibraryBrowseTarget({
+    ids: ['M-first', 'M-middle', 'M-last'],
+    currentMistakeId: 'M-first',
+    direction: 'prev',
+    isCandidateAvailable,
+  });
+  const lastResult = await resolveLibraryBrowseTarget({
+    ids: ['M-first', 'M-middle', 'M-last'],
+    currentMistakeId: 'M-last',
+    direction: 'next',
+    isCandidateAvailable,
+  });
+
+  assert.equal(firstResult.kind, 'boundary');
+  assert.equal(firstResult.boundary, 'start');
+  assert.equal(lastResult.kind, 'boundary');
+  assert.equal(lastResult.boundary, 'end');
 });
