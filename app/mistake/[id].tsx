@@ -76,6 +76,7 @@ import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { useMusicInterruption } from '@/src/music';
 import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
+import { buildDetailSwitchRouteParams } from '@/src/services/DetailBrowseNavigation';
 import { removeMistakesFromLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
@@ -3876,14 +3877,12 @@ export default function MistakeDetailScreen() {
       router.replace(
         {
           pathname: '/mistake/[id]',
-          params: {
-            id: targetId,
-            switchFrom: direction === 'next' ? 'bottom' : 'top',
-            ...(routeBrowseSessionId ? { browseSessionId: routeBrowseSessionId } : {}),
-            ...(skippedUnavailableCount > 0
-              ? { skippedUnavailableCount: String(skippedUnavailableCount) }
-              : {}),
-          },
+          params: buildDetailSwitchRouteParams({
+            targetId,
+            direction,
+            browseSessionId: routeBrowseSessionId,
+            skippedUnavailableCount,
+          }),
         } as never,
       );
     },

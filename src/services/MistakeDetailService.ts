@@ -24,6 +24,11 @@ import {
   MistakeTagRepository,
   ReviewRecordRepository,
 } from '@/src/repositories';
+import {
+  buildDetailBrowseContext,
+  resolveDetailBrowseContext,
+  type DetailBrowseContext,
+} from '@/src/services/DetailBrowseContextResolver';
 import { getLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import { Logger } from '@/src/services/Logger';
 import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
@@ -41,13 +46,7 @@ const MODULE_NAVIGATION_LIMIT = 500;
 export const MISTAKE_DETAIL_NOTE_MAX_LENGTH = MISTAKE_NOTE_MAX_LENGTH;
 
 export type ManagedDetailImageType = Exclude<DetailImageSlot['type'], 'review_solution'>;
-export type DetailBrowseMode = 'library_filter' | 'today_due' | 'same_module' | 'none';
-
-export type DetailBrowseContext = {
-  mode: DetailBrowseMode;
-  ids: string[];
-  currentIndex: number;
-};
+export type { DetailBrowseContext, DetailBrowseMode } from '@/src/services/DetailBrowseContextResolver';
 
 export type GetDetailBrowseContextParams = {
   mistakeId: string;
@@ -185,52 +184,6 @@ function toErrorMessage(error: unknown, fallback = FALLBACK_ERROR_MESSAGE): stri
 
 function normalizeMistakeId(id: string): string {
   return typeof id === 'string' ? id.trim() : '';
-}
-
-function normalizeMistakeIdList(ids: readonly string[]): string[] {
-  const normalized: string[] = [];
-  const seen = new Set<string>();
-
-  for (const id of ids) {
-    const normalizedId = normalizeMistakeId(id);
-    if (!normalizedId || seen.has(normalizedId)) {
-      continue;
-    }
-    normalized.push(normalizedId);
-    seen.add(normalizedId);
-  }
-
-  return normalized;
-}
-
-function buildBrowseContext(
-  mode: DetailBrowseMode,
-  ids: readonly string[],
-  currentMistakeId: string,
-): DetailBrowseContext {
-  const normalizedIds = normalizeMistakeIdList(ids);
-  if (normalizedIds.length <= 0) {
-    return {
-      mode: 'none',
-      ids: [currentMistakeId],
-      currentIndex: 0,
-    };
-  }
-
-  const currentIndex = normalizedIds.indexOf(currentMistakeId);
-  if (currentIndex >= 0) {
-    return {
-      mode,
-      ids: normalizedIds,
-      currentIndex,
-    };
-  }
-
-  return {
-    mode,
-    ids: [currentMistakeId, ...normalizedIds],
-    currentIndex: 0,
-  };
 }
 
 function normalizeOptionalText(value?: string | null): string | null {
@@ -607,80 +560,27 @@ export async function getDetailBrowseContext(
     };
   }
 
-  const browseSessionId = normalizeOptionalText(params.browseSessionId);
-  if (browseSessionId) {
-    const session = getLibraryBrowseSession(browseSessionId);
-    if (session?.mistakeIds.includes(mistakeId)) {
-      const context = buildBrowseContext('library_filter', session.mistakeIds, mistakeId);
-      Logger.info(SERVICE_SCOPE, 'Resolved detail browse context from library filter session.', {
-        mistakeId,
-        browseSessionId,
-        mode: context.mode,
-        totalIds: context.ids.length,
-        currentIndex: context.currentIndex,
-      });
-      return context;
-    }
-
-    const context = buildBrowseContext('none', [mistakeId], mistakeId);
-    Logger.warn(SERVICE_SCOPE, 'Library filter browse session is unavailable or invalid.', {
-      mistakeId,
-      browseSessionId,
-      sessionFound: session !== null,
-    });
-    return context;
-  }
-
   try {
-    const dueIds = normalizeMistakeIdList(await MistakeListService.getTodayReviewQueueIds());
-    if (dueIds.includes(mistakeId)) {
-      const context = buildBrowseContext('today_due', dueIds, mistakeId);
-      Logger.info(SERVICE_SCOPE, 'Resolved detail browse context from today due queue.', {
-        mistakeId,
-        mode: context.mode,
-        totalIds: context.ids.length,
-        currentIndex: context.currentIndex,
-      });
-      return context;
-    }
-
-    const moduleName = normalizeOptionalText(params.module);
-    if (!moduleName) {
-      const context = buildBrowseContext('none', [mistakeId], mistakeId);
-      Logger.info(SERVICE_SCOPE, 'Resolved detail browse context fallback because module is empty.', {
-        mistakeId,
-        mode: context.mode,
-        totalIds: context.ids.length,
-      });
-      return context;
-    }
-
-    const sameModuleMistakes = await MistakeRepository.listMistakes({
-      status: 'all',
-      module: moduleName,
-      sortBy: 'created_at',
-      sortOrder: 'asc',
-      limit: MODULE_NAVIGATION_LIMIT,
+    const context = await resolveDetailBrowseContext(params, {
+      getLibraryBrowseSession,
+      getTodayDueIds: () => MistakeListService.getTodayReviewQueueIds(),
+      getSameModuleIds: async (moduleName) => {
+        const sameModuleMistakes = await MistakeRepository.listMistakes({
+          status: 'all',
+          module: moduleName,
+          sortBy: 'created_at',
+          sortOrder: 'asc',
+          limit: MODULE_NAVIGATION_LIMIT,
+        });
+        return sameModuleMistakes.map((mistake) => mistake.id);
+      },
     });
-    const sameModuleIds = normalizeMistakeIdList(sameModuleMistakes.map((mistake) => mistake.id));
-    if (sameModuleIds.length > 0) {
-      const context = buildBrowseContext('same_module', sameModuleIds, mistakeId);
-      Logger.info(SERVICE_SCOPE, 'Resolved detail browse context from same module.', {
-        mistakeId,
-        module: moduleName,
-        mode: context.mode,
-        totalIds: context.ids.length,
-        currentIndex: context.currentIndex,
-      });
-      return context;
-    }
-
-    const context = buildBrowseContext('none', [mistakeId], mistakeId);
-    Logger.info(SERVICE_SCOPE, 'Resolved detail browse context fallback because no candidates found.', {
+    Logger.info(SERVICE_SCOPE, 'Resolved detail browse context.', {
       mistakeId,
-      module: moduleName,
+      browseSessionProvided: normalizeOptionalText(params.browseSessionId) !== null,
       mode: context.mode,
       totalIds: context.ids.length,
+      currentIndex: context.currentIndex,
     });
     return context;
   } catch (error) {
@@ -689,7 +589,7 @@ export async function getDetailBrowseContext(
       module: params.module,
       error,
     });
-    return buildBrowseContext('none', [mistakeId], mistakeId);
+    return buildDetailBrowseContext('none', [mistakeId], mistakeId);
   }
 }
 
