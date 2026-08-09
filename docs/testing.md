@@ -2,6 +2,11 @@
 
 适用环境：Windows + VSCode + Codex，使用 Web 预览、Android 真机或 Android 模拟器进行验收。
 
+## 自动化检查
+
+- [ ] `npm test`：浏览会话单元测试全部通过
+- [ ] `npm run preflight`：编码、TypeScript、Lint 和自动化测试全部通过
+
 ## 1. 项目启动验收
 - [ ] `npm install` 可以成功
 - [ ] `npx expo start` 可以启动

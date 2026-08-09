@@ -123,7 +123,8 @@ npm run check:deps      # 检查 Expo 依赖匹配
 npm run check:encoding  # 检查文件编码
 npm run typecheck       # TypeScript 类型检查
 npm run lint            # 代码规范检查
-npm run preflight       # 编码/类型/lint 一键检查
+npm test                # 运行自动化单元测试
+npm run preflight       # 编码/类型/lint/测试一键检查
 ```
 
 ### Android Release APK
