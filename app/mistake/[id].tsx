@@ -3637,7 +3637,7 @@ export default function MistakeDetailScreen() {
     const total = browseContext.ids.length;
     const currentDisplayIndex = browseCurrentIndex >= 0 ? browseCurrentIndex + 1 : 1;
     if (browseContext.mode === 'library_filter') {
-      return `当前按“错题库筛选结果”顺序浏览（${currentDisplayIndex}/${Math.max(total, 1)}）`;
+      return `错题库 · 当前筛选（${currentDisplayIndex}/${Math.max(total, 1)}）`;
     }
     if (browseContext.mode === 'today_due') {
       return `当前按“今日待复做”顺序浏览（${currentDisplayIndex}/${Math.max(total, 1)}）`;
