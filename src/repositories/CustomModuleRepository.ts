@@ -18,6 +18,8 @@ import { BRAND_ACCENT } from '@/src/styles/tokens';
 const REPO_SCOPE = 'CustomModuleRepository';
 const DEFAULT_ICON = 'label';
 const DEFAULT_COLOR = BRAND_ACCENT;
+const MAX_MODULE_NAME_LENGTH = 16;
+const MAX_IMPORTED_NAME_ATTEMPTS = 999;
 const CUSTOM_MODULE_SELECT_SQL = `
 SELECT
   id, name, display_code, custom_no, icon, color,
@@ -119,6 +121,93 @@ LIMIT 1;`,
   return row ? mapCustomModuleRow(row) : null;
 }
 
+async function moduleNameExistsInternal(
+  db: SQLite.SQLiteDatabase,
+  name: string,
+): Promise<boolean> {
+  const row = await db.getFirstAsync<{ id: number }>(
+    'SELECT id FROM modules WHERE name = ? COLLATE NOCASE LIMIT 1;',
+    name,
+  );
+  return Boolean(row);
+}
+
+function truncateWithoutSplittingSurrogatePair(value: string, maxLength: number): string {
+  const truncated = value.slice(0, maxLength);
+  return /[\uD800-\uDBFF]$/.test(truncated) ? truncated.slice(0, -1) : truncated;
+}
+
+function buildImportedModuleNameCandidate(sourceName: string, attempt: number): string {
+  if (attempt === 0) {
+    return truncateWithoutSplittingSurrogatePair(sourceName, MAX_MODULE_NAME_LENGTH);
+  }
+  const suffix = attempt === 1 ? '（导入）' : `（导入 ${attempt}）`;
+  const baseLength = Math.max(1, MAX_MODULE_NAME_LENGTH - suffix.length);
+  return `${truncateWithoutSplittingSurrogatePair(sourceName, baseLength)}${suffix}`;
+}
+
+async function resolveImportedModuleName(
+  db: SQLite.SQLiteDatabase,
+  sourceNameInput: string,
+): Promise<string> {
+  const sourceName = normalizeRequiredName(sourceNameInput);
+  for (let attempt = 0; attempt < MAX_IMPORTED_NAME_ATTEMPTS; attempt += 1) {
+    const candidate = buildImportedModuleNameCandidate(sourceName, attempt);
+    if (!(await moduleNameExistsInternal(db, candidate))) {
+      return candidate;
+    }
+  }
+  throw new Error('无法为导入题包分配可用的模块名称。');
+}
+
+async function createNewCustomModuleInTransaction(
+  db: SQLite.SQLiteDatabase,
+  input: CreateCustomModuleInput,
+  name: string,
+): Promise<CustomModule> {
+  const allocation = await db.getFirstAsync<CustomModuleAllocationRow>(
+    `SELECT
+  MAX(id) AS max_id,
+  MAX(custom_no) AS max_custom_no,
+  MAX(sort_order) AS max_sort_order
+FROM modules
+WHERE type = 'custom';`,
+  );
+  const nextId = Math.max(
+    CUSTOM_MODULE_ID_START,
+    Math.floor(Number(allocation?.max_id ?? CUSTOM_MODULE_ID_START - 1)) + 1,
+  );
+  const nextCustomNo = Math.max(
+    CUSTOM_MODULE_NEW_NUMBER_FLOOR,
+    Math.floor(Number(allocation?.max_custom_no ?? 0)) + 1,
+  );
+  if (nextCustomNo > CUSTOM_MODULE_MAX_NUMBER) {
+    throw new Error(`自定义模块编号已达到 U${CUSTOM_MODULE_MAX_NUMBER}。`);
+  }
+  const nextSortOrder = Math.floor(Number(allocation?.max_sort_order ?? -1)) + 1;
+  const now = nowIso();
+  await db.runAsync(
+    `INSERT INTO modules (
+  id, type, name, display_code, custom_no, icon, color,
+  sort_order, is_active, created_at, updated_at
+) VALUES (?, 'custom', ?, ?, ?, ?, ?, ?, 1, ?, ?);`,
+    nextId,
+    name,
+    formatCustomModuleDisplayCode(nextCustomNo),
+    nextCustomNo,
+    normalizeOptionalText(input.icon, DEFAULT_ICON),
+    normalizeOptionalText(input.color, DEFAULT_COLOR),
+    nextSortOrder,
+    now,
+    now,
+  );
+  const created = await findCustomModuleByIdInternal(db, nextId);
+  if (!created) {
+    throw new Error('自定义模块创建后读取失败。');
+  }
+  return created;
+}
+
 export const CustomModuleRepository = {
   async listCustomModules(): Promise<CustomModule[]> {
     try {
@@ -183,50 +272,26 @@ ORDER BY sort_order ASC, created_at ASC, id ASC;`,
           return reactivated;
         }
 
-        const allocation = await db.getFirstAsync<CustomModuleAllocationRow>(
-          `SELECT
-  MAX(id) AS max_id,
-  MAX(custom_no) AS max_custom_no,
-  MAX(sort_order) AS max_sort_order
-FROM modules
-WHERE type = 'custom';`,
-        );
-        const nextId = Math.max(
-          CUSTOM_MODULE_ID_START,
-          Math.floor(Number(allocation?.max_id ?? CUSTOM_MODULE_ID_START - 1)) + 1,
-        );
-        const nextCustomNo = Math.max(
-          CUSTOM_MODULE_NEW_NUMBER_FLOOR,
-          Math.floor(Number(allocation?.max_custom_no ?? 0)) + 1,
-        );
-        if (nextCustomNo > CUSTOM_MODULE_MAX_NUMBER) {
-          throw new Error(`自定义模块编号已达到 U${CUSTOM_MODULE_MAX_NUMBER}。`);
-        }
-        const nextSortOrder = Math.floor(Number(allocation?.max_sort_order ?? -1)) + 1;
-        const now = nowIso();
-        await db.runAsync(
-          `INSERT INTO modules (
-  id, type, name, display_code, custom_no, icon, color,
-  sort_order, is_active, created_at, updated_at
-) VALUES (?, 'custom', ?, ?, ?, ?, ?, ?, 1, ?, ?);`,
-          nextId,
-          name,
-          formatCustomModuleDisplayCode(nextCustomNo),
-          nextCustomNo,
-          normalizeOptionalText(input.icon, DEFAULT_ICON),
-          normalizeOptionalText(input.color, DEFAULT_COLOR),
-          nextSortOrder,
-          now,
-          now,
-        );
-        const created = await findCustomModuleByIdInternal(db, nextId);
-        if (!created) {
-          throw new Error('自定义模块创建后读取失败。');
-        }
-        return created;
+        return createNewCustomModuleInTransaction(db, input, name);
       });
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createCustomModule failed.', { input, error });
+      throw error;
+    }
+  },
+
+  async createImportedCustomModuleInTransaction(
+    db: SQLite.SQLiteDatabase,
+    input: CreateCustomModuleInput,
+  ): Promise<CustomModule> {
+    try {
+      const name = await resolveImportedModuleName(db, input.name);
+      return await createNewCustomModuleInTransaction(db, input, name);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'createImportedCustomModuleInTransaction failed.', {
+        input,
+        error,
+      });
       throw error;
     }
   },

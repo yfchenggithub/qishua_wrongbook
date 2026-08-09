@@ -1,7 +1,11 @@
 export * from '@/src/services/moduleTransfer/ModuleExportService';
+export * from '@/src/services/moduleTransfer/ModuleImportExecutionService';
 export * from '@/src/services/moduleTransfer/ModuleImportPreviewService';
+export * from '@/src/services/moduleTransfer/ModuleImportStagingService';
 export * from '@/src/services/moduleTransfer/ModulePackageArchiveService';
 export * from '@/src/services/moduleTransfer/ModulePackageValidator';
 export type * from '@/src/services/moduleTransfer/ModuleImportPreviewTypes';
+export type * from '@/src/services/moduleTransfer/ModuleImportExecutionTypes';
+export type * from '@/src/services/moduleTransfer/ModuleImportStagingTypes';
 export type * from '@/src/services/moduleTransfer/ModulePackageArchiveTypes';
 export type * from '@/src/services/moduleTransfer/ModuleTransferTypes';

@@ -1,3 +1,5 @@
+import type * as SQLite from 'expo-sqlite';
+
 import { getDatabase, initDatabase } from '@/src/db';
 import type { CreateMistakeTagInput, MistakeTag } from '@/src/models/MistakeTag';
 import { Logger } from '@/src/services/Logger';
@@ -6,6 +8,15 @@ const REPO_SCOPE = 'MistakeTagRepository';
 const DEFAULT_LIST_LIMIT = 500;
 const DEFAULT_LIST_OFFSET = 0;
 const DEFAULT_RECENT_TAG_LIMIT = 24;
+
+export interface CreateMistakeTagInTransactionInput {
+  id: string;
+  mistakeId: string;
+  name: string;
+  normalizedName: string;
+  sortOrder: number;
+  createdAt: string;
+}
 
 type MaxSortOrderRow = {
   max_sort_order: number | null;
@@ -188,6 +199,49 @@ WHERE mistake_id = ?;`,
       return tag;
     } catch (error) {
       Logger.error(REPO_SCOPE, 'createTag failed.', { input, error });
+      throw error;
+    }
+  },
+
+  async createTagInTransaction(
+    db: SQLite.SQLiteDatabase,
+    input: CreateMistakeTagInTransactionInput,
+  ): Promise<MistakeTag> {
+    try {
+      if (!Number.isInteger(input.sortOrder) || input.sortOrder < 0) {
+        throw new Error('sortOrder must be a non-negative integer.');
+      }
+      const sortOrder = input.sortOrder;
+      const tag: MistakeTag = {
+        id: normalizeRequiredText(input.id, 'id'),
+        mistake_id: normalizeRequiredText(input.mistakeId, 'mistakeId'),
+        name: normalizeRequiredText(input.name, 'name'),
+        normalized_name: normalizeRequiredText(input.normalizedName, 'normalizedName'),
+        sort_order: sortOrder,
+        created_at: normalizeRequiredText(input.createdAt, 'createdAt'),
+        updated_at: normalizeRequiredText(input.createdAt, 'createdAt'),
+      };
+      await db.runAsync(
+        `INSERT INTO mistake_tags (
+  id,
+  mistake_id,
+  name,
+  normalized_name,
+  sort_order,
+  created_at,
+  updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);`,
+        tag.id,
+        tag.mistake_id,
+        tag.name,
+        tag.normalized_name,
+        tag.sort_order,
+        tag.created_at,
+        tag.updated_at,
+      );
+      return tag;
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'createTagInTransaction failed.', { input, error });
       throw error;
     }
   },

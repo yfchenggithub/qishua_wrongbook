@@ -3,8 +3,8 @@
 ## 1. 文档状态
 
 - 当前阶段：V1 按服务层分步实现。
-- 已实现题包 TypeScript 契约与校验器、导入来源持久化、只读导出数据映射、`.qsm` 归档生成服务和只读导入预览。
-- 尚未实现导入写入服务、页面接入和系统分享。
+- 已实现题包 TypeScript 契约与校验器、导入来源持久化、只读导出数据映射、`.qsm` 归档生成、只读导入预览，以及正式导入的暂存、事务写入和失败补偿服务。
+- 尚未实现导入/导出页面、系统文件选择和系统分享。
 - 后续实现数据库变更前，必须先同步更新 `docs/data_contract.md`。
 - 本功能完全离线，不引入登录、云同步、题包市场或服务器接口。
 
@@ -409,6 +409,8 @@ V1 每次导出都生成新的不可变 `packageId`。将来如果增加“发�
 5. 数据库事务失败时，删除本次新建的所有错题图片目录。
 6. 数据库提交成功后，删除临时目录并做数量复核。
 
+当前服务实现中，用户确认导入后会重新只读解析原 `.qsm`，先检查 `packageId`，再把图片按 `assetId` 平铺写入本次专属缓存目录。暂存时会再次校验源文件大小、ZIP 条目集合、路径、单条目与总解压大小、图片尺寸及 JPEG 首尾签名，避免直接信任预览阶段的路径或元数据。数据库事务内部会再次检查 `packageId` 唯一性，以覆盖两个导入请求并发通过事务外预检查的情况。
+
 由于新 ID 对应的图片目录此前不存在，补偿清理不会触碰用户原有图片。若 App 在“图片已复制、数据库未提交”之间崩溃，可能留下孤立文件；现有存储维护流程应在下次运行时识别并清理这种无数据库引用的目录。
 
 任何失败都必须满足：
@@ -424,10 +426,10 @@ V1 每次导出都生成新的不可变 `packageId`。将来如果增加“发�
 ```text
 src/models/ModulePackage.ts
 src/services/moduleTransfer/ModuleExportService.ts
-src/services/moduleTransfer/ModuleImportService.ts
+src/services/moduleTransfer/ModuleImportPreviewService.ts
+src/services/moduleTransfer/ModuleImportStagingService.ts
+src/services/moduleTransfer/ModuleImportExecutionService.ts
 src/services/moduleTransfer/ModulePackageValidator.ts
-src/services/moduleTransfer/ModulePackageZipAdapter.ts
-src/services/moduleTransfer/ModuleTransferTypes.ts
 src/repositories/ModuleImportRepository.ts
 app/module-transfer/import.tsx
 app/module-transfer/export.tsx
@@ -437,10 +439,11 @@ app/module-transfer/export.tsx
 
 - 页面层只处理选择、预览、确认、进度和结果，不写 SQL、不直接操作文件。
 - `ModuleExportService` 负责数据映射、脱敏、打包和分享编排。
-- `ModuleImportService` 负责检查、预览、ID 映射、图片落盘、数据库事务和失败补偿。
+- `ModuleImportPreviewService` 负责只读解析和预览，不写数据库或文件。
+- `ModuleImportStagingService` 负责将校验过的图片安全解压到独立临时目录并清理。
+- `ModuleImportExecutionService` 负责重复检测、ID 映射、图片落盘、单事务写入和失败补偿。
 - `ModulePackageValidator` 只做纯校验，不产生数据库或文件系统副作用。
-- `ModulePackageZipAdapter` 只负责受限的打包与解包，可复用现有 `fflate` 依赖，但不复用备份包的业务协议。
-- Repository 层负责全部 SQL；需要补充事务内创建模块、标签和导入来源记录的能力。
+- Repository 层负责全部 SQL，并为模块、标签和来源记录提供事务内写入能力。
 - 图片最终仍进入 `ImageService`/图片存储层约定的错题目录，不建立第二套长期图片目录。
 
 ## 12. UI 信息架构
@@ -509,7 +512,7 @@ app/module-transfer/export.tsx
 2. 更新 `docs/data_contract.md`，新增来源表并完成数据库迁移。
 3. 实现只读导出数据收集与模块包生成，不接 UI。
 4. 实现只读导入检查与预览，不写数据库。
-5. 实现图片落盘、数据库事务、重复检测和失败补偿。
+5. 已实现图片落盘、数据库事务、重复检测和失败补偿。
 6. 实现导出页、导入页及系统分享/文件选择入口。
 7. 补充自动化校验脚本和 Android 真机手工验收文档。
 
