@@ -570,6 +570,31 @@ export async function getMistakeDetail(id: string): Promise<GetMistakeDetailResu
   }
 }
 
+export async function isMistakeAvailableForDetailBrowse(id: string): Promise<boolean> {
+  const mistakeId = normalizeMistakeId(id);
+  if (!mistakeId) {
+    return false;
+  }
+
+  try {
+    const mistake = await MistakeRepository.getMistakeById(mistakeId);
+    const available = mistake !== null && mistake.status !== REVIEW_STATUS.ARCHIVED;
+    if (!available) {
+      Logger.info(SERVICE_SCOPE, 'Detail browse candidate is unavailable.', {
+        mistakeId,
+        reason: mistake === null ? 'not_found' : 'archived',
+      });
+    }
+    return available;
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Failed to read detail browse candidate, treating it as unavailable.', {
+      mistakeId,
+      error,
+    });
+    return false;
+  }
+}
+
 export async function getDetailBrowseContext(
   params: GetDetailBrowseContextParams,
 ): Promise<DetailBrowseContext> {

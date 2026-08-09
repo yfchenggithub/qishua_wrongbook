@@ -64,3 +64,31 @@ export function getLibraryBrowseSession(
   }
   return libraryBrowseSessions.get(normalizedSessionId) ?? null;
 }
+
+export function removeMistakesFromLibraryBrowseSession(
+  sessionId: string | null | undefined,
+  mistakeIds: readonly string[],
+): readonly string[] | null {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const session = libraryBrowseSessions.get(normalizedSessionId);
+  if (!session) {
+    return null;
+  }
+
+  const removedIds = new Set(normalizeMistakeIds(mistakeIds));
+  if (removedIds.size <= 0) {
+    return session.mistakeIds;
+  }
+
+  const remainingIds = session.mistakeIds.filter((mistakeId) => !removedIds.has(mistakeId));
+  const frozenIds = Object.freeze([...remainingIds]);
+  libraryBrowseSessions.set(normalizedSessionId, {
+    ...session,
+    mistakeIds: frozenIds,
+  });
+  return frozenIds;
+}

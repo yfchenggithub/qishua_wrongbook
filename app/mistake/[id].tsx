@@ -76,6 +76,7 @@ import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { useMusicInterruption } from '@/src/music';
 import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonService';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
+import { removeMistakesFromLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
@@ -185,6 +186,12 @@ function normalizeSwitchFrom(value: string | string[] | undefined): DetailSwitch
     return raw;
   }
   return null;
+}
+
+function normalizeSkippedUnavailableCount(value: string | string[] | undefined): number {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function toBriefErrorMessage(message?: string): string {
@@ -1393,10 +1400,18 @@ export default function MistakeDetailScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { pauseForInterruption, resumeAfterInterruption } = useMusicInterruption();
-  const { id, switchFrom, browseSessionId, relatedFromId, relatedFromTitle } = useLocalSearchParams<{
+  const {
+    id,
+    switchFrom,
+    browseSessionId,
+    skippedUnavailableCount,
+    relatedFromId,
+    relatedFromTitle,
+  } = useLocalSearchParams<{
     id?: string | string[];
     switchFrom?: string | string[];
     browseSessionId?: string | string[];
+    skippedUnavailableCount?: string | string[];
     relatedFromId?: string | string[];
     relatedFromTitle?: string | string[];
   }>();
@@ -1405,6 +1420,10 @@ export default function MistakeDetailScreen() {
   const routeBrowseSessionId = useMemo(
     () => normalizeRouteId(browseSessionId),
     [browseSessionId],
+  );
+  const routeSkippedUnavailableCount = useMemo(
+    () => normalizeSkippedUnavailableCount(skippedUnavailableCount),
+    [skippedUnavailableCount],
   );
   const routeRelatedFromId = useMemo(() => normalizeRouteId(relatedFromId), [relatedFromId]);
   const routeRelatedFromTitle = useMemo(
@@ -1481,6 +1500,8 @@ export default function MistakeDetailScreen() {
   const maxScrollYRef = useRef(0);
   const scrollBoundaryLockRef = useRef<ScrollBoundary | null>(null);
   const pendingAutoRouteIdRef = useRef<string | null>(null);
+  const browseNavigationRequestIdRef = useRef(0);
+  const isBrowseTargetResolvingRef = useRef(false);
   const lastTouchYRef = useRef<number | null>(null);
   const touchMoveCountRef = useRef(0);
   const topEdgePullDistanceRef = useRef(0);
@@ -1501,6 +1522,8 @@ export default function MistakeDetailScreen() {
     lastScrollYRef.current = 0;
     maxScrollYRef.current = 0;
     pendingAutoRouteIdRef.current = null;
+    browseNavigationRequestIdRef.current += 1;
+    isBrowseTargetResolvingRef.current = false;
     lastTouchYRef.current = null;
     touchMoveCountRef.current = 0;
     topEdgePullDistanceRef.current = 0;
@@ -1514,6 +1537,11 @@ export default function MistakeDetailScreen() {
     setShowAllReviewRecords(false);
     setIsMoreMenuVisible(false);
   }, [routeId]);
+
+  useEffect(() => () => {
+    browseNavigationRequestIdRef.current += 1;
+    isBrowseTargetResolvingRef.current = false;
+  }, []);
 
   useEffect(() => {
     if (!routeSwitchFrom) {
@@ -3632,6 +3660,7 @@ export default function MistakeDetailScreen() {
       browseContext.mode,
       browseCurrentIndex,
       total,
+      routeSkippedUnavailableCount,
     ].join(':');
     if (switchToastKeyRef.current === toastKey) {
       return;
@@ -3639,7 +3668,9 @@ export default function MistakeDetailScreen() {
 
     switchToastKeyRef.current = toastKey;
     showToast(
-      buildSwitchToastMessage(routeSwitchFrom, browseCurrentIndex, total),
+      routeSkippedUnavailableCount > 0
+        ? `已跳过 ${routeSkippedUnavailableCount} 道不可用题目`
+        : buildSwitchToastMessage(routeSwitchFrom, browseCurrentIndex, total),
       'info',
       TOAST_DURATION_SHORT,
     );
@@ -3647,19 +3678,31 @@ export default function MistakeDetailScreen() {
     browseContext.ids.length,
     browseContext.mode,
     browseCurrentIndex,
+    routeSkippedUnavailableCount,
     routeSwitchFrom,
     showToast,
     state,
   ]);
 
   const navigateRelativeMistake = useCallback(
-    (direction: 'next' | 'prev', trigger: 'scroll_top' | 'scroll_bottom') => {
+    async (direction: 'next' | 'prev', trigger: 'scroll_top' | 'scroll_bottom') => {
       if (state.kind !== 'success') {
         Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
           reason: 'state_not_success',
           trigger,
           direction,
           stateKind: state.kind,
+        });
+        return;
+      }
+
+      if (isBrowseTargetResolvingRef.current) {
+        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'browse_target_resolving',
+          trigger,
+          direction,
+          mode: browseContext.mode,
+          currentMistakeId: state.detail.id,
         });
         return;
       }
@@ -3720,11 +3763,90 @@ export default function MistakeDetailScreen() {
         return;
       }
 
-      const targetIndex =
+      let targetIndex =
         direction === 'next'
           ? (currentIndex + 1) % ids.length
           : (currentIndex - 1 + ids.length) % ids.length;
-      const targetId = ids[targetIndex];
+      let targetId: string | undefined = ids[targetIndex];
+      let skippedUnavailableCount = 0;
+
+      if (browseContext.mode === 'library_filter') {
+        const requestId = browseNavigationRequestIdRef.current + 1;
+        browseNavigationRequestIdRef.current = requestId;
+        isBrowseTargetResolvingRef.current = true;
+        const step = direction === 'next' ? 1 : -1;
+        const skippedIds: string[] = [];
+        targetIndex = currentIndex + step;
+        targetId = undefined;
+
+        try {
+          while (targetIndex >= 0 && targetIndex < ids.length) {
+            const candidateId = ids[targetIndex];
+            const available = candidateId
+              ? await MistakeDetailService.isMistakeAvailableForDetailBrowse(candidateId)
+              : false;
+            if (requestId !== browseNavigationRequestIdRef.current) {
+              return;
+            }
+            if (candidateId && available) {
+              targetId = candidateId;
+              break;
+            }
+            if (candidateId) {
+              skippedIds.push(candidateId);
+            }
+            targetIndex += step;
+          }
+
+          if (skippedIds.length > 0) {
+            skippedUnavailableCount = skippedIds.length;
+            const remainingSessionIds = removeMistakesFromLibraryBrowseSession(
+              routeBrowseSessionId,
+              skippedIds,
+            );
+            const skippedIdSet = new Set(skippedIds);
+            setBrowseContext((current) => {
+              if (current.mode !== 'library_filter') {
+                return current;
+              }
+              const nextIds = remainingSessionIds
+                ? [...remainingSessionIds]
+                : current.ids.filter((mistakeId) => !skippedIdSet.has(mistakeId));
+              return {
+                ...current,
+                ids: nextIds,
+                currentIndex: nextIds.indexOf(state.detail.id),
+              };
+            });
+          }
+
+          if (!targetId) {
+            Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+              reason: 'no_available_library_filter_candidate',
+              trigger,
+              direction,
+              mode: browseContext.mode,
+              totalIds: ids.length,
+              currentIndex,
+              skippedCount: skippedIds.length,
+              currentMistakeId: state.detail.id,
+            });
+            if (skippedUnavailableCount > 0) {
+              showToast(
+                `已跳过 ${skippedUnavailableCount} 道不可用题目`,
+                'info',
+                TOAST_DURATION_SHORT,
+              );
+            }
+            return;
+          }
+        } finally {
+          if (requestId === browseNavigationRequestIdRef.current) {
+            isBrowseTargetResolvingRef.current = false;
+          }
+        }
+      }
+
       if (!targetId || targetId === state.detail.id) {
         Logger.warn(PAGE_SCOPE, 'detail_auto_switch_skipped', {
           reason: 'invalid_target',
@@ -3758,6 +3880,9 @@ export default function MistakeDetailScreen() {
             id: targetId,
             switchFrom: direction === 'next' ? 'bottom' : 'top',
             ...(routeBrowseSessionId ? { browseSessionId: routeBrowseSessionId } : {}),
+            ...(skippedUnavailableCount > 0
+              ? { skippedUnavailableCount: String(skippedUnavailableCount) }
+              : {}),
           },
         } as never,
       );
@@ -3821,7 +3946,7 @@ export default function MistakeDetailScreen() {
           maxScrollY,
           velocityY,
         });
-        navigateRelativeMistake('next', 'scroll_bottom');
+        void navigateRelativeMistake('next', 'scroll_bottom');
         return;
       }
 
@@ -3838,7 +3963,7 @@ export default function MistakeDetailScreen() {
           maxScrollY,
           velocityY,
         });
-        navigateRelativeMistake('prev', 'scroll_top');
+        void navigateRelativeMistake('prev', 'scroll_top');
       }
     },
     [navigateRelativeMistake, routeId, state.kind],
@@ -3899,7 +4024,7 @@ export default function MistakeDetailScreen() {
         });
         topEdgePullDistanceRef.current = 0;
         bottomEdgePullDistanceRef.current = 0;
-        navigateRelativeMistake('prev', 'scroll_top');
+        void navigateRelativeMistake('prev', 'scroll_top');
         return;
       }
 
@@ -3915,7 +4040,7 @@ export default function MistakeDetailScreen() {
         });
         topEdgePullDistanceRef.current = 0;
         bottomEdgePullDistanceRef.current = 0;
-        navigateRelativeMistake('next', 'scroll_bottom');
+        void navigateRelativeMistake('next', 'scroll_bottom');
       }
     },
     [navigateRelativeMistake, state.kind],
