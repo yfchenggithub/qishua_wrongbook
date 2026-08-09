@@ -3665,9 +3665,10 @@ export default function MistakeDetailScreen() {
       }
 
       const ids = browseContext.ids;
-      if (ids.length <= 1) {
-        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
-          reason: 'insufficient_candidates',
+      const currentIndex = ids.indexOf(state.detail.id);
+      if (currentIndex < 0) {
+        Logger.warn(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'current_not_in_candidates',
           trigger,
           direction,
           mode: browseContext.mode,
@@ -3677,10 +3678,39 @@ export default function MistakeDetailScreen() {
         return;
       }
 
-      const currentIndex = ids.indexOf(state.detail.id);
-      if (currentIndex < 0) {
-        Logger.warn(PAGE_SCOPE, 'detail_auto_switch_skipped', {
-          reason: 'current_not_in_candidates',
+      const reachedLibraryStart =
+        browseContext.mode === 'library_filter'
+        && direction === 'prev'
+        && currentIndex === 0;
+      const reachedLibraryEnd =
+        browseContext.mode === 'library_filter'
+        && direction === 'next'
+        && currentIndex === ids.length - 1;
+      if (reachedLibraryStart || reachedLibraryEnd) {
+        const boundary = reachedLibraryStart ? 'start' : 'end';
+        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'library_filter_boundary',
+          boundary,
+          trigger,
+          direction,
+          mode: browseContext.mode,
+          totalIds: ids.length,
+          currentIndex,
+          currentMistakeId: state.detail.id,
+        });
+        showToast(
+          reachedLibraryStart
+            ? '已经是当前筛选的第一题'
+            : '已经是当前筛选的最后一题',
+          'info',
+          TOAST_DURATION_SHORT,
+        );
+        return;
+      }
+
+      if (ids.length <= 1) {
+        Logger.info(PAGE_SCOPE, 'detail_auto_switch_skipped', {
+          reason: 'insufficient_candidates',
           trigger,
           direction,
           mode: browseContext.mode,
@@ -3732,7 +3762,7 @@ export default function MistakeDetailScreen() {
         } as never,
       );
     },
-    [browseContext.ids, browseContext.mode, routeBrowseSessionId, router, state],
+    [browseContext.ids, browseContext.mode, routeBrowseSessionId, router, showToast, state],
   );
 
   const handleDetailScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
