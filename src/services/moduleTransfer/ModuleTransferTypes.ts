@@ -14,6 +14,26 @@ export interface PrepareModuleExportInput {
   appVersion?: string;
 }
 
+export interface ModuleExportCandidate {
+  moduleId: number;
+  name: string;
+  displayCode: string;
+  type: 'system' | 'custom';
+  icon: string;
+  color: string;
+  questionCount: number;
+}
+
+export type ListModuleExportCandidatesResult =
+  | {
+      ok: true;
+      value: ModuleExportCandidate[];
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
 export type ModuleExportWarningCode =
   | 'invalid_error_reason_ids'
   | 'unresolved_error_reason'

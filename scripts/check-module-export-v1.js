@@ -116,6 +116,62 @@ function makeImageFixture() {
 
 const repositoryMocks = {
   ModuleRepository: {
+    async listAllModules() {
+      return [
+        {
+          id: 1,
+          type: 'system',
+          name: '函数',
+          display_code: 'A',
+          custom_no: null,
+          icon: 'functions',
+          color: '#34C759',
+          sort_order: 0,
+          is_active: true,
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+        },
+        {
+          id: 11,
+          type: 'unclassified',
+          name: '未分类',
+          display_code: 'Z',
+          custom_no: null,
+          icon: 'help-outline',
+          color: '#8E8E93',
+          sort_order: 10,
+          is_active: true,
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+        },
+        {
+          id: 12,
+          type: 'custom',
+          name: '圆锥精选',
+          display_code: 'U001',
+          custom_no: 1,
+          icon: 'label',
+          color: '#34C759',
+          sort_order: 0,
+          is_active: true,
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+        },
+        {
+          id: 13,
+          type: 'custom',
+          name: '停用模块',
+          display_code: 'U002',
+          custom_no: 2,
+          icon: 'label',
+          color: '#34C759',
+          sort_order: 1,
+          is_active: false,
+          created_at: CREATED_AT,
+          updated_at: CREATED_AT,
+        },
+      ];
+    },
     async getModuleById(moduleId) {
       moduleReadCount += 1;
       assert.equal(moduleId, 12);
@@ -135,6 +191,14 @@ const repositoryMocks = {
     },
   },
   MistakeRepository: {
+    async countMistakesByModuleId() {
+      return [
+        { moduleId: 1, count: 0 },
+        { moduleId: 11, count: 1 },
+        { moduleId: 12, count: 2 },
+        { moduleId: 13, count: 3 },
+      ];
+    },
     async listMistakes(options) {
       assert.deepEqual(options, { status: 'all', moduleId: 12, limit: null });
       return mistakes;
@@ -310,12 +374,42 @@ async function verifyMapping() {
   assert.equal(missingQuestion.code, 'missing_question_image');
 }
 
+async function verifyCandidateListing() {
+  const { listModuleExportCandidates } = require(
+    path.join(PROJECT_ROOT, 'src/services/moduleTransfer/ModuleExportService.ts'),
+  );
+  const result = await listModuleExportCandidates();
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.value, [
+    {
+      moduleId: 1,
+      name: '函数',
+      displayCode: 'A',
+      type: 'system',
+      icon: 'functions',
+      color: '#34C759',
+      questionCount: 0,
+    },
+    {
+      moduleId: 12,
+      name: '圆锥精选',
+      displayCode: 'U001',
+      type: 'custom',
+      icon: 'label',
+      color: '#34C759',
+      questionCount: 2,
+    },
+  ]);
+}
+
 async function main() {
   verifyReadOnlyBoundary();
   installTypeScriptLoader();
+  await verifyCandidateListing();
   await verifyMapping();
   console.log('[module-export-v1] 检查通过：');
-  console.log('  - 服务不写数据库、不读写文件、不调用系统分享');
+    console.log('  - 服务不写数据库、不读写文件、不调用系统分享');
+    console.log('  - 可导出模块候选包含题数，并排除未分类与停用模块');
   console.log('  - manifest/module payload 通过真实 V1 校验器');
   console.log('  - 题目、图片、错因、标签与内部关联映射稳定');
   console.log('  - 复做图片被排除，缺少必需题目图时导出失败');

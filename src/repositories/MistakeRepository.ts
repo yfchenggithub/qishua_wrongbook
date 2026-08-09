@@ -101,6 +101,11 @@ export interface MistakeModuleCount {
   count: number;
 }
 
+export interface MistakeModuleIdCount {
+  moduleId: number;
+  count: number;
+}
+
 export interface MistakeTagCount {
   name: string;
   normalizedName: string;
@@ -168,6 +173,11 @@ type CountRow = {
 
 type ModuleCountRow = {
   module: string | null;
+  total: number | null;
+};
+
+type ModuleIdCountRow = {
+  module_id: number;
   total: number | null;
 };
 
@@ -959,6 +969,25 @@ ORDER BY total DESC, module ASC;`,
       }, []);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'countMistakesByModule failed.', { options, error });
+      throw error;
+    }
+  },
+
+  async countMistakesByModuleId(): Promise<MistakeModuleIdCount[]> {
+    try {
+      await ensureDatabaseReady();
+      const rows = await (await getDatabase()).getAllAsync<ModuleIdCountRow>(
+        `SELECT module_id, COUNT(*) AS total
+FROM mistakes
+GROUP BY module_id
+ORDER BY module_id ASC;`,
+      );
+      return rows.map((row) => ({
+        moduleId: Number(row.module_id),
+        count: Number(row.total ?? 0),
+      }));
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'countMistakesByModuleId failed.', error);
       throw error;
     }
   },

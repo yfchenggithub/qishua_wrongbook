@@ -1,6 +1,7 @@
 export {
   MistakeRepository,
   type ListMistakesOptions,
+  type MistakeModuleIdCount,
   type MistakeStats,
   type MistakeTagCount,
   type UpdateReviewProgressInTransactionParams,

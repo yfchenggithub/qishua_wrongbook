@@ -213,6 +213,7 @@ export default function RootLayout() {
               <Stack.Screen name="review-sheet/scan" options={{ headerShown: false }} />
               <Stack.Screen name="review-sheet/[sheetId]" options={{ headerShown: false }} />
               <Stack.Screen name="pdf-preview" options={{ title: '今日练习卷' }} />
+              <Stack.Screen name="module-export" options={{ headerShown: false }} />
               <Stack.Screen name="module-import" options={{ headerShown: false }} />
               <Stack.Screen name="about-support" options={{ headerShown: false }} />
               <Stack.Screen name="official-account" options={{ headerShown: false }} />

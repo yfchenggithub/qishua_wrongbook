@@ -16,6 +16,7 @@
     "check:backup-v10": "node ./scripts/check-backup-v10.js",
     "check:module-import-v11": "node ./scripts/check-module-import-v11.js",
     "check:module-export-v1": "node ./scripts/check-module-export-v1.js",
+    "check:module-export-page-v1": "node ./scripts/check-module-export-page-v1.js",
     "check:module-archive-v1": "node ./scripts/check-module-archive-v1.js",
     "check:module-preview-v1": "node ./scripts/check-module-preview-v1.js",
     "check:module-import-execution-v1": "node ./scripts/check-module-import-execution-v1.js",

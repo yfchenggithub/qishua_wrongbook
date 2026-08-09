@@ -33,6 +33,8 @@ import {
   validateModulePackagePayload,
 } from '@/src/services/moduleTransfer/ModulePackageValidator';
 import type {
+  ListModuleExportCandidatesResult,
+  ModuleExportCandidate,
   ModuleExportFailureCode,
   ModuleExportSourceAsset,
   ModuleExportWarning,
@@ -351,6 +353,39 @@ function resolveAppMeta(input: PrepareModuleExportInput): { appName: string; app
   };
 }
 
+export async function listModuleExportCandidates(): Promise<ListModuleExportCandidatesResult> {
+  try {
+    const [modules, counts] = await Promise.all([
+      ModuleRepository.listAllModules(),
+      MistakeRepository.countMistakesByModuleId(),
+    ]);
+    const countByModuleId = new Map(counts.map((item) => [item.moduleId, item.count]));
+    const candidates: ModuleExportCandidate[] = modules
+      .filter((moduleItem) => (
+        moduleItem.is_active
+        && (moduleItem.type === 'system' || moduleItem.type === 'custom')
+      ))
+      .sort((left, right) => (
+        (left.type === right.type ? 0 : left.type === 'system' ? -1 : 1)
+        || left.sort_order - right.sort_order
+        || left.id - right.id
+      ))
+      .map((moduleItem) => ({
+        moduleId: moduleItem.id,
+        name: moduleItem.name,
+        displayCode: moduleItem.display_code,
+        type: moduleItem.type as 'system' | 'custom',
+        icon: moduleItem.icon,
+        color: moduleItem.color,
+        questionCount: countByModuleId.get(moduleItem.id) ?? 0,
+      }));
+    return { ok: true, value: candidates };
+  } catch (error) {
+    Logger.error(SERVICE_SCOPE, 'Failed to list module export candidates.', error);
+    return { ok: false, message: '读取可导出模块失败，请稍后重试。' };
+  }
+}
+
 function mapQuestions(options: {
   mistakes: Mistake[];
   imagesByMistakeId: ReadonlyMap<string, MistakeImage[]>;
@@ -559,5 +594,6 @@ export async function prepareModuleExportPayload(
 }
 
 export const ModuleExportService = {
+  listModuleExportCandidates,
   prepareModuleExportPayload,
 } as const;

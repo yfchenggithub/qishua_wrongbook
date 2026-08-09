@@ -1987,6 +1987,14 @@ export default function SettingsScreen() {
 
         <SettingsSection title="题包">
           <SettingsRow
+            icon="ios-share"
+            onPress={() => router.push('/module-export' as never)}
+            showChevron
+            subtitle="选择一个模块，生成 .qsm 文件并分享"
+            title="导出题包"
+          />
+          <SettingsDivider />
+          <SettingsRow
             icon="inventory-2"
             onPress={() => router.push('/module-import' as never)}
             showChevron
