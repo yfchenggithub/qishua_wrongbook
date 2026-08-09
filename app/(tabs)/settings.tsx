@@ -1985,6 +1985,16 @@ export default function SettingsScreen() {
           />
         </SettingsSection>
 
+        <SettingsSection title="题包">
+          <SettingsRow
+            icon="inventory-2"
+            onPress={() => router.push('/module-import' as never)}
+            showChevron
+            subtitle="选择 .qsm 文件，预览后导入为新模块"
+            title="导入题包"
+          />
+        </SettingsSection>
+
         <SettingsSection title="学习概览">
           <OverviewStats items={statsItems} />
           {overviewErrorMessage ? <Text style={styles.compactErrorText}>{overviewErrorMessage}</Text> : null}

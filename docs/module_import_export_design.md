@@ -3,8 +3,8 @@
 ## 1. 文档状态
 
 - 当前阶段：V1 按服务层分步实现。
-- 已实现题包 TypeScript 契约与校验器、导入来源持久化、只读导出数据映射、`.qsm` 归档生成、只读导入预览，以及正式导入的暂存、事务写入和失败补偿服务。
-- 尚未实现导入/导出页面、系统文件选择和系统分享。
+- 已实现题包 TypeScript 契约与校验器、导入来源持久化、只读导出数据映射、`.qsm` 归档生成、正式导入服务，以及包含文件选择、预览、确认、进度和结果反馈的导入页面。
+- 尚未实现导出页面和系统分享。
 - 后续实现数据库变更前，必须先同步更新 `docs/data_contract.md`。
 - 本功能完全离线，不引入登录、云同步、题包市场或服务器接口。
 
@@ -431,7 +431,7 @@ src/services/moduleTransfer/ModuleImportStagingService.ts
 src/services/moduleTransfer/ModuleImportExecutionService.ts
 src/services/moduleTransfer/ModulePackageValidator.ts
 src/repositories/ModuleImportRepository.ts
-app/module-transfer/import.tsx
+app/module-import.tsx
 app/module-transfer/export.tsx
 ```
 
@@ -513,7 +513,7 @@ app/module-transfer/export.tsx
 3. 实现只读导出数据收集与模块包生成，不接 UI。
 4. 实现只读导入检查与预览，不写数据库。
 5. 已实现图片落盘、数据库事务、重复检测和失败补偿。
-6. 实现导出页、导入页及系统分享/文件选择入口。
+6. 已实现导入页和系统文件选择入口；待实现导出页及系统分享。
 7. 补充自动化校验脚本和 Android 真机手工验收文档。
 
 第一步实现前仍需最终确认两项产品文字：功能对用户展示为“题包”还是“模块包”，以及导出页作者昵称是否默认留空。它们不影响本协议的核心数据边界。

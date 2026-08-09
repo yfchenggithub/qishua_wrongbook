@@ -6,6 +6,22 @@ export interface ExecuteModuleImportInput {
   fileName: string;
   fileSizeBytes?: number | null;
   importedAt?: string;
+  onProgress?: (event: ModuleImportExecutionProgressEvent) => void;
+}
+
+export type ModuleImportExecutionProgressStage =
+  | 'validating'
+  | 'checking_duplicate'
+  | 'staging_images'
+  | 'committing_images'
+  | 'writing_database'
+  | 'cleaning_up'
+  | 'completed';
+
+export interface ModuleImportExecutionProgressEvent {
+  stage: ModuleImportExecutionProgressStage;
+  message: string;
+  percent: number;
 }
 
 export interface ExecutedModuleImport {

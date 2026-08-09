@@ -399,8 +399,24 @@ async function verifySuccessfulImport(executeModuleImport) {
   );
   const previewResult = await readModuleImportPreview(input);
   assert.equal(previewResult.ok, true, JSON.stringify(previewResult, null, 2));
-  const result = await executeModuleImport(input);
+  const progressEvents = [];
+  const result = await executeModuleImport({
+    ...input,
+    onProgress(event) {
+      progressEvents.push(event);
+    },
+  });
   assert.equal(result.ok, true, JSON.stringify(result, null, 2));
+  assert.deepEqual(progressEvents.map((event) => event.stage), [
+    'validating',
+    'checking_duplicate',
+    'staging_images',
+    'committing_images',
+    'writing_database',
+    'cleaning_up',
+    'completed',
+  ]);
+  assert.deepEqual(progressEvents.map((event) => event.percent), [5, 18, 32, 56, 72, 94, 100]);
   assert.equal(result.value.packageId, payload.manifest.packageId);
   assert.equal(result.value.moduleId, 1001);
   assert.equal(result.value.moduleName, '函数（导入）');

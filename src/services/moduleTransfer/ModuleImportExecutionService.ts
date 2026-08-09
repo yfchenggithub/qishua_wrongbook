@@ -24,6 +24,7 @@ import type {
   ExecuteModuleImportInput,
   ExecuteModuleImportResult,
   ModuleImportExecutionFailureCode,
+  ModuleImportExecutionProgressEvent,
 } from '@/src/services/moduleTransfer/ModuleImportExecutionTypes';
 import { readModuleImportPreview } from '@/src/services/moduleTransfer/ModuleImportPreviewService';
 import type {
@@ -70,6 +71,17 @@ class ModuleImportExecutionError extends Error {
   ) {
     super(message);
     this.name = 'ModuleImportExecutionError';
+  }
+}
+
+function emitProgress(
+  callback: ExecuteModuleImportInput['onProgress'],
+  event: ModuleImportExecutionProgressEvent,
+): void {
+  try {
+    callback?.(event);
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Module import progress callback failed.', error);
   }
 }
 
@@ -374,6 +386,11 @@ function buildMistakeIdMap(
 export async function executeModuleImport(
   input: ExecuteModuleImportInput,
 ): Promise<ExecuteModuleImportResult> {
+  emitProgress(input?.onProgress, {
+    stage: 'validating',
+    message: '正在重新校验题包…',
+    percent: 5,
+  });
   let importedAt: string;
   try {
     importedAt = normalizeImportedAt(input?.importedAt);
@@ -394,6 +411,11 @@ export async function executeModuleImport(
   const parsed = previewResult.value;
   const packageId = parsed.payload.manifest.packageId;
 
+  emitProgress(input.onProgress, {
+    stage: 'checking_duplicate',
+    message: '正在检查是否重复导入…',
+    percent: 18,
+  });
   try {
     if (await ModuleImportRepository.hasImportedPackage(packageId)) {
       return failure('already_imported', '该题包已经导入，不能重复导入。');
@@ -412,6 +434,11 @@ export async function executeModuleImport(
   }
 
   let staged: StagedModuleImportPackage;
+  emitProgress(input.onProgress, {
+    stage: 'staging_images',
+    message: '正在安全暂存题包图片…',
+    percent: 32,
+  });
   try {
     staged = await stageModulePackageImages(parsed);
   } catch (error) {
@@ -427,11 +454,21 @@ export async function executeModuleImport(
   let committedStorage: CommittedImageStorage | null = null;
   let result: ExecuteModuleImportResult;
   try {
+    emitProgress(input.onProgress, {
+      stage: 'committing_images',
+      message: '正在保存题目图片…',
+      percent: 56,
+    });
     committedStorage = commitStagedImages({
       parsed,
       staged,
       mistakeIdByItemId,
       sessionToken,
+    });
+    emitProgress(input.onProgress, {
+      stage: 'writing_database',
+      message: '正在写入模块和错题…',
+      percent: 72,
     });
     const transactionResult = await writeImportTransaction({
       parsed,
@@ -479,6 +516,11 @@ export async function executeModuleImport(
     }
   }
 
+  emitProgress(input.onProgress, {
+    stage: 'cleaning_up',
+    message: '正在清理临时文件…',
+    percent: 94,
+  });
   const stagedCleaned = cleanupStagedModuleImport(staged);
   if (!stagedCleaned) {
     const cleanupWarning = '题包临时目录清理失败，系统稍后可统一清理缓存。';
@@ -489,6 +531,13 @@ export async function executeModuleImport(
         ? `${result.cleanupWarning}\n${cleanupWarning}`
         : cleanupWarning;
     }
+  }
+  if (result.ok) {
+    emitProgress(input.onProgress, {
+      stage: 'completed',
+      message: '题包导入完成',
+      percent: 100,
+    });
   }
   return result;
 }
