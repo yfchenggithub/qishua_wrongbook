@@ -32,6 +32,7 @@ import { useAppToast } from '@/src/hooks/useAppToast';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { MistakeListFilter, MistakeListItem } from '@/src/models/MistakeListItem';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
+import { createLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
@@ -899,8 +900,17 @@ export default function LibraryScreen() {
       item.id === routeId ? { ...item, lastViewedAt: viewedAt } : item
     )));
     void MistakeListService.markMistakeViewed(routeId);
-    router.push(`/mistake/${routeId}` as never);
-  }, [deletingMistakeId, router]);
+    const browseSessionId = createLibraryBrowseSession(resultItems.map((item) => item.id));
+    router.push(
+      {
+        pathname: '/mistake/[id]',
+        params: {
+          id: routeId,
+          ...(browseSessionId ? { browseSessionId } : {}),
+        },
+      } as never,
+    );
+  }, [deletingMistakeId, resultItems, router]);
 
   const handleTogglePinned = useCallback(async (item: MistakeListItem) => {
     if (deletingMistakeId || pinningMistakeId || isLoading || isRefreshing) {

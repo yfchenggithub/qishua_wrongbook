@@ -24,6 +24,7 @@ import {
   MistakeTagRepository,
   ReviewRecordRepository,
 } from '@/src/repositories';
+import { getLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import { Logger } from '@/src/services/Logger';
 import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
 import * as MistakeListService from '@/src/services/MistakeListService';
@@ -40,7 +41,7 @@ const MODULE_NAVIGATION_LIMIT = 500;
 export const MISTAKE_DETAIL_NOTE_MAX_LENGTH = MISTAKE_NOTE_MAX_LENGTH;
 
 export type ManagedDetailImageType = Exclude<DetailImageSlot['type'], 'review_solution'>;
-export type DetailBrowseMode = 'today_due' | 'same_module' | 'none';
+export type DetailBrowseMode = 'library_filter' | 'today_due' | 'same_module' | 'none';
 
 export type DetailBrowseContext = {
   mode: DetailBrowseMode;
@@ -51,6 +52,7 @@ export type DetailBrowseContext = {
 export type GetDetailBrowseContextParams = {
   mistakeId: string;
   module: string;
+  browseSessionId?: string | null;
 };
 
 type GetMistakeDetailResult = {
@@ -185,7 +187,7 @@ function normalizeMistakeId(id: string): string {
   return typeof id === 'string' ? id.trim() : '';
 }
 
-function normalizeMistakeIdList(ids: string[]): string[] {
+function normalizeMistakeIdList(ids: readonly string[]): string[] {
   const normalized: string[] = [];
   const seen = new Set<string>();
 
@@ -203,7 +205,7 @@ function normalizeMistakeIdList(ids: string[]): string[] {
 
 function buildBrowseContext(
   mode: DetailBrowseMode,
-  ids: string[],
+  ids: readonly string[],
   currentMistakeId: string,
 ): DetailBrowseContext {
   const normalizedIds = normalizeMistakeIdList(ids);
@@ -578,6 +580,30 @@ export async function getDetailBrowseContext(
       ids: [],
       currentIndex: -1,
     };
+  }
+
+  const browseSessionId = normalizeOptionalText(params.browseSessionId);
+  if (browseSessionId) {
+    const session = getLibraryBrowseSession(browseSessionId);
+    if (session?.mistakeIds.includes(mistakeId)) {
+      const context = buildBrowseContext('library_filter', session.mistakeIds, mistakeId);
+      Logger.info(SERVICE_SCOPE, 'Resolved detail browse context from library filter session.', {
+        mistakeId,
+        browseSessionId,
+        mode: context.mode,
+        totalIds: context.ids.length,
+        currentIndex: context.currentIndex,
+      });
+      return context;
+    }
+
+    const context = buildBrowseContext('none', [mistakeId], mistakeId);
+    Logger.warn(SERVICE_SCOPE, 'Library filter browse session is unavailable or invalid.', {
+      mistakeId,
+      browseSessionId,
+      sessionFound: session !== null,
+    });
+    return context;
   }
 
   try {

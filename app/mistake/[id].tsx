@@ -1393,14 +1393,19 @@ export default function MistakeDetailScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { pauseForInterruption, resumeAfterInterruption } = useMusicInterruption();
-  const { id, switchFrom, relatedFromId, relatedFromTitle } = useLocalSearchParams<{
+  const { id, switchFrom, browseSessionId, relatedFromId, relatedFromTitle } = useLocalSearchParams<{
     id?: string | string[];
     switchFrom?: string | string[];
+    browseSessionId?: string | string[];
     relatedFromId?: string | string[];
     relatedFromTitle?: string | string[];
   }>();
   const routeId = useMemo(() => normalizeRouteId(id), [id]);
   const routeSwitchFrom = useMemo(() => normalizeSwitchFrom(switchFrom), [switchFrom]);
+  const routeBrowseSessionId = useMemo(
+    () => normalizeRouteId(browseSessionId),
+    [browseSessionId],
+  );
   const routeRelatedFromId = useMemo(() => normalizeRouteId(relatedFromId), [relatedFromId]);
   const routeRelatedFromTitle = useMemo(
     () => normalizeRouteId(relatedFromTitle),
@@ -2122,6 +2127,7 @@ export default function MistakeDetailScreen() {
     const context = await MistakeDetailService.getDetailBrowseContext({
       mistakeId: detail.id,
       module: detail.module,
+      browseSessionId: routeBrowseSessionId,
     });
     if (requestId !== browseRequestIdRef.current) {
       return;
@@ -2135,7 +2141,7 @@ export default function MistakeDetailScreen() {
       currentIndex: context.currentIndex,
     });
     setBrowseContext(context);
-  }, []);
+  }, [routeBrowseSessionId]);
 
   useEffect(() => {
     if (state.kind !== 'success') {
@@ -3598,6 +3604,9 @@ export default function MistakeDetailScreen() {
 
     const total = browseContext.ids.length;
     const currentDisplayIndex = browseCurrentIndex >= 0 ? browseCurrentIndex + 1 : 1;
+    if (browseContext.mode === 'library_filter') {
+      return `当前按“错题库筛选结果”顺序浏览（${currentDisplayIndex}/${Math.max(total, 1)}）`;
+    }
     if (browseContext.mode === 'today_due') {
       return `当前按“今日待复做”顺序浏览（${currentDisplayIndex}/${Math.max(total, 1)}）`;
     }
@@ -3718,11 +3727,12 @@ export default function MistakeDetailScreen() {
           params: {
             id: targetId,
             switchFrom: direction === 'next' ? 'bottom' : 'top',
+            ...(routeBrowseSessionId ? { browseSessionId: routeBrowseSessionId } : {}),
           },
         } as never,
       );
     },
-    [browseContext.ids, browseContext.mode, router, state],
+    [browseContext.ids, browseContext.mode, routeBrowseSessionId, router, state],
   );
 
   const handleDetailScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
