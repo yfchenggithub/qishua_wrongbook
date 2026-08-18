@@ -38,6 +38,40 @@ export type LibraryBrowseTargetResolution =
       skippedIds: string[];
     };
 
+export type DeletedMistakeBrowseTargetResolution =
+  | {
+      kind: 'target';
+      currentIndex: number;
+      direction: DetailBrowseDirection;
+      targetId: string;
+      targetIndex: number;
+      skippedIds: string[];
+    }
+  | {
+      kind: 'no_available';
+      currentIndex: number;
+      direction: null;
+      targetId: null;
+      targetIndex: -1;
+      skippedIds: string[];
+    }
+  | {
+      kind: 'invalid_current';
+      currentIndex: -1;
+      direction: null;
+      targetId: null;
+      targetIndex: -1;
+      skippedIds: [];
+    }
+  | {
+      kind: 'cancelled';
+      currentIndex: -1;
+      direction: null;
+      targetId: null;
+      targetIndex: -1;
+      skippedIds: string[];
+    };
+
 export type DetailSwitchRouteParams = {
   id: string;
   switchFrom: 'bottom' | 'top';
@@ -143,6 +177,89 @@ export async function resolveLibraryBrowseTarget(input: {
   return {
     kind: 'no_available',
     currentIndex,
+    targetId: null,
+    targetIndex: -1,
+    skippedIds,
+  };
+}
+
+export async function resolveDeletedMistakeBrowseTarget(input: {
+  ids: readonly string[];
+  deletedMistakeId: string;
+  isCandidateAvailable: (mistakeId: string) => Promise<boolean>;
+  isCancelled?: () => boolean;
+}): Promise<DeletedMistakeBrowseTargetResolution> {
+  const deletedMistakeId = input.deletedMistakeId.trim();
+  const currentIndex = input.ids.indexOf(deletedMistakeId);
+  if (!deletedMistakeId || currentIndex < 0) {
+    return {
+      kind: 'invalid_current',
+      currentIndex: -1,
+      direction: null,
+      targetId: null,
+      targetIndex: -1,
+      skippedIds: [],
+    };
+  }
+
+  const skippedIds: string[] = [];
+  const candidateIndexes: {
+    direction: DetailBrowseDirection;
+    targetIndex: number;
+  }[] = [];
+
+  for (let targetIndex = currentIndex + 1; targetIndex < input.ids.length; targetIndex += 1) {
+    candidateIndexes.push({ direction: 'next', targetIndex });
+  }
+  for (let targetIndex = currentIndex - 1; targetIndex >= 0; targetIndex -= 1) {
+    candidateIndexes.push({ direction: 'prev', targetIndex });
+  }
+
+  for (const candidate of candidateIndexes) {
+    if (input.isCancelled?.()) {
+      return {
+        kind: 'cancelled',
+        currentIndex: -1,
+        direction: null,
+        targetId: null,
+        targetIndex: -1,
+        skippedIds,
+      };
+    }
+
+    const candidateId = input.ids[candidate.targetIndex];
+    const available = candidateId
+      ? await input.isCandidateAvailable(candidateId)
+      : false;
+    if (input.isCancelled?.()) {
+      return {
+        kind: 'cancelled',
+        currentIndex: -1,
+        direction: null,
+        targetId: null,
+        targetIndex: -1,
+        skippedIds,
+      };
+    }
+    if (candidateId && available) {
+      return {
+        kind: 'target',
+        currentIndex,
+        direction: candidate.direction,
+        targetId: candidateId,
+        targetIndex: candidate.targetIndex,
+        skippedIds,
+      };
+    }
+    if (candidateId) {
+      skippedIds.push(candidateId);
+    }
+  }
+
+  return {
+    kind: 'no_available',
+    currentIndex,
+    direction: null,
     targetId: null,
     targetIndex: -1,
     skippedIds,

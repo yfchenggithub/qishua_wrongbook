@@ -78,6 +78,7 @@ import { CustomErrorReasonService } from '@/src/services/CustomErrorReasonServic
 import { CustomModuleService } from '@/src/services/CustomModuleService';
 import {
   buildDetailSwitchRouteParams,
+  resolveDeletedMistakeBrowseTarget,
   resolveLibraryBrowseTarget,
 } from '@/src/services/DetailBrowseNavigation';
 import { removeMistakesFromLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
@@ -4112,8 +4113,48 @@ export default function MistakeDetailScreen() {
                   return;
                 }
 
+                const browseResolution = await resolveDeletedMistakeBrowseTarget({
+                  ids: browseContext.ids,
+                  deletedMistakeId: mistakeId,
+                  isCandidateAvailable: (candidateId) =>
+                    MistakeDetailService.isMistakeAvailableForDetailBrowse(candidateId),
+                });
+                removeMistakesFromLibraryBrowseSession(
+                  routeBrowseSessionId,
+                  [mistakeId, ...browseResolution.skippedIds],
+                );
+
                 shouldResetDeleting = false;
                 allowNextLeaveRef.current = true;
+                if (browseResolution.kind === 'target') {
+                  Logger.info(PAGE_SCOPE, 'Navigate after deleting mistake.', {
+                    deletedMistakeId: mistakeId,
+                    browseMode: browseContext.mode,
+                    direction: browseResolution.direction,
+                    targetMistakeId: browseResolution.targetId,
+                    skippedUnavailableCount: browseResolution.skippedIds.length,
+                  });
+                  pendingAutoRouteIdRef.current = browseResolution.targetId;
+                  router.replace(
+                    {
+                      pathname: '/mistake/[id]',
+                      params: buildDetailSwitchRouteParams({
+                        targetId: browseResolution.targetId,
+                        direction: browseResolution.direction,
+                        browseSessionId: routeBrowseSessionId,
+                        skippedUnavailableCount: browseResolution.skippedIds.length,
+                      }),
+                    } as never,
+                  );
+                  return;
+                }
+
+                Logger.info(PAGE_SCOPE, 'Return to library after deleting final available mistake.', {
+                  deletedMistakeId: mistakeId,
+                  browseMode: browseContext.mode,
+                  resolutionKind: browseResolution.kind,
+                  skippedUnavailableCount: browseResolution.skippedIds.length,
+                });
                 router.replace('/(tabs)/library' as never);
               } catch (error) {
                 Logger.error(PAGE_SCOPE, 'Unexpected error while deleting mistake.', {
@@ -4137,8 +4178,11 @@ export default function MistakeDetailScreen() {
     );
   }, [
     activeVoiceRecordingRecordId,
+    browseContext.ids,
+    browseContext.mode,
     isDeleteMistakeDisabled,
     isDeletingMistake,
+    routeBrowseSessionId,
     router,
     showToast,
     state,

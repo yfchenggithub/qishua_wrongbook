@@ -6,6 +6,7 @@ import {
 } from '../src/services/DetailBrowseContextResolver.ts';
 import {
   buildDetailSwitchRouteParams,
+  resolveDeletedMistakeBrowseTarget,
   resolveLibraryBrowseTarget,
 } from '../src/services/DetailBrowseNavigation.ts';
 import {
@@ -199,4 +200,60 @@ test('多题筛选的第一题和最后一题不会首尾循环', async () => {
   assert.equal(firstResult.boundary, 'start');
   assert.equal(lastResult.kind, 'boundary');
   assert.equal(lastResult.boundary, 'end');
+});
+
+test('deleting a browsed mistake prefers the next available mistake', async () => {
+  const checkedIds = [];
+  const result = await resolveDeletedMistakeBrowseTarget({
+    ids: ['M-prev', 'M-current', 'M-next', 'M-last'],
+    deletedMistakeId: 'M-current',
+    isCandidateAvailable: async (mistakeId) => {
+      checkedIds.push(mistakeId);
+      return true;
+    },
+  });
+
+  assert.deepEqual(checkedIds, ['M-next']);
+  assert.deepEqual(result, {
+    kind: 'target',
+    currentIndex: 1,
+    direction: 'next',
+    targetId: 'M-next',
+    targetIndex: 2,
+    skippedIds: [],
+  });
+});
+
+test('deleting the final browsed mistake falls back to the nearest previous mistake', async () => {
+  const result = await resolveDeletedMistakeBrowseTarget({
+    ids: ['M-first', 'M-previous', 'M-current'],
+    deletedMistakeId: 'M-current',
+    isCandidateAvailable: async () => true,
+  });
+
+  assert.deepEqual(result, {
+    kind: 'target',
+    currentIndex: 2,
+    direction: 'prev',
+    targetId: 'M-previous',
+    targetIndex: 1,
+    skippedIds: [],
+  });
+});
+
+test('deleting the only available browsed mistake returns no target', async () => {
+  const result = await resolveDeletedMistakeBrowseTarget({
+    ids: ['M-missing-prev', 'M-current', 'M-missing-next'],
+    deletedMistakeId: 'M-current',
+    isCandidateAvailable: async () => false,
+  });
+
+  assert.deepEqual(result, {
+    kind: 'no_available',
+    currentIndex: 1,
+    direction: null,
+    targetId: null,
+    targetIndex: -1,
+    skippedIds: ['M-missing-next', 'M-missing-prev'],
+  });
 });
