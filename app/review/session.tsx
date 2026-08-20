@@ -63,6 +63,13 @@ import {
 import * as ImageService from '@/src/services/ImageService';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewDraftImageEditService from '@/src/services/ReviewDraftImageEditService';
+import {
+  findAdjacentReviewIndex,
+  isQueueItemInModuleFilter,
+  normalizeModuleFilterValue,
+  type ModuleFilterValue,
+  type ReviewNavigationDirection,
+} from '@/src/services/ReviewSessionNavigation';
 import type { ReviewSessionQueueItem } from '@/src/services/ReviewSessionService';
 import * as ReviewSessionService from '@/src/services/ReviewSessionService';
 import type { VoiceNoteEntity } from '@/src/services/VoiceNoteService';
@@ -104,9 +111,7 @@ type PreviewImageState = {
   uri: string;
   title: string;
 };
-type ReviewNavigationDirection = 'prev' | 'next';
 type ScrollBoundary = 'top' | 'bottom';
-type ModuleFilterValue = string | null;
 type ReviewListStatusTone = 'pending' | 'completed' | ReviewResult;
 
 interface ModuleFilterOption {
@@ -197,21 +202,6 @@ function rotateQueueToInitialMistake(
   }
 
   return [...queue.slice(initialIndex), ...queue.slice(0, initialIndex)];
-}
-
-function normalizeModuleFilterValue(moduleName: string | null | undefined): string {
-  const normalized = typeof moduleName === 'string' ? moduleName.trim() : '';
-  return normalized.length > 0 ? normalized : '未分类';
-}
-
-function isQueueItemInModuleFilter(
-  item: ReviewSessionQueueItem,
-  moduleFilter: ModuleFilterValue,
-): boolean {
-  if (moduleFilter === null) {
-    return true;
-  }
-  return normalizeModuleFilterValue(item.module) === moduleFilter;
 }
 
 function isCancelLikeMessage(input?: string): boolean {
@@ -2187,9 +2177,8 @@ export default function ReviewSessionPage() {
       }
 
       const baseIndex = currentIndexRef.current;
-      const targetIndex = findPendingReviewIndex(
+      const targetIndex = findAdjacentReviewIndex(
         queue,
-        submittedMistakeIds,
         direction === 'prev' ? baseIndex - 1 : baseIndex + 1,
         direction,
         selectedModuleFilter,
@@ -2230,7 +2219,6 @@ export default function ReviewSessionPage() {
       selectedModuleFilter,
       sessionState,
       showToast,
-      submittedMistakeIds,
     ],
   );
 
