@@ -163,7 +163,7 @@
 - `REVIEW_INTERVAL_DAYS = [0, 1, 3, 7, 14, 30, 60]`。
 - 新增页直接保存的错题默认 `status = collected`，`review_count = 0`，`next_review_at = null`，不进入今日复做。
 - 新增页仅题目照片为必填项；未选择模块时由业务层关联固定的“未分类”模块记录并写入其永久 `module_id`，其余补充信息可在保存前填写或在详情页后续补充。
-- 用户明确选择“加入七刷”后，错题从 `collected` 变为 `active`，`next_review_at` 设置为加入时间。
+- 用户明确选择单题或批量“加入七刷”后，仍处于 `collected` 的目标错题变为 `active`，`next_review_at` 统一设置为本次加入时间；批量操作不影响已是其他状态的错题。
 - 当 `review_count >= 7` 时，`status = mastered`。
 - 当 `status = mastered` 时，`next_review_at = null`。
 - 当 `status = collected`、`status = mastered` 或 `status = archived` 时，业务层必须拒绝继续复做。

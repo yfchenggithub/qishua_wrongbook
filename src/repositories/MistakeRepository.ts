@@ -208,6 +208,7 @@ const DEFAULT_SORT_ORDER: NonNullable<ListMistakesOptions['sortOrder']> = 'desc'
 const DEFAULT_RECENT_LIMIT = 10;
 const DEFAULT_ACTIVE_LIMIT = 50;
 const DEFAULT_MASTERED_LIMIT = 50;
+const BULK_REVIEW_PLAN_ID_BATCH_SIZE = 400;
 
 let databaseReady = false;
 let databaseInitPromise: Promise<void> | null = null;
@@ -1414,6 +1415,56 @@ WHERE id = ? AND status = ?;`,
       return await getByIdInternal(db, id);
     } catch (error) {
       Logger.error(REPO_SCOPE, 'joinMistakeReviewPlan failed.', { id, nextReviewAt, error });
+      throw error;
+    }
+  },
+
+  async joinMistakesReviewPlan(
+    ids: readonly string[],
+    nextReviewAt = nowIso(),
+  ): Promise<number> {
+    const normalizedIds = Array.from(new Set(
+      ids.map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean),
+    ));
+    if (normalizedIds.length <= 0) {
+      return 0;
+    }
+
+    try {
+      await ensureDatabaseReady();
+      const normalizedNextReviewAt = normalizeIsoDateTime(nextReviewAt, 'nextReviewAt');
+      const updatedAt = nowIso();
+
+      return await withDatabaseTransaction(async (db) => {
+        let joinedCount = 0;
+        for (let start = 0; start < normalizedIds.length; start += BULK_REVIEW_PLAN_ID_BATCH_SIZE) {
+          const batchIds = normalizedIds.slice(start, start + BULK_REVIEW_PLAN_ID_BATCH_SIZE);
+          const placeholders = batchIds.map(() => '?').join(', ');
+          const result = await db.runAsync(
+            `UPDATE mistakes
+SET review_count = 0,
+  status = ?,
+  next_review_at = ?,
+  last_review_at = NULL,
+  last_review_result = NULL,
+  updated_at = ?
+WHERE status = ? AND id IN (${placeholders});`,
+            REVIEW_STATUS.ACTIVE,
+            normalizedNextReviewAt,
+            updatedAt,
+            REVIEW_STATUS.COLLECTED,
+            ...batchIds,
+          );
+          joinedCount += result.changes;
+        }
+        return joinedCount;
+      });
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'joinMistakesReviewPlan failed.', {
+        requestedCount: normalizedIds.length,
+        nextReviewAt,
+        error,
+      });
       throw error;
     }
   },

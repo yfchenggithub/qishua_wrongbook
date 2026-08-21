@@ -36,6 +36,7 @@ import { createLibraryBrowseSession } from '@/src/services/DetailBrowseSessionSe
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
 import * as MistakeListService from '@/src/services/MistakeListService';
+import * as ReviewPlanService from '@/src/services/ReviewPlanService';
 import { normalizeMistakeTagKey } from '@/src/services/MistakeTagService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { addDays, parseLocalDateTime, startOfLocalDay, toDateOnlyString } from '@/src/utils/date';
@@ -599,6 +600,7 @@ export default function LibraryScreen() {
   const [deletingMistakeId, setDeletingMistakeId] = useState<string | null>(null);
   const [pinningMistakeId, setPinningMistakeId] = useState<string | null>(null);
   const [joiningReviewPlanMistakeId, setJoiningReviewPlanMistakeId] = useState<string | null>(null);
+  const [isBulkJoiningReviewPlan, setIsBulkJoiningReviewPlan] = useState(false);
 
   const [moduleSheetVisible, setModuleSheetVisible] = useState(false);
   const [tagSheetVisible, setTagSheetVisible] = useState(false);
@@ -740,6 +742,20 @@ export default function LibraryScreen() {
       effectiveSortKey,
     ),
     [dateBounds, effectiveSortKey, filters.viewMode, scheduledDate, scopedItems],
+  );
+  const bulkJoinCandidateItems = useMemo(() => (
+    filters.viewMode === 'collected' && scheduledDate === null
+      ? resultItems.filter((item) => item.status === 'collected')
+      : []
+  ), [filters.viewMode, resultItems, scheduledDate]);
+  const bulkJoinActionDisabled = (
+    deletingMistakeId !== null
+    || pinningMistakeId !== null
+    || joiningReviewPlanMistakeId !== null
+    || isBulkJoiningReviewPlan
+    || isLoading
+    || isFiltering
+    || isRefreshing
   );
   const selectedSortOption = SORT_OPTIONS.find((option) => option.key === effectiveSortKey)
     ?? SORT_OPTIONS[0];
@@ -887,7 +903,7 @@ export default function LibraryScreen() {
   }, [filters.keyword, loadItems]);
 
   const handleOpenDetail = useCallback((id: string) => {
-    if (deletingMistakeId !== null) {
+    if (deletingMistakeId !== null || isBulkJoiningReviewPlan) {
       return;
     }
     const routeId = normalizeMistakeId(id);
@@ -910,10 +926,16 @@ export default function LibraryScreen() {
         },
       } as never,
     );
-  }, [deletingMistakeId, resultItems, router]);
+  }, [deletingMistakeId, isBulkJoiningReviewPlan, resultItems, router]);
 
   const handleTogglePinned = useCallback(async (item: MistakeListItem) => {
-    if (deletingMistakeId || pinningMistakeId || isLoading || isRefreshing) {
+    if (
+      deletingMistakeId
+      || isBulkJoiningReviewPlan
+      || pinningMistakeId
+      || isLoading
+      || isRefreshing
+    ) {
       return;
     }
     const mistakeId = normalizeMistakeId(item.id);
@@ -941,10 +963,16 @@ export default function LibraryScreen() {
         setPinningMistakeId(null);
       }
     }
-  }, [deletingMistakeId, isLoading, isRefreshing, pinningMistakeId]);
+  }, [deletingMistakeId, isBulkJoiningReviewPlan, isLoading, isRefreshing, pinningMistakeId]);
 
   const handleJoinReviewPlan = useCallback((item: MistakeListItem) => {
-    if (deletingMistakeId || joiningReviewPlanMistakeId || isLoading || isRefreshing) {
+    if (
+      deletingMistakeId
+      || isBulkJoiningReviewPlan
+      || joiningReviewPlanMistakeId
+      || isLoading
+      || isRefreshing
+    ) {
       return;
     }
     const mistakeId = normalizeMistakeId(item.id);
@@ -976,6 +1004,7 @@ export default function LibraryScreen() {
   }, [
     deletingMistakeId,
     filters.keyword,
+    isBulkJoiningReviewPlan,
     isLoading,
     isRefreshing,
     joiningReviewPlanMistakeId,
@@ -983,8 +1012,89 @@ export default function LibraryScreen() {
     showToast,
   ]);
 
+  const handleBulkJoinReviewPlan = useCallback(() => {
+    if (bulkJoinActionDisabled) {
+      return;
+    }
+
+    const mistakeIds = bulkJoinCandidateItems
+      .map((item) => normalizeMistakeId(item.id))
+      .filter((id): id is string => id !== null);
+    const requestedCount = mistakeIds.length;
+    if (requestedCount <= 0) {
+      return;
+    }
+
+    const scopeText = filters.module ? `“${filters.module}”模块中` : '所有模块中';
+    const hasNarrowFilter = filters.keyword.length > 0 || filters.tag !== null;
+    const filteredText = hasNarrowFilter ? '当前筛选的' : '';
+    Alert.alert(
+      '批量加入七刷？',
+      `将${scopeText}${filteredText}${requestedCount}道待整理题加入七刷。加入后，它们会移到“待复做”，并全部安排为今天可复做。`,
+      [
+        { text: '取消', style: 'cancel' },
+        {
+          text: `确认加入 ${requestedCount} 道`,
+          onPress: () => {
+            setIsBulkJoiningReviewPlan(true);
+            void (async () => {
+              try {
+                const result = await ReviewPlanService.bulkJoinMistakesReviewPlan(mistakeIds);
+                if (!mountedRef.current) {
+                  return;
+                }
+                if (!result.ok) {
+                  Alert.alert('批量加入失败', result.errorMessage ?? '批量加入七刷失败，请稍后重试。');
+                  return;
+                }
+
+                await loadItems(filters.keyword, 'filter');
+                if (!mountedRef.current) {
+                  return;
+                }
+                if (result.joinedCount <= 0) {
+                  Alert.alert('没有题目被加入', '这些题目的状态已经变化，列表已为你刷新。');
+                } else if (result.skippedCount > 0) {
+                  Alert.alert(
+                    '批量加入完成',
+                    `已加入${result.joinedCount}道，另有${result.skippedCount}道因状态变化被跳过。`,
+                  );
+                } else {
+                  showToast(`已将${result.joinedCount}道题加入七刷，今天可复做`, 'success');
+                }
+              } catch (error) {
+                Logger.error(PAGE_SCOPE, 'Failed to bulk join review plan.', {
+                  requestedCount,
+                  error,
+                });
+                if (mountedRef.current) {
+                  Alert.alert(
+                    '批量加入失败',
+                    error instanceof Error ? error.message : '批量加入七刷失败。',
+                  );
+                }
+              } finally {
+                if (mountedRef.current) {
+                  setIsBulkJoiningReviewPlan(false);
+                }
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, [
+    bulkJoinCandidateItems,
+    bulkJoinActionDisabled,
+    filters.keyword,
+    filters.module,
+    filters.tag,
+    loadItems,
+    showToast,
+  ]);
+
   const handleDelete = useCallback((item: MistakeListItem) => {
-    if (deletingMistakeId || isLoading || isRefreshing) {
+    if (deletingMistakeId || isBulkJoiningReviewPlan || isLoading || isRefreshing) {
       return;
     }
     const mistakeId = normalizeMistakeId(item.id);
@@ -1027,11 +1137,12 @@ export default function LibraryScreen() {
         },
       ],
     );
-  }, [deletingMistakeId, isLoading, isRefreshing]);
+  }, [deletingMistakeId, isBulkJoiningReviewPlan, isLoading, isRefreshing]);
 
   const handleOpenMistakeMenu = useCallback((item: MistakeListItem) => {
     if (
       deletingMistakeId
+      || isBulkJoiningReviewPlan
       || joiningReviewPlanMistakeId
       || pinningMistakeId
       || isLoading
@@ -1052,6 +1163,7 @@ export default function LibraryScreen() {
     handleDelete,
     handleJoinReviewPlan,
     handleTogglePinned,
+    isBulkJoiningReviewPlan,
     isLoading,
     isRefreshing,
     joiningReviewPlanMistakeId,
@@ -1335,6 +1447,37 @@ export default function LibraryScreen() {
           value={isQuickMode(filters.viewMode) ? filters.viewMode : null}
         />
       </View>
+
+      {bulkJoinCandidateItems.length > 0 ? (
+        <View style={styles.bulkJoinCard}>
+          <View style={styles.bulkJoinInfo}>
+            <View style={styles.bulkJoinTitleRow}>
+              <MaterialIcons name="playlist-add-check" size={21} color={colors.success} />
+              <Text style={styles.bulkJoinTitle}>批量加入七刷</Text>
+            </View>
+            <Text style={styles.bulkJoinDescription}>
+              {filters.module ?? '全部模块'} · 当前筛选 {bulkJoinCandidateItems.length} 道，加入后今天可复做
+            </Text>
+          </View>
+          <Pressable
+            accessibilityLabel={`将当前筛选的${bulkJoinCandidateItems.length}道待整理题全部加入七刷`}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: bulkJoinActionDisabled }}
+            disabled={bulkJoinActionDisabled}
+            onPress={handleBulkJoinReviewPlan}
+            style={({ pressed }) => [
+              styles.bulkJoinButton,
+              bulkJoinActionDisabled ? styles.bulkJoinButtonDisabled : null,
+              pressed ? styles.bulkJoinButtonPressed : null,
+            ]}>
+            {isBulkJoiningReviewPlan ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.bulkJoinButtonText}>全部加入</Text>
+            )}
+          </Pressable>
+        </View>
+      ) : null}
 
       <View style={styles.resultsHeader}>
         <View style={styles.resultCountWrap}>
@@ -1633,6 +1776,60 @@ const styles = StyleSheet.create({
   },
   statusSegment: {
     marginBottom: spacing.xl,
+  },
+  bulkJoinCard: {
+    minHeight: 76,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.successBorder,
+    backgroundColor: colors.successBg,
+  },
+  bulkJoinInfo: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bulkJoinTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  bulkJoinTitle: {
+    color: colors.textPrimary,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  bulkJoinDescription: {
+    marginTop: spacing.xs,
+    color: colors.textSecondary,
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  bulkJoinButton: {
+    minWidth: 92,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: colors.success,
+  },
+  bulkJoinButtonDisabled: {
+    backgroundColor: colors.accentDisabled,
+  },
+  bulkJoinButtonPressed: {
+    opacity: 0.75,
+  },
+  bulkJoinButtonText: {
+    color: colors.white,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
   },
   resultsHeader: {
     minHeight: 48,

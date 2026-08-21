@@ -13,6 +13,7 @@ export * as ExportImageModeService from "./ExportImageModeService";
 export * as SettingsStatsService from "./SettingsStatsService";
 export * as ReviewFlowService from "./ReviewFlowService";
 export * as ReviewScheduleService from "./ReviewScheduleService";
+export * as ReviewPlanService from "./ReviewPlanService";
 export * as CompleteReviewService from "./CompleteReviewService";
 export * as ReviewRecordImageService from "./ReviewRecordImageService";
 export * as ReviewDraftImageEditService from "./ReviewDraftImageEditService";
