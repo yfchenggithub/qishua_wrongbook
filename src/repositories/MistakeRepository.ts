@@ -159,6 +159,11 @@ export interface MoveMistakeToModuleParams {
   moduleId: number;
 }
 
+export interface JoinMistakeReviewPlanScheduleItem {
+  mistakeId: string;
+  nextReviewAt: string;
+}
+
 type MistakeStatsRow = {
   total: number | null;
   collected: number | null;
@@ -208,7 +213,7 @@ const DEFAULT_SORT_ORDER: NonNullable<ListMistakesOptions['sortOrder']> = 'desc'
 const DEFAULT_RECENT_LIMIT = 10;
 const DEFAULT_ACTIVE_LIMIT = 50;
 const DEFAULT_MASTERED_LIMIT = 50;
-const BULK_REVIEW_PLAN_ID_BATCH_SIZE = 400;
+const BULK_REVIEW_PLAN_ID_BATCH_SIZE = 250;
 
 let databaseReady = false;
 let databaseInitPromise: Promise<void> | null = null;
@@ -1420,37 +1425,53 @@ WHERE id = ? AND status = ?;`,
   },
 
   async joinMistakesReviewPlan(
-    ids: readonly string[],
-    nextReviewAt = nowIso(),
+    scheduleItems: readonly JoinMistakeReviewPlanScheduleItem[],
   ): Promise<number> {
-    const normalizedIds = Array.from(new Set(
-      ids.map((id) => (typeof id === 'string' ? id.trim() : '')).filter(Boolean),
-    ));
-    if (normalizedIds.length <= 0) {
+    if (scheduleItems.length <= 0) {
       return 0;
     }
 
     try {
       await ensureDatabaseReady();
-      const normalizedNextReviewAt = normalizeIsoDateTime(nextReviewAt, 'nextReviewAt');
+      const normalizedSchedule = Array.from(
+        scheduleItems.reduce<Map<string, JoinMistakeReviewPlanScheduleItem>>((result, item) => {
+          const mistakeId = typeof item.mistakeId === 'string' ? item.mistakeId.trim() : '';
+          if (!mistakeId || result.has(mistakeId)) {
+            return result;
+          }
+          result.set(mistakeId, {
+            mistakeId,
+            nextReviewAt: normalizeIsoDateTime(item.nextReviewAt, 'nextReviewAt'),
+          });
+          return result;
+        }, new Map()).values(),
+      );
+      if (normalizedSchedule.length <= 0) {
+        return 0;
+      }
       const updatedAt = nowIso();
 
       return await withDatabaseTransaction(async (db) => {
         let joinedCount = 0;
-        for (let start = 0; start < normalizedIds.length; start += BULK_REVIEW_PLAN_ID_BATCH_SIZE) {
-          const batchIds = normalizedIds.slice(start, start + BULK_REVIEW_PLAN_ID_BATCH_SIZE);
+        for (let start = 0; start < normalizedSchedule.length; start += BULK_REVIEW_PLAN_ID_BATCH_SIZE) {
+          const batchItems = normalizedSchedule.slice(start, start + BULK_REVIEW_PLAN_ID_BATCH_SIZE);
+          const batchIds = batchItems.map((item) => item.mistakeId);
           const placeholders = batchIds.map(() => '?').join(', ');
+          const nextReviewCases = batchItems.map(() => 'WHEN ? THEN ?').join('\n    ');
           const result = await db.runAsync(
             `UPDATE mistakes
 SET review_count = 0,
   status = ?,
-  next_review_at = ?,
+  next_review_at = CASE id
+    ${nextReviewCases}
+    ELSE next_review_at
+  END,
   last_review_at = NULL,
   last_review_result = NULL,
   updated_at = ?
 WHERE status = ? AND id IN (${placeholders});`,
             REVIEW_STATUS.ACTIVE,
-            normalizedNextReviewAt,
+            ...batchItems.flatMap((item) => [item.mistakeId, item.nextReviewAt]),
             updatedAt,
             REVIEW_STATUS.COLLECTED,
             ...batchIds,
@@ -1461,8 +1482,7 @@ WHERE status = ? AND id IN (${placeholders});`,
       });
     } catch (error) {
       Logger.error(REPO_SCOPE, 'joinMistakesReviewPlan failed.', {
-        requestedCount: normalizedIds.length,
-        nextReviewAt,
+        requestedCount: scheduleItems.length,
         error,
       });
       throw error;

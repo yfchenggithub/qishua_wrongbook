@@ -1,17 +1,24 @@
 import { MistakeRepository } from '@/src/repositories';
 import { Logger } from '@/src/services/Logger';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
-import { normalizeReviewPlanMistakeIds } from '@/src/utils/reviewPlan';
+import {
+  buildDailyReviewPlanSchedule,
+  normalizeReviewPlanMistakeIds,
+} from '@/src/utils/reviewPlan';
 
 const SERVICE_SCOPE = 'ReviewPlanService';
 const BULK_JOIN_ERROR_MESSAGE = '批量加入七刷失败，请稍后重试。';
+export const BULK_JOIN_DAILY_NEW_REVIEW_LIMIT = 10;
 
 export interface BulkJoinReviewPlanResult {
   ok: boolean;
   requestedCount: number;
   joinedCount: number;
   skippedCount: number;
-  joinedAt?: string;
+  dailyNewReviewLimit: number;
+  scheduledDayCount: number;
+  scheduleStartAt?: string;
+  scheduleEndAt?: string;
   errorMessage?: string;
 }
 
@@ -35,16 +42,29 @@ export async function bulkJoinMistakesReviewPlan(
       requestedCount: 0,
       joinedCount: 0,
       skippedCount: 0,
+      dailyNewReviewLimit: BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+      scheduledDayCount: 0,
       errorMessage: '没有可加入七刷的待整理题。',
     };
   }
 
-  const joinedAt = new Date().toISOString();
+  const schedule = buildDailyReviewPlanSchedule(
+    mistakeIds,
+    new Date(),
+    BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+  );
+  const scheduledDayCount = schedule.length > 0
+    ? schedule[schedule.length - 1].dayOffset + 1
+    : 0;
+  const scheduleStartAt = schedule[0]?.nextReviewAt;
+  const scheduleEndAt = schedule[schedule.length - 1]?.nextReviewAt;
   try {
     Logger.info(SERVICE_SCOPE, 'Start bulk joining mistakes to review plan.', {
       requestedCount,
+      dailyNewReviewLimit: BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+      scheduledDayCount,
     });
-    const joinedCount = await MistakeRepository.joinMistakesReviewPlan(mistakeIds, joinedAt);
+    const joinedCount = await MistakeRepository.joinMistakesReviewPlan(schedule);
     const skippedCount = Math.max(0, requestedCount - joinedCount);
 
     if (joinedCount > 0) {
@@ -62,14 +82,20 @@ export async function bulkJoinMistakesReviewPlan(
       requestedCount,
       joinedCount,
       skippedCount,
-      joinedAt,
+      dailyNewReviewLimit: BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+      scheduledDayCount,
+      scheduleStartAt,
+      scheduleEndAt,
     });
     return {
       ok: true,
       requestedCount,
       joinedCount,
       skippedCount,
-      joinedAt,
+      dailyNewReviewLimit: BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+      scheduledDayCount,
+      scheduleStartAt,
+      scheduleEndAt,
     };
   } catch (error) {
     Logger.error(SERVICE_SCOPE, 'bulkJoinMistakesReviewPlan failed.', {
@@ -81,6 +107,8 @@ export async function bulkJoinMistakesReviewPlan(
       requestedCount,
       joinedCount: 0,
       skippedCount: 0,
+      dailyNewReviewLimit: BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+      scheduledDayCount,
       errorMessage: toErrorMessage(error),
     };
   }

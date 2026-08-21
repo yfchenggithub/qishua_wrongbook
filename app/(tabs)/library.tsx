@@ -287,6 +287,22 @@ function sortItems(
   });
 }
 
+function sortItemsForBulkReviewPlan(
+  sourceItems: readonly MistakeListItem[],
+): MistakeListItem[] {
+  return [...sourceItems].sort((left, right) => {
+    if (left.isPinned !== right.isPinned) {
+      return left.isPinned ? -1 : 1;
+    }
+    const leftCreatedAt = getTimeValue(left.createdAt) ?? Number.MAX_SAFE_INTEGER;
+    const rightCreatedAt = getTimeValue(right.createdAt) ?? Number.MAX_SAFE_INTEGER;
+    if (leftCreatedAt !== rightCreatedAt) {
+      return leftCreatedAt - rightCreatedAt;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+
 function itemHasTag(item: MistakeListItem, tagKey: string): boolean {
   return item.tags.some(
     (tag) => normalizeMistakeTagKey(tag.normalized_name || tag.name) === tagKey,
@@ -757,6 +773,12 @@ export default function LibraryScreen() {
     || isFiltering
     || isRefreshing
   );
+  const bulkJoinScheduledDayCount = Math.ceil(
+    bulkJoinCandidateItems.length / ReviewPlanService.BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+  );
+  const bulkJoinScheduleEndDate = bulkJoinScheduledDayCount > 0
+    ? toDateOnlyString(addDays(new Date(), bulkJoinScheduledDayCount - 1))
+    : null;
   const selectedSortOption = SORT_OPTIONS.find((option) => option.key === effectiveSortKey)
     ?? SORT_OPTIONS[0];
 
@@ -1017,7 +1039,7 @@ export default function LibraryScreen() {
       return;
     }
 
-    const mistakeIds = bulkJoinCandidateItems
+    const mistakeIds = sortItemsForBulkReviewPlan(bulkJoinCandidateItems)
       .map((item) => normalizeMistakeId(item.id))
       .filter((id): id is string => id !== null);
     const requestedCount = mistakeIds.length;
@@ -1028,9 +1050,13 @@ export default function LibraryScreen() {
     const scopeText = filters.module ? `“${filters.module}”模块中` : '所有模块中';
     const hasNarrowFilter = filters.keyword.length > 0 || filters.tag !== null;
     const filteredText = hasNarrowFilter ? '当前筛选的' : '';
+    const scheduledDayCount = Math.ceil(
+      requestedCount / ReviewPlanService.BULK_JOIN_DAILY_NEW_REVIEW_LIMIT,
+    );
+    const scheduleEndDate = toDateOnlyString(addDays(new Date(), scheduledDayCount - 1));
     Alert.alert(
-      '批量加入七刷？',
-      `将${scopeText}${filteredText}${requestedCount}道待整理题加入七刷。加入后，它们会移到“待复做”，并全部安排为今天可复做。`,
+      '分批加入七刷？',
+      `将${scopeText}${filteredText}${requestedCount}道待整理题按每天${ReviewPlanService.BULK_JOIN_DAILY_NEW_REVIEW_LIMIT}道安排首刷。从今天开始，预计${scheduledDayCount}天安排完，最后一批为${scheduleEndDate}。所有题会立即移到“待复做”。`,
       [
         { text: '取消', style: 'cancel' },
         {
@@ -1060,7 +1086,10 @@ export default function LibraryScreen() {
                     `已加入${result.joinedCount}道，另有${result.skippedCount}道因状态变化被跳过。`,
                   );
                 } else {
-                  showToast(`已将${result.joinedCount}道题加入七刷，今天可复做`, 'success');
+                  showToast(
+                    `已分批加入${result.joinedCount}道，每天安排${result.dailyNewReviewLimit}道首刷`,
+                    'success',
+                  );
                 }
               } catch (error) {
                 Logger.error(PAGE_SCOPE, 'Failed to bulk join review plan.', {
@@ -1453,14 +1482,15 @@ export default function LibraryScreen() {
           <View style={styles.bulkJoinInfo}>
             <View style={styles.bulkJoinTitleRow}>
               <MaterialIcons name="playlist-add-check" size={21} color={colors.success} />
-              <Text style={styles.bulkJoinTitle}>批量加入七刷</Text>
+              <Text style={styles.bulkJoinTitle}>分批加入七刷</Text>
             </View>
             <Text style={styles.bulkJoinDescription}>
-              {filters.module ?? '全部模块'} · 当前筛选 {bulkJoinCandidateItems.length} 道，加入后今天可复做
+              当前筛选 {bulkJoinCandidateItems.length} 道 · 每天安排 {ReviewPlanService.BULK_JOIN_DAILY_NEW_REVIEW_LIMIT} 道首刷
+              {bulkJoinScheduleEndDate ? ` · 预计 ${bulkJoinScheduledDayCount} 天，至 ${bulkJoinScheduleEndDate}` : ''}
             </Text>
           </View>
           <Pressable
-            accessibilityLabel={`将当前筛选的${bulkJoinCandidateItems.length}道待整理题全部加入七刷`}
+            accessibilityLabel={`将当前筛选的${bulkJoinCandidateItems.length}道待整理题按每天${ReviewPlanService.BULK_JOIN_DAILY_NEW_REVIEW_LIMIT}道分批加入七刷`}
             accessibilityRole="button"
             accessibilityState={{ disabled: bulkJoinActionDisabled }}
             disabled={bulkJoinActionDisabled}
@@ -1473,7 +1503,7 @@ export default function LibraryScreen() {
             {isBulkJoiningReviewPlan ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
-              <Text style={styles.bulkJoinButtonText}>全部加入</Text>
+              <Text style={styles.bulkJoinButtonText}>分批加入</Text>
             )}
           </Pressable>
         </View>
