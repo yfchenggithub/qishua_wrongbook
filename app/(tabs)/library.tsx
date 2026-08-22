@@ -22,6 +22,7 @@ import {
   LibraryBottomSheet,
   LibraryQuickView,
   LibrarySegmentedControl,
+  MistakeActionSheet,
   ProgressDots,
   PageHeader,
   PageShell,
@@ -617,6 +618,7 @@ export default function LibraryScreen() {
   const [pinningMistakeId, setPinningMistakeId] = useState<string | null>(null);
   const [joiningReviewPlanMistakeId, setJoiningReviewPlanMistakeId] = useState<string | null>(null);
   const [isBulkJoiningReviewPlan, setIsBulkJoiningReviewPlan] = useState(false);
+  const [actionSheetMistakeId, setActionSheetMistakeId] = useState<string | null>(null);
 
   const [moduleSheetVisible, setModuleSheetVisible] = useState(false);
   const [tagSheetVisible, setTagSheetVisible] = useState(false);
@@ -1165,6 +1167,7 @@ export default function LibraryScreen() {
           },
         },
       ],
+      { cancelable: true },
     );
   }, [deletingMistakeId, isBulkJoiningReviewPlan, isLoading, isRefreshing]);
 
@@ -1179,25 +1182,43 @@ export default function LibraryScreen() {
     ) {
       return;
     }
-    Alert.alert('题目操作', item.title, [
-      ...(item.status === 'collected'
-        ? [{ text: '加入七刷', onPress: () => handleJoinReviewPlan(item) }]
-        : []),
-      { text: item.isPinned ? '取消置顶' : '置顶题目', onPress: () => void handleTogglePinned(item) },
-      { text: '删除题目', style: 'destructive' as const, onPress: () => handleDelete(item) },
-      { text: '取消', style: 'cancel' as const },
-    ]);
+    setActionSheetMistakeId(item.id);
   }, [
     deletingMistakeId,
-    handleDelete,
-    handleJoinReviewPlan,
-    handleTogglePinned,
     isBulkJoiningReviewPlan,
     isLoading,
     isRefreshing,
     joiningReviewPlanMistakeId,
     pinningMistakeId,
   ]);
+
+  const selectedActionSheetItem = useMemo(
+    () => items.find((item) => item.id === actionSheetMistakeId) ?? null,
+    [actionSheetMistakeId, items],
+  );
+
+  const handleCloseMistakeMenu = useCallback(() => {
+    setActionSheetMistakeId(null);
+  }, []);
+
+  const handleMistakeMenuJoinReviewPlan = useCallback((item: MistakeListItem) => {
+    setActionSheetMistakeId(null);
+    handleJoinReviewPlan(item);
+  }, [handleJoinReviewPlan]);
+
+  const handleMistakeMenuTogglePinned = useCallback((item: MistakeListItem) => {
+    setActionSheetMistakeId(null);
+    void handleTogglePinned(item);
+  }, [handleTogglePinned]);
+
+  const handleMistakeMenuDelete = useCallback((item: MistakeListItem) => {
+    setActionSheetMistakeId(null);
+    requestAnimationFrame(() => {
+      if (mountedRef.current) {
+        handleDelete(item);
+      }
+    });
+  }, [handleDelete]);
 
   const handleOpenCustomModuleManager = useCallback(() => {
     setModuleSheetVisible(false);
@@ -1691,6 +1712,14 @@ export default function LibraryScreen() {
           onUseTemplate={handleCreateCustomModule}
           selectedModule={filters.module}
           visible={customModuleModalVisible}
+        />
+
+        <MistakeActionSheet
+          item={selectedActionSheetItem}
+          onClose={handleCloseMistakeMenu}
+          onDelete={handleMistakeMenuDelete}
+          onJoinReviewPlan={handleMistakeMenuJoinReviewPlan}
+          onTogglePinned={handleMistakeMenuTogglePinned}
         />
       </PageShell>
       <AppToast
