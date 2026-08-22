@@ -903,10 +903,19 @@ function ReviewSolutionImageCard({
         ) : null}
 
         {!hasImage ? (
-          <View style={styles.solutionPlaceholder}>
+          <Pressable
+            accessibilityLabel="从相册选择我的做法"
+            accessibilityRole="button"
+            disabled={isBusy}
+            onPress={onPickImage}
+            style={({ pressed }) => [
+              styles.solutionPlaceholder,
+              pressed && !isBusy ? styles.solutionPlaceholderPressed : null,
+              isBusy ? styles.disabledControl : null,
+            ]}>
             <MaterialIcons name="photo-camera" size={30} color={reviewPalette.textSecondary} />
-            <Text style={styles.solutionPlaceholderText}>添加解题过程</Text>
-          </View>
+            <Text style={styles.solutionPlaceholderText}>{isBusy ? '处理中...' : '添加解题过程'}</Text>
+          </Pressable>
         ) : null}
         {hasImage && imageFailed ? (
           <Text style={styles.questionErrorText}>我的做法图片加载失败</Text>
@@ -4029,9 +4038,14 @@ const styles = StyleSheet.create({
     backgroundColor: reviewPalette.surface,
   },
   solutionPlaceholder: {
+    flex: 1,
+    alignSelf: 'stretch',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
+  },
+  solutionPlaceholderPressed: {
+    backgroundColor: colors.accentSoft,
   },
   solutionPlaceholderText: {
     ...typography.bodySmall,
