@@ -21,7 +21,7 @@
     "check:module-preview-v1": "node ./scripts/check-module-preview-v1.js",
     "check:module-import-execution-v1": "node ./scripts/check-module-import-execution-v1.js",
     "check:module-import-page-v1": "node ./scripts/check-module-import-page-v1.js",
-    "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test --test-isolation=none tests/detail-browse.test.mjs tests/review-session-navigation.test.mjs tests/review-plan-selection.test.mjs",
+    "test": "node --disable-warning=ExperimentalWarning --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test --test-isolation=none tests/database-write-queue.test.mjs tests/detail-browse.test.mjs tests/review-session-navigation.test.mjs tests/review-plan-selection.test.mjs",
     "preflight": "npm run check:encoding && npm run typecheck && npm run lint && npm test",
     "setup:hooks": "git config core.hooksPath .githooks",
     "typecheck": "tsc --noEmit",

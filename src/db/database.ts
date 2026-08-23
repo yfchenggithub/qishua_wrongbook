@@ -8,9 +8,11 @@ import {
   seedPermanentModules,
 } from '@/src/db/moduleMigration';
 import { CREATE_MISTAKES_TABLE_SQL, CREATE_SCHEMA_SQL } from '@/src/db/schema';
+import { enqueueDatabaseWrite } from '@/src/db/writeQueue';
 import { Logger } from '@/src/services/Logger';
 
 const DB_SCOPE = 'DatabaseService';
+const DATABASE_BUSY_TIMEOUT_MS = 5_000;
 const REQUIRED_TABLES = [
   'mistakes',
   'mistake_images',
@@ -420,92 +422,112 @@ export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
 export async function withDatabaseTransaction<T>(
   callback: DatabaseTransactionCallback<T>,
 ): Promise<T> {
-  const db = await getDatabase();
-  const transactionDatabase = db as TransactionCapableDatabase;
+  return enqueueDatabaseWrite(async () => {
+    const db = await getDatabase();
+    const transactionDatabase = db as TransactionCapableDatabase;
 
-  // A regular Expo SQLite transaction shares the main connection. Unrelated UI
-  // queries can then enter that transaction and be aborted by its rollback.
-  // Native exclusive transactions use a dedicated connection instead.
-  if (
-    Platform.OS !== 'web' &&
-    typeof transactionDatabase.withExclusiveTransactionAsync === 'function'
-  ) {
-    let hasResult = false;
-    let result!: T;
+    // A regular Expo SQLite transaction shares the main connection. Unrelated UI
+    // queries can then enter that transaction and be aborted by its rollback.
+    // Native exclusive transactions use a dedicated connection instead.
+    if (
+      Platform.OS !== 'web' &&
+      typeof transactionDatabase.withExclusiveTransactionAsync === 'function'
+    ) {
+      let hasResult = false;
+      let result!: T;
 
+      try {
+        await transactionDatabase.withExclusiveTransactionAsync(async (transaction) => {
+          // busy_timeout is connection-local. Exclusive transactions use a new
+          // native connection, so configure it before the first write statement.
+          await transaction.execAsync(`PRAGMA busy_timeout = ${DATABASE_BUSY_TIMEOUT_MS};`);
+          result = await callback(transaction);
+          hasResult = true;
+        });
+      } catch (error) {
+        Logger.error(DB_SCOPE, 'Transaction failed via withExclusiveTransactionAsync.', error);
+        throw error;
+      }
+
+      if (!hasResult) {
+        const missingResultError = new Error('Transaction callback completed without a result.');
+        Logger.error(
+          DB_SCOPE,
+          'Transaction result is missing after withExclusiveTransactionAsync.',
+          missingResultError,
+        );
+        throw missingResultError;
+      }
+
+      return result;
+    }
+
+    if (typeof transactionDatabase.withTransactionAsync === 'function') {
+      let hasResult = false;
+      let result!: T;
+
+      try {
+        await transactionDatabase.withTransactionAsync(async () => {
+          result = await callback(db);
+          hasResult = true;
+        });
+      } catch (error) {
+        Logger.error(DB_SCOPE, 'Transaction failed via withTransactionAsync.', error);
+        throw error;
+      }
+
+      if (!hasResult) {
+        const missingResultError = new Error('Transaction callback completed without a result.');
+        Logger.error(DB_SCOPE, 'Transaction result is missing after withTransactionAsync.', missingResultError);
+        throw missingResultError;
+      }
+
+      return result;
+    }
+
+    // Fallback for environments where withTransactionAsync is unavailable.
     try {
-      await transactionDatabase.withExclusiveTransactionAsync(async (transaction) => {
-        result = await callback(transaction);
-        hasResult = true;
-      });
+      await db.execAsync('BEGIN IMMEDIATE;');
     } catch (error) {
-      Logger.error(DB_SCOPE, 'Transaction failed via withExclusiveTransactionAsync.', error);
+      Logger.error(DB_SCOPE, 'Failed to begin fallback transaction.', error);
       throw error;
     }
 
-    if (!hasResult) {
-      const missingResultError = new Error('Transaction callback completed without a result.');
-      Logger.error(
-        DB_SCOPE,
-        'Transaction result is missing after withExclusiveTransactionAsync.',
-        missingResultError,
-      );
-      throw missingResultError;
-    }
-
-    return result;
-  }
-
-  if (typeof transactionDatabase.withTransactionAsync === 'function') {
-    let hasResult = false;
-    let result!: T;
-
     try {
-      await transactionDatabase.withTransactionAsync(async () => {
-        result = await callback(db);
-        hasResult = true;
-      });
+      const result = await callback(db);
+      await db.execAsync('COMMIT;');
+      return result;
     } catch (error) {
-      Logger.error(DB_SCOPE, 'Transaction failed via withTransactionAsync.', error);
+      try {
+        await db.execAsync('ROLLBACK;');
+      } catch (rollbackError) {
+        Logger.error(DB_SCOPE, 'Failed to rollback fallback transaction.', rollbackError);
+      }
+      Logger.error(DB_SCOPE, 'Transaction failed in fallback mode.', error);
       throw error;
     }
+  });
+}
 
-    if (!hasResult) {
-      const missingResultError = new Error('Transaction callback completed without a result.');
-      Logger.error(DB_SCOPE, 'Transaction result is missing after withTransactionAsync.', missingResultError);
-      throw missingResultError;
-    }
-
-    return result;
-  }
-
-  // Fallback for environments where withTransactionAsync is unavailable.
-  try {
-    await db.execAsync('BEGIN IMMEDIATE;');
-  } catch (error) {
-    Logger.error(DB_SCOPE, 'Failed to begin fallback transaction.', error);
-    throw error;
-  }
-
-  try {
-    const result = await callback(db);
-    await db.execAsync('COMMIT;');
-    return result;
-  } catch (error) {
+export async function withDatabaseWrite<T>(
+  callback: DatabaseTransactionCallback<T>,
+): Promise<T> {
+  return enqueueDatabaseWrite(async () => {
+    const db = await getDatabase();
     try {
-      await db.execAsync('ROLLBACK;');
-    } catch (rollbackError) {
-      Logger.error(DB_SCOPE, 'Failed to rollback fallback transaction.', rollbackError);
+      return await callback(db);
+    } catch (error) {
+      Logger.error(DB_SCOPE, 'Serialized database write failed.', error);
+      throw error;
     }
-    Logger.error(DB_SCOPE, 'Transaction failed in fallback mode.', error);
-    throw error;
-  }
+  });
 }
 
 async function initializeDatabase(): Promise<void> {
   try {
     const db = await getDatabase();
 
+    await db.execAsync(`PRAGMA busy_timeout = ${DATABASE_BUSY_TIMEOUT_MS};`);
     await db.execAsync('PRAGMA foreign_keys = ON;');
     await db.execAsync('PRAGMA journal_mode = WAL;');
 

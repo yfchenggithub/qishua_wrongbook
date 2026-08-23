@@ -1,4 +1,4 @@
-import { getDatabase, initDatabase, withDatabaseTransaction } from '@/src/db';
+import { getDatabase, initDatabase, withDatabaseTransaction, withDatabaseWrite } from '@/src/db';
 import { MAX_REVIEW_COUNT, REVIEW_STATUS } from '@/src/constants/review';
 import { MODULE_QUESTION_MAX_NUMBER, parseMistakeDisplayCode } from '@/src/constants/modules';
 import type {
@@ -889,6 +889,18 @@ WHERE id = ?;`,
     }
   },
 
+  async getMistakeByIdInTransaction(
+    db: SQLite.SQLiteDatabase,
+    id: string,
+  ): Promise<Mistake | null> {
+    try {
+      return await getByIdInternal(db, id);
+    } catch (error) {
+      Logger.error(REPO_SCOPE, 'getMistakeByIdInTransaction failed.', { id, error });
+      throw error;
+    }
+  },
+
   async listMistakes(options?: ListMistakesOptions): Promise<Mistake[]> {
     try {
       await ensureDatabaseReady();
@@ -1271,96 +1283,96 @@ FROM mistakes;`,
   async updateMistake(id: string, input: UpdateMistakeInput): Promise<Mistake | null> {
     try {
       await ensureDatabaseReady();
-      const db = await getDatabase();
+      return await withDatabaseWrite(async (db) => {
+        const setClauses: string[] = [];
+        const bindParams: (string | number | null)[] = [];
+        const updatableFields: (keyof UpdateMistakeInput)[] = [
+          'subject',
+          'module',
+          'module_id',
+          'question_no',
+          'title',
+          'error_reason',
+          'error_reason_ids',
+          'difficulty',
+          'note',
+          'my_solution_text',
+          'answer_text',
+          'note_highlights',
+          'review_count',
+          'status',
+          'next_review_at',
+          'last_review_at',
+          'last_review_result',
+          'is_pinned',
+          'last_viewed_at',
+        ];
 
-      const setClauses: string[] = [];
-      const bindParams: (string | number | null)[] = [];
-      const updatableFields: (keyof UpdateMistakeInput)[] = [
-        'subject',
-        'module',
-        'module_id',
-        'question_no',
-        'title',
-        'error_reason',
-        'error_reason_ids',
-        'difficulty',
-        'note',
-        'my_solution_text',
-        'answer_text',
-        'note_highlights',
-        'review_count',
-        'status',
-        'next_review_at',
-        'last_review_at',
-        'last_review_result',
-        'is_pinned',
-        'last_viewed_at',
-      ];
+        for (const field of updatableFields) {
+          if (!Object.prototype.hasOwnProperty.call(input, field)) {
+            continue;
+          }
 
-      for (const field of updatableFields) {
-        if (!Object.prototype.hasOwnProperty.call(input, field)) {
-          continue;
-        }
+          const fieldValue = input[field];
+          if (fieldValue === undefined) {
+            continue;
+          }
 
-        const fieldValue = input[field];
-        if (fieldValue === undefined) {
-          continue;
-        }
+          if (field === 'difficulty') {
+            setClauses.push(`${field} = ?`);
+            bindParams.push(normalizeDifficulty(fieldValue as number));
+            continue;
+          }
 
-        if (field === 'difficulty') {
+          if (field === 'review_count') {
+            setClauses.push(`${field} = ?`);
+            bindParams.push(normalizeReviewCount(fieldValue as number));
+            continue;
+          }
+
+          if (field === 'module_id') {
+            setClauses.push(`${field} = ?`);
+            bindParams.push(normalizeRequiredModuleId(fieldValue as number));
+            continue;
+          }
+
+          if (field === 'question_no') {
+            setClauses.push(`${field} = ?`);
+            bindParams.push(normalizeQuestionNo(fieldValue as number));
+            continue;
+          }
+
+          if (field === 'is_pinned') {
+            setClauses.push(`${field} = ?`);
+            bindParams.push(toPinnedInteger(fieldValue as boolean));
+            continue;
+          }
+
           setClauses.push(`${field} = ?`);
-          bindParams.push(normalizeDifficulty(fieldValue as number));
-          continue;
+          bindParams.push(fieldValue as string | number | null);
         }
 
-        if (field === 'review_count') {
-          setClauses.push(`${field} = ?`);
-          bindParams.push(normalizeReviewCount(fieldValue as number));
-          continue;
+        if (setClauses.length === 0) {
+          return await getByIdInternal(db, id);
         }
 
-        if (field === 'module_id') {
-          setClauses.push(`${field} = ?`);
-          bindParams.push(normalizeRequiredModuleId(fieldValue as number));
-          continue;
-        }
+        setClauses.push('updated_at = ?');
+        bindParams.push(nowIso());
+        bindParams.push(id);
 
-        if (field === 'question_no') {
-          setClauses.push(`${field} = ?`);
-          bindParams.push(normalizeQuestionNo(fieldValue as number));
-          continue;
-        }
-
-        if (field === 'is_pinned') {
-          setClauses.push(`${field} = ?`);
-          bindParams.push(toPinnedInteger(fieldValue as boolean));
-          continue;
-        }
-
-        setClauses.push(`${field} = ?`);
-        bindParams.push(fieldValue as string | number | null);
-      }
-
-      if (setClauses.length === 0) {
-        return await getByIdInternal(db, id);
-      }
-
-      setClauses.push('updated_at = ?');
-      bindParams.push(nowIso());
-      bindParams.push(id);
-
-      const result = await db.runAsync(
-        `UPDATE mistakes
+        const result = await db.runAsync(
+          `UPDATE mistakes
 SET ${setClauses.join(', ')}
 WHERE id = ?;`,
-        ...bindParams,
-      );
+          ...bindParams,
+        );
 
-      if (result.changes <= 0) {
-        return null;
-      }
+        if (result.changes <= 0) {
+          return null;
+        }
 
-      return await getByIdInternal(db, id);
+        return await getByIdInternal(db, id);
+      });
     } catch (error) {
       Logger.error(REPO_SCOPE, 'updateMistake failed.', { id, input, error });
       throw error;

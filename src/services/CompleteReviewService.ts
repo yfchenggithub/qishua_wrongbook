@@ -217,7 +217,7 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
   }
 
   try {
-    const mistake = await MistakeRepository.getMistakeById(normalizedInput.mistakeId);
+    let mistake = await MistakeRepository.getMistakeById(normalizedInput.mistakeId);
     if (!mistake) {
       Logger.warn(SERVICE_SCOPE, 'completeReview aborted because mistake does not exist.', {
         mistakeId: normalizedInput.mistakeId,
@@ -274,24 +274,58 @@ export async function completeReview(input: CompleteReviewInput): Promise<Comple
       };
     }
 
-    const newReviewCount = mistake.review_count + 1;
-    const newStatus = getReviewStatusAfterComplete(newReviewCount);
-    const nextReviewAt = calculateNextReviewAt(newReviewCount);
-    const nowIso = new Date().toISOString();
+    let newReviewCount = mistake.review_count + 1;
+    let newStatus = getReviewStatusAfterComplete(newReviewCount);
+    let nextReviewAt = calculateNextReviewAt(newReviewCount);
+    let nowIso = new Date().toISOString();
     let voiceNoteBindingFailed = normalizedInput.voiceNoteDropped;
     let createdReviewRecordId: string | undefined;
-    Logger.info(SERVICE_SCOPE, 'Calculated review progress update in completeReview.', {
-      mistakeId: normalizedInput.mistakeId,
-      reviewIndex: normalizedInput.reviewIndex,
-      currentReviewCount: mistake.review_count,
-      newReviewCount,
-      newStatus,
-      nextReviewAt,
-      hasVoiceNote: normalizedInput.voiceNote !== null,
-    });
 
     try {
       await withDatabaseTransaction(async (db) => {
+        const transactionMistake = await MistakeRepository.getMistakeByIdInTransaction(
+          db,
+          normalizedInput.mistakeId,
+        );
+        if (!transactionMistake) {
+          throw new Error(REVIEW_STATE_CHANGED_MESSAGE);
+        }
+
+        const transactionReviewPermission = canStartReview({
+          status: transactionMistake.status,
+          reviewCount: transactionMistake.review_count,
+        });
+        const transactionExpectedReviewIndex = getNextReviewIndex(transactionMistake.review_count);
+        if (
+          !transactionReviewPermission.canReview
+          || normalizedInput.reviewIndex !== transactionExpectedReviewIndex
+        ) {
+          Logger.warn(SERVICE_SCOPE, 'completeReview state changed before transaction write.', {
+            mistakeId: normalizedInput.mistakeId,
+            inputReviewIndex: normalizedInput.reviewIndex,
+            transactionExpectedReviewIndex,
+            transactionReviewCount: transactionMistake.review_count,
+            transactionStatus: transactionMistake.status,
+            reason: transactionReviewPermission.reason ?? null,
+          });
+          throw new Error(REVIEW_STATE_CHANGED_MESSAGE);
+        }
+
+        mistake = transactionMistake;
+        newReviewCount = transactionMistake.review_count + 1;
+        newStatus = getReviewStatusAfterComplete(newReviewCount);
+        nextReviewAt = calculateNextReviewAt(newReviewCount);
+        nowIso = new Date().toISOString();
+        Logger.info(SERVICE_SCOPE, 'Validated review progress inside transaction.', {
+          mistakeId: normalizedInput.mistakeId,
+          reviewIndex: normalizedInput.reviewIndex,
+          currentReviewCount: transactionMistake.review_count,
+          newReviewCount,
+          newStatus,
+          nextReviewAt,
+          hasVoiceNote: normalizedInput.voiceNote !== null,
+        });
+
         const createdReviewRecord = await ReviewRecordRepository.createReviewRecordInTransaction(db, {
           mistake_id: normalizedInput.mistakeId,
           review_index: normalizedInput.reviewIndex,
