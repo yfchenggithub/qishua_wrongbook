@@ -1444,6 +1444,7 @@ export default function MistakeDetailScreen() {
   const [activeImageBrowserAction, setActiveImageBrowserAction] = useState<'save' | 'share' | null>(null);
   const [isTitleEditing, setIsTitleEditing] = useState(false);
   const [titleInput, setTitleInput] = useState('');
+  const [isTitleClearVisible, setIsTitleClearVisible] = useState(false);
   const [isSavingTitle, setIsSavingTitle] = useState(false);
   const [noteInput, setNoteInput] = useState('');
   const [noteHighlightsInput, setNoteHighlightsInput] = useState<TextHighlightRange[]>([]);
@@ -1492,6 +1493,7 @@ export default function MistakeDetailScreen() {
   const requestIdRef = useRef(0);
   const browseRequestIdRef = useRef(0);
   const detailScrollRef = useRef<ScrollView | null>(null);
+  const titleInputRef = useRef<TextInput | null>(null);
   const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
   const anchorLayoutsRef = useRef<Partial<Record<DetailAnchorId, number>>>({});
   const hasFocusedRef = useRef(false);
@@ -4267,13 +4269,17 @@ export default function MistakeDetailScreen() {
     [router, showToast, state],
   );
 
-  const handleStartTitleEdit = useCallback((options?: { selectAll?: boolean }) => {
+  const handleStartTitleEdit = useCallback((options?: {
+    selectAll?: boolean;
+    showClear?: boolean;
+  }) => {
     if (state.kind !== 'success' || isSavingTitle) {
       return;
     }
     const shouldSelectAll = options?.selectAll === true;
     setTitleInput(state.detail.title);
     setTitleSelectAllOnFocus(shouldSelectAll);
+    setIsTitleClearVisible(options?.showClear === true);
     setIsTitleEditing(true);
   }, [isSavingTitle, state]);
 
@@ -4281,15 +4287,20 @@ export default function MistakeDetailScreen() {
     if (titleTapTimerRef.current) {
       clearTimeout(titleTapTimerRef.current);
       titleTapTimerRef.current = null;
-      handleStartTitleEdit({ selectAll: true });
+      handleStartTitleEdit({ selectAll: true, showClear: true });
       return;
     }
 
     titleTapTimerRef.current = setTimeout(() => {
       titleTapTimerRef.current = null;
-      handleStartTitleEdit({ selectAll: false });
+      handleStartTitleEdit({ selectAll: false, showClear: true });
     }, TITLE_DOUBLE_TAP_WINDOW_MS);
   }, [handleStartTitleEdit]);
+
+  const handleClearTitleInput = useCallback(() => {
+    setTitleInput('');
+    titleInputRef.current?.focus();
+  }, []);
 
   const handleCopyQuestionCode = useCallback(async () => {
     if (state.kind !== 'success') {
@@ -4505,6 +4516,7 @@ export default function MistakeDetailScreen() {
           scroll
           safeAreaEdges={[]}
           scrollRef={detailScrollRef}
+          keyboardShouldPersistTaps="handled"
           contentStyle={[
             styles.screenContent,
             {
@@ -4569,30 +4581,50 @@ export default function MistakeDetailScreen() {
                 ) : null}
                 <View style={styles.detailTitleRow}>
                   {isTitleEditing ? (
-                    <TextInput
-                      value={titleInput}
-                      onChangeText={setTitleInput}
-                      editable={!isSavingTitle}
-                      placeholder="请输入题目名字"
-                      placeholderTextColor={mistakeDetailPalette.secondaryText}
-                      style={styles.detailTitleInput}
-                      maxLength={80}
-                      autoFocus
-                      returnKeyType="done"
-                      blurOnSubmit
-                      selectTextOnFocus={titleSelectAllOnFocus}
-                      onFocus={() => {
-                        if (titleSelectAllOnFocus) {
-                          setTitleSelectAllOnFocus(false);
-                        }
-                      }}
-                      onBlur={() => {
-                        void handleSaveTitle();
-                      }}
-                      onSubmitEditing={() => {
-                        void handleSaveTitle();
-                      }}
-                    />
+                    <View style={styles.detailTitleInputWrap}>
+                      <TextInput
+                        ref={titleInputRef}
+                        value={titleInput}
+                        onChangeText={setTitleInput}
+                        editable={!isSavingTitle}
+                        placeholder="请输入题目名字"
+                        placeholderTextColor={mistakeDetailPalette.secondaryText}
+                        style={styles.detailTitleInput}
+                        maxLength={80}
+                        autoFocus
+                        returnKeyType="done"
+                        blurOnSubmit
+                        selectTextOnFocus={titleSelectAllOnFocus}
+                        onFocus={() => {
+                          if (titleSelectAllOnFocus) {
+                            setTitleSelectAllOnFocus(false);
+                          }
+                        }}
+                        onBlur={() => {
+                          void handleSaveTitle();
+                        }}
+                        onSubmitEditing={() => {
+                          void handleSaveTitle();
+                        }}
+                      />
+                      {isTitleClearVisible && titleInput.length > 0 ? (
+                        <Pressable
+                          accessibilityLabel="清空错题标题"
+                          accessibilityRole="button"
+                          hitSlop={8}
+                          onPress={handleClearTitleInput}
+                          style={({ pressed }) => [
+                            styles.detailTitleClearButton,
+                            pressed && styles.detailTitleClearButtonPressed,
+                          ]}>
+                          <MaterialIcons
+                            name="cancel"
+                            size={22}
+                            color={mistakeDetailPalette.secondaryText}
+                          />
+                        </Pressable>
+                      ) : null}
+                    </View>
                   ) : (
                     <Pressable
                       accessibilityRole="button"
@@ -5440,8 +5472,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
   },
   detailTitleInput: {
-    flex: 1,
-    minWidth: 0,
+    width: '100%',
     minHeight: 52,
     borderRadius: 14,
     borderWidth: StyleSheet.hairlineWidth,
@@ -5451,8 +5482,26 @@ const styles = StyleSheet.create({
     fontSize: 24,
     lineHeight: 31,
     fontWeight: '700',
-    paddingHorizontal: spacing.md,
+    paddingLeft: spacing.md,
+    paddingRight: 46,
     paddingVertical: spacing.sm,
+  },
+  detailTitleInputWrap: {
+    position: 'relative',
+    flex: 1,
+    minWidth: 0,
+  },
+  detailTitleClearButton: {
+    position: 'absolute',
+    top: 0,
+    right: spacing.sm,
+    bottom: 0,
+    width: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  detailTitleClearButtonPressed: {
+    opacity: 0.55,
   },
   offlineBadge: {
     flexShrink: 0,

@@ -28,6 +28,7 @@ export interface ScreenContainerProps {
   onTouchEnd?: ScrollViewProps['onTouchEnd'];
   scrollRef?: Ref<ScrollView>;
   scrollEventThrottle?: number;
+  keyboardShouldPersistTaps?: ScrollViewProps['keyboardShouldPersistTaps'];
   hasBottomTab?: boolean;
 }
 
@@ -48,6 +49,7 @@ export function PageShell({
   onTouchEnd,
   scrollRef,
   scrollEventThrottle = 16,
+  keyboardShouldPersistTaps,
   hasBottomTab = false,
 }: ScreenContainerProps) {
   return (
@@ -70,6 +72,7 @@ export function PageShell({
           onTouchStart={onTouchStart}
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
+          keyboardShouldPersistTaps={keyboardShouldPersistTaps}
           scrollEventThrottle={scrollEventThrottle}>
           {children}
         </ScrollView>
