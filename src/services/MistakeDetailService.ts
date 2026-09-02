@@ -31,10 +31,10 @@ import {
 } from '@/src/services/DetailBrowseContextResolver';
 import { getLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import { Logger } from '@/src/services/Logger';
-import { deleteMistakeImageFolder, getImageInfo } from '@/src/services/ImageStorageService';
+import { getImageInfo } from '@/src/services/ImageStorageService';
+import * as BulkMistakeDeleteService from '@/src/services/BulkMistakeDeleteService';
 import * as MistakeListService from '@/src/services/MistakeListService';
 import * as ReviewReminderService from '@/src/services/ReviewReminderService';
-import * as VoiceNoteService from '@/src/services/VoiceNoteService';
 import { formatDateShort } from '@/src/utils/date';
 import { parseStoredTextHighlights, serializeTextHighlights } from '@/src/utils/textHighlights';
 
@@ -720,44 +720,19 @@ export async function deleteMistake(mistakeIdInput: string): Promise<DeleteMista
   }
 
   try {
-    const reviewRecords = await ReviewRecordRepository.listReviewRecordsByMistakeId(mistakeId);
-    const voiceNoteUris = Array.from(
-      new Set(
-        reviewRecords
-          .map((record) => normalizeOptionalText(record.voice_note?.fileUri))
-          .filter((uri): uri is string => typeof uri === 'string'),
-      ),
-    );
-
-    const deleted = await MistakeRepository.deleteMistake(mistakeId);
-    if (!deleted) {
+    const deleteResult = await BulkMistakeDeleteService.deleteMistakes([mistakeId]);
+    if (!deleteResult.ok) {
       return {
         ok: false,
         deleted: false,
-        errorMessage: '未找到对应错题。',
+        errorMessage: deleteResult.errorMessage,
       };
     }
 
-    const imageFolderDeleted = await deleteMistakeImageFolder(mistakeId);
-    let deletedVoiceNoteCount = 0;
-    let failedVoiceNoteCount = 0;
-
-    for (const voiceNoteUri of voiceNoteUris) {
-      const deleteVoiceResult = await VoiceNoteService.deleteVoiceNote(voiceNoteUri);
-      if (deleteVoiceResult.ok) {
-        if (deleteVoiceResult.deleted) {
-          deletedVoiceNoteCount += 1;
-        }
-        continue;
-      }
-
-      failedVoiceNoteCount += 1;
-      Logger.warn(SERVICE_SCOPE, 'Failed to delete voice note while deleting mistake.', {
-        mistakeId,
-        voiceNoteUriShort: toShortUri(voiceNoteUri),
-        errorMessage: deleteVoiceResult.errorMessage ?? null,
-      });
-    }
+    const cleanupResult = await BulkMistakeDeleteService.finalizeDelete(deleteResult.undoToken);
+    const imageFolderDeleted = cleanupResult.deletedImageFolderCount > 0;
+    const deletedVoiceNoteCount = cleanupResult.deletedVoiceNoteCount;
+    const failedVoiceNoteCount = cleanupResult.failedFileCount;
 
     Logger.info(SERVICE_SCOPE, 'Deleted mistake successfully.', {
       mistakeId,

@@ -1,9 +1,11 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import * as Haptics from 'expo-haptics';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { type ComponentProps, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  BackHandler,
   FlatList,
   Image,
   Pressable,
@@ -18,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   AppToast,
+  BulkDeleteConfirmSheet,
   CustomModuleManagerModal,
   LibraryBottomSheet,
   LibraryQuickView,
@@ -33,6 +36,8 @@ import { useAppToast } from '@/src/hooks/useAppToast';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { MistakeListFilter, MistakeListItem } from '@/src/models/MistakeListItem';
 import { CustomModuleService } from '@/src/services/CustomModuleService';
+import * as BulkMistakeDeleteService from '@/src/services/BulkMistakeDeleteService';
+import type { BulkMistakeDeleteUndoToken } from '@/src/services/BulkMistakeDeleteService';
 import { createLibraryBrowseSession } from '@/src/services/DetailBrowseSessionService';
 import { Logger } from '@/src/services/Logger';
 import * as MistakeDetailService from '@/src/services/MistakeDetailService';
@@ -42,9 +47,16 @@ import { normalizeMistakeTagKey } from '@/src/services/MistakeTagService';
 import { colors, layout, radius, spacing, typography } from '@/src/styles/tokens';
 import { addDays, parseLocalDateTime, startOfLocalDay, toDateOnlyString } from '@/src/utils/date';
 import { resolveNextReviewAtText } from '@/src/utils/reviewSchedule';
+import {
+  areAllVisibleIdsSelected,
+  reconcileSelectionWithVisibleIds,
+  selectAllVisibleIds,
+  toggleSelectionId,
+} from '@/src/utils/libraryBulkSelection';
 
 const PAGE_SCOPE = 'LibraryScreen';
 const SEARCH_DEBOUNCE_MS = 280;
+const BULK_DELETE_UNDO_DURATION_MS = 5_000;
 
 type LibraryStatusMode = 'all' | 'collected' | 'active' | 'mastered';
 type LibraryQuickMode = 'today' | 'overdue' | 'recentViewed' | 'recentAdded';
@@ -427,12 +439,16 @@ function ThumbnailPlaceholder() {
 function MistakeCard({
   item,
   isDeleting,
+  selectionMode,
+  selected,
   onPress,
   onLongPress,
   onMorePress,
 }: {
   item: MistakeListItem;
   isDeleting: boolean;
+  selectionMode: boolean;
+  selected: boolean;
   onPress: () => void;
   onLongPress: () => void;
   onMorePress: () => void;
@@ -459,10 +475,18 @@ function MistakeCard({
   const currentProgress = Math.min(item.maxReviewCount, item.reviewCount + 1);
 
   return (
-    <SurfaceCard padding={0} style={[styles.card, isDeleting ? styles.cardDisabled : null]}>
+    <SurfaceCard
+      padding={0}
+      style={[
+        styles.card,
+        selected ? styles.cardSelected : null,
+        isDeleting ? styles.cardDisabled : null,
+      ]}>
       <Pressable
         accessibilityLabel={`${item.questionCode ? `${item.questionCode}，` : ''}${item.title}，第 ${item.reviewCount} / ${item.maxReviewCount} 刷`}
         disabled={isDeleting}
+        accessibilityRole={selectionMode ? 'checkbox' : 'button'}
+        accessibilityState={selectionMode ? { checked: selected } : undefined}
         onLongPress={() => {
           didLongPressRef.current = true;
           onLongPress();
@@ -500,18 +524,26 @@ function MistakeCard({
               </Text>
             </View>
             <View style={styles.cardTopActions}>
-              {item.isPinned ? <MaterialIcons name="star" size={16} color="#D58A18" /> : null}
-              <Pressable
-                accessibilityLabel="更多题目操作"
-                accessibilityRole="button"
-                hitSlop={10}
-                onPress={onMorePress}
-                style={({ pressed }) => [
-                  styles.moreButton,
-                  pressed ? styles.iconButtonPressed : null,
-                ]}>
-                <MaterialIcons name="more-vert" size={20} color={colors.textMuted} />
-              </Pressable>
+              {selectionMode ? (
+                <View style={[styles.selectionCircle, selected ? styles.selectionCircleSelected : null]}>
+                  {selected ? <MaterialIcons name="check" size={18} color={colors.white} /> : null}
+                </View>
+              ) : (
+                <>
+                  {item.isPinned ? <MaterialIcons name="star" size={16} color="#D58A18" /> : null}
+                  <Pressable
+                    accessibilityLabel="更多题目操作"
+                    accessibilityRole="button"
+                    hitSlop={10}
+                    onPress={onMorePress}
+                    style={({ pressed }) => [
+                      styles.moreButton,
+                      pressed ? styles.iconButtonPressed : null,
+                    ]}>
+                    <MaterialIcons name="more-vert" size={20} color={colors.textMuted} />
+                  </Pressable>
+                </>
+              )}
             </View>
           </View>
 
@@ -594,6 +626,7 @@ function OptionRow({
 
 export default function LibraryScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const searchParams = useLocalSearchParams<{
     quickMode?: string | string[];
     scheduledDate?: string | string[];
@@ -604,6 +637,8 @@ export default function LibraryScreen() {
   const requestIdRef = useRef(0);
   const hasLoadedRef = useRef(false);
   const hasFocusedRef = useRef(false);
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingUndoTokenRef = useRef<BulkMistakeDeleteUndoToken | null>(null);
   const { props: toastProps, showToast } = useAppToast();
 
   const [searchText, setSearchText] = useState('');
@@ -619,6 +654,12 @@ export default function LibraryScreen() {
   const [joiningReviewPlanMistakeId, setJoiningReviewPlanMistakeId] = useState<string | null>(null);
   const [isBulkJoiningReviewPlan, setIsBulkJoiningReviewPlan] = useState(false);
   const [actionSheetMistakeId, setActionSheetMistakeId] = useState<string | null>(null);
+  const [isBulkSelectionMode, setIsBulkSelectionMode] = useState(false);
+  const [selectedMistakeIds, setSelectedMistakeIds] = useState<Set<string>>(() => new Set());
+  const [bulkDeleteConfirmVisible, setBulkDeleteConfirmVisible] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [pendingUndoToken, setPendingUndoToken] = useState<BulkMistakeDeleteUndoToken | null>(null);
+  const [isUndoingBulkDelete, setIsUndoingBulkDelete] = useState(false);
 
   const [moduleSheetVisible, setModuleSheetVisible] = useState(false);
   const [tagSheetVisible, setTagSheetVisible] = useState(false);
@@ -638,6 +679,15 @@ export default function LibraryScreen() {
       requestIdRef.current += 1;
     };
   }, []);
+
+  useEffect(() => {
+    navigation.setOptions({
+      tabBarStyle: isBulkSelectionMode ? { display: 'none' } : undefined,
+    });
+    return () => {
+      navigation.setOptions({ tabBarStyle: undefined });
+    };
+  }, [isBulkSelectionMode, navigation]);
 
   const routeQuickMode = normalizeRouteValue(searchParams.quickMode);
   const routeScheduledDate = normalizeScheduledDate(normalizeRouteValue(searchParams.scheduledDate));
@@ -761,6 +811,34 @@ export default function LibraryScreen() {
     ),
     [dateBounds, effectiveSortKey, filters.viewMode, scheduledDate, scopedItems],
   );
+  const resultItemIds = useMemo(() => resultItems.map((item) => item.id), [resultItems]);
+  const visibleSelectedMistakeIds = useMemo(
+    () => reconcileSelectionWithVisibleIds(selectedMistakeIds, resultItemIds),
+    [resultItemIds, selectedMistakeIds],
+  );
+  const allVisibleItemsSelected = useMemo(
+    () => areAllVisibleIdsSelected(visibleSelectedMistakeIds, resultItemIds),
+    [resultItemIds, visibleSelectedMistakeIds],
+  );
+
+  useEffect(() => {
+    if (!isBulkSelectionMode) {
+      return;
+    }
+    setSelectedMistakeIds((current) => {
+      const next = reconcileSelectionWithVisibleIds(current, resultItemIds);
+      if (next.size === current.size && Array.from(next).every((id) => current.has(id))) {
+        return current;
+      }
+      return next;
+    });
+  }, [isBulkSelectionMode, resultItemIds]);
+
+  useEffect(() => {
+    if (bulkDeleteConfirmVisible && visibleSelectedMistakeIds.size === 0 && !isBulkDeleting) {
+      setBulkDeleteConfirmVisible(false);
+    }
+  }, [bulkDeleteConfirmVisible, isBulkDeleting, visibleSelectedMistakeIds.size]);
   const bulkJoinCandidateItems = useMemo(() => (
     filters.viewMode === 'collected' && scheduledDate === null
       ? resultItems.filter((item) => item.status === 'collected')
@@ -768,6 +846,7 @@ export default function LibraryScreen() {
   ), [filters.viewMode, resultItems, scheduledDate]);
   const bulkJoinActionDisabled = (
     deletingMistakeId !== null
+    || isBulkSelectionMode
     || pinningMistakeId !== null
     || joiningReviewPlanMistakeId !== null
     || isBulkJoiningReviewPlan
@@ -859,6 +938,66 @@ export default function LibraryScreen() {
     listRef.current?.scrollToOffset({ animated, offset: 0 });
   }, []);
 
+  const exitBulkSelectionMode = useCallback(() => {
+    if (isBulkDeleting) {
+      return;
+    }
+    setBulkDeleteConfirmVisible(false);
+    setSelectedMistakeIds(new Set());
+    setIsBulkSelectionMode(false);
+  }, [isBulkDeleting]);
+
+  const enterBulkSelectionMode = useCallback((initialMistakeId?: string) => {
+    if (isLoading || isFiltering || isRefreshing || isBulkDeleting) {
+      return;
+    }
+    setActionSheetMistakeId(null);
+    setSelectedMistakeIds(initialMistakeId ? new Set([initialMistakeId]) : new Set());
+    setIsBulkSelectionMode(true);
+    if (initialMistakeId) {
+      void Haptics.selectionAsync().catch(() => undefined);
+    }
+  }, [isBulkDeleting, isFiltering, isLoading, isRefreshing]);
+
+  const toggleBulkSelection = useCallback((mistakeId: string) => {
+    if (isBulkDeleting) {
+      return;
+    }
+    setSelectedMistakeIds((current) => toggleSelectionId(current, mistakeId));
+    void Haptics.selectionAsync().catch(() => undefined);
+  }, [isBulkDeleting]);
+
+  const handleToggleSelectAll = useCallback(() => {
+    if (isBulkDeleting || resultItemIds.length === 0) {
+      return;
+    }
+    setSelectedMistakeIds(
+      allVisibleItemsSelected ? new Set() : selectAllVisibleIds(resultItemIds),
+    );
+    void Haptics.selectionAsync().catch(() => undefined);
+  }, [allVisibleItemsSelected, isBulkDeleting, resultItemIds]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!isBulkSelectionMode) {
+        return undefined;
+      }
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        exitBulkSelectionMode();
+        return true;
+      });
+      return () => subscription.remove();
+    }, [exitBulkSelectionMode, isBulkSelectionMode]),
+  );
+
+  useFocusEffect(
+    useCallback(() => () => {
+      setBulkDeleteConfirmVisible(false);
+      setSelectedMistakeIds(new Set());
+      setIsBulkSelectionMode(false);
+    }, []),
+  );
+
   const handleReset = useCallback(() => {
     setSearchText('');
     setFilters(DEFAULT_FILTER_STATE);
@@ -925,6 +1064,107 @@ export default function LibraryScreen() {
   const handleRetry = useCallback(() => {
     void loadItems(filters.keyword, 'refresh');
   }, [filters.keyword, loadItems]);
+
+  const scheduleBulkDeleteUndo = useCallback((token: BulkMistakeDeleteUndoToken) => {
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+    const previousToken = pendingUndoTokenRef.current;
+    if (previousToken && previousToken !== token) {
+      void BulkMistakeDeleteService.finalizeDelete(previousToken);
+    }
+
+    pendingUndoTokenRef.current = token;
+    if (mountedRef.current) {
+      setPendingUndoToken(token);
+    }
+    undoTimerRef.current = setTimeout(() => {
+      if (pendingUndoTokenRef.current === token) {
+        pendingUndoTokenRef.current = null;
+        if (mountedRef.current) {
+          setPendingUndoToken(null);
+        }
+      }
+      undoTimerRef.current = null;
+      void BulkMistakeDeleteService.finalizeDelete(token);
+    }, BULK_DELETE_UNDO_DURATION_MS);
+  }, []);
+
+  const handleUndoBulkDelete = useCallback(() => {
+    const token = pendingUndoTokenRef.current;
+    if (!token || isUndoingBulkDelete) {
+      return;
+    }
+    if (undoTimerRef.current) {
+      clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+
+    setIsUndoingBulkDelete(true);
+    void (async () => {
+      const result = await BulkMistakeDeleteService.undoDelete(token);
+      if (!result.ok) {
+        if (mountedRef.current) {
+          setIsUndoingBulkDelete(false);
+          Alert.alert('撤销失败', result.errorMessage);
+        }
+        scheduleBulkDeleteUndo(token);
+        return;
+      }
+
+      if (pendingUndoTokenRef.current === token) {
+        pendingUndoTokenRef.current = null;
+      }
+      if (!mountedRef.current) {
+        return;
+      }
+      setPendingUndoToken(null);
+      setIsUndoingBulkDelete(false);
+      await loadItems(filters.keyword, 'filter');
+      if (mountedRef.current) {
+        showToast(`已恢复 ${result.restoredCount} 道题`, 'success');
+      }
+    })();
+  }, [filters.keyword, isUndoingBulkDelete, loadItems, scheduleBulkDeleteUndo, showToast]);
+
+  const handleRequestBulkDelete = useCallback(() => {
+    if (visibleSelectedMistakeIds.size === 0 || isBulkDeleting) {
+      return;
+    }
+    setBulkDeleteConfirmVisible(true);
+  }, [isBulkDeleting, visibleSelectedMistakeIds.size]);
+
+  const handleConfirmBulkDelete = useCallback(() => {
+    if (visibleSelectedMistakeIds.size === 0 || isBulkDeleting) {
+      return;
+    }
+    const idsToDelete = Array.from(visibleSelectedMistakeIds);
+    setIsBulkDeleting(true);
+
+    void (async () => {
+      const result = await BulkMistakeDeleteService.deleteMistakes(idsToDelete);
+      if (!result.ok) {
+        if (mountedRef.current) {
+          setIsBulkDeleting(false);
+          Alert.alert('删除失败', result.errorMessage);
+        }
+        return;
+      }
+
+      scheduleBulkDeleteUndo(result.undoToken);
+      if (!mountedRef.current) {
+        return;
+      }
+
+      const deletedIds = new Set(idsToDelete);
+      setItems((current) => current.filter((item) => !deletedIds.has(item.id)));
+      setBulkDeleteConfirmVisible(false);
+      setSelectedMistakeIds(new Set());
+      setIsBulkSelectionMode(false);
+      setIsBulkDeleting(false);
+    })();
+  }, [isBulkDeleting, scheduleBulkDeleteUndo, visibleSelectedMistakeIds]);
 
   const handleOpenDetail = useCallback((id: string) => {
     if (deletingMistakeId !== null || isBulkJoiningReviewPlan) {
@@ -1530,22 +1770,64 @@ export default function LibraryScreen() {
         </View>
       ) : null}
 
-      <View style={styles.resultsHeader}>
-        <View style={styles.resultCountWrap}>
-          <Text style={styles.resultCount}>
-            {scheduledDate ? `${scheduledDate} · ` : ''}{resultItems.length} 道错题
+      {isBulkSelectionMode ? (
+        <View style={[styles.resultsHeader, styles.selectionHeader]}>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isBulkDeleting}
+            onPress={exitBulkSelectionMode}
+            style={({ pressed }) => [styles.selectionHeaderAction, pressed ? styles.headerActionPressed : null]}>
+            <Text style={styles.selectionHeaderActionText}>取消</Text>
+          </Pressable>
+          <Text accessibilityLiveRegion="polite" style={styles.selectionHeaderCount}>
+            已选择 {visibleSelectedMistakeIds.size} 道
           </Text>
-          {isFiltering ? <ActivityIndicator color={colors.textMuted} size="small" /> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: resultItemIds.length === 0 || isBulkDeleting }}
+            disabled={resultItemIds.length === 0 || isBulkDeleting}
+            onPress={handleToggleSelectAll}
+            style={({ pressed }) => [
+              styles.selectionHeaderAction,
+              styles.selectionHeaderActionRight,
+              pressed ? styles.headerActionPressed : null,
+            ]}>
+            <Text
+              style={[
+                styles.selectionHeaderActionText,
+                resultItemIds.length === 0 ? styles.selectionHeaderActionDisabled : null,
+              ]}>
+              {allVisibleItemsSelected ? '取消全选' : '全选'}
+            </Text>
+          </Pressable>
         </View>
-        <Pressable
-          accessibilityLabel={`当前排序，${selectedSortOption.label}`}
-          accessibilityRole="button"
-          onPress={() => setSortSheetVisible(true)}
-          style={({ pressed }) => [styles.sortButton, pressed ? styles.filterButtonPressed : null]}>
-          <Text numberOfLines={1} style={styles.sortButtonText}>{selectedSortOption.label}</Text>
-          <MaterialIcons name="keyboard-arrow-down" size={20} color={colors.textPrimary} />
-        </Pressable>
-      </View>
+      ) : (
+        <View style={styles.resultsHeader}>
+          <View style={styles.resultCountWrap}>
+            <Text style={styles.resultCount}>
+              {scheduledDate ? `${scheduledDate} · ` : ''}{resultItems.length} 道错题
+            </Text>
+            {isFiltering ? <ActivityIndicator color={colors.textMuted} size="small" /> : null}
+          </View>
+          <View style={styles.resultsHeaderActions}>
+            <Pressable
+              accessibilityLabel={`当前排序，${selectedSortOption.label}`}
+              accessibilityRole="button"
+              onPress={() => setSortSheetVisible(true)}
+              style={({ pressed }) => [styles.sortButton, pressed ? styles.filterButtonPressed : null]}>
+              <Text numberOfLines={1} style={styles.sortButtonText}>{selectedSortOption.label}</Text>
+              <MaterialIcons name="keyboard-arrow-down" size={20} color={colors.textPrimary} />
+            </Pressable>
+            <Pressable
+              accessibilityLabel="选择题目"
+              accessibilityRole="button"
+              onPress={() => enterBulkSelectionMode()}
+              style={({ pressed }) => [styles.selectButton, pressed ? styles.headerActionPressed : null]}>
+              <Text style={styles.selectButtonText}>选择</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
     </View>
   );
 
@@ -1556,6 +1838,7 @@ export default function LibraryScreen() {
           ref={listRef}
           contentContainerStyle={styles.listContent}
           data={isLoading || errorMessage ? [] : resultItems}
+          extraData={{ isBulkSelectionMode, selectedMistakeIds }}
           ItemSeparatorComponent={() => <View style={styles.itemSeparator} />}
           keyExtractor={(item) => item.id}
           keyboardDismissMode="on-drag"
@@ -1574,9 +1857,19 @@ export default function LibraryScreen() {
             <MistakeCard
               isDeleting={deletingMistakeId === item.id}
               item={item}
-              onLongPress={() => handleOpenMistakeMenu(item)}
+              onLongPress={() => (
+                isBulkSelectionMode
+                  ? toggleBulkSelection(item.id)
+                  : enterBulkSelectionMode(item.id)
+              )}
               onMorePress={() => handleOpenMistakeMenu(item)}
-              onPress={() => handleOpenDetail(item.id)}
+              onPress={() => (
+                isBulkSelectionMode
+                  ? toggleBulkSelection(item.id)
+                  : handleOpenDetail(item.id)
+              )}
+              selected={visibleSelectedMistakeIds.has(item.id)}
+              selectionMode={isBulkSelectionMode}
             />
           )}
           showsVerticalScrollIndicator={false}
@@ -1722,6 +2015,56 @@ export default function LibraryScreen() {
           onTogglePinned={handleMistakeMenuTogglePinned}
         />
       </PageShell>
+      {isBulkSelectionMode ? (
+        <View
+          style={[
+            styles.bulkActionBar,
+            {
+              height: layout.bottomTabHeight + insets.bottom,
+              paddingBottom: Math.max(insets.bottom, spacing.sm),
+            },
+          ]}>
+          <Text accessibilityLiveRegion="polite" style={styles.bulkActionCount}>
+            已选择 {visibleSelectedMistakeIds.size} 道
+          </Text>
+          <Pressable
+            accessibilityLabel={`删除${visibleSelectedMistakeIds.size}道题`}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: visibleSelectedMistakeIds.size === 0 || isBulkDeleting }}
+            disabled={visibleSelectedMistakeIds.size === 0 || isBulkDeleting}
+            onPress={handleRequestBulkDelete}
+            style={({ pressed }) => [
+              styles.bulkDeleteButton,
+              visibleSelectedMistakeIds.size === 0 || isBulkDeleting ? styles.bulkDeleteButtonDisabled : null,
+              pressed ? styles.bulkDeleteButtonPressed : null,
+            ]}>
+            {isBulkDeleting ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.bulkDeleteButtonText}>删除 {visibleSelectedMistakeIds.size} 道题</Text>
+            )}
+          </Pressable>
+        </View>
+      ) : null}
+      <BulkDeleteConfirmSheet
+        count={visibleSelectedMistakeIds.size}
+        deleting={isBulkDeleting}
+        onCancel={() => {
+          if (!isBulkDeleting) {
+            setBulkDeleteConfirmVisible(false);
+          }
+        }}
+        onConfirm={handleConfirmBulkDelete}
+        visible={bulkDeleteConfirmVisible}
+      />
+      <AppToast
+        actionLabel={isUndoingBulkDelete ? '撤销中…' : '撤销'}
+        bottomOffset={Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg)}
+        message={pendingUndoToken ? `已删除 ${pendingUndoToken.deletedCount} 道题` : ''}
+        onAction={handleUndoBulkDelete}
+        type="success"
+        visible={pendingUndoToken !== null}
+      />
       <AppToast
         {...toastProps}
         bottomOffset={Math.max(layout.bottomTabHeight + spacing.sm, insets.bottom + spacing.lg)}
@@ -1899,6 +2242,7 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xs,
   },
   resultCountWrap: {
+    flex: 1,
     minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1910,8 +2254,15 @@ const styles = StyleSheet.create({
     lineHeight: 24,
     fontWeight: '600',
   },
+  resultsHeaderActions: {
+    flexShrink: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
   sortButton: {
-    maxWidth: '50%',
+    maxWidth: 150,
     minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1926,11 +2277,64 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: '600',
   },
+  selectButton: {
+    minWidth: layout.minimumTouchSize,
+    minHeight: layout.minimumTouchSize,
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    paddingLeft: spacing.md,
+    borderRadius: radius.md,
+  },
+  selectButtonText: {
+    color: colors.accent,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  selectionHeader: {
+    gap: spacing.sm,
+  },
+  selectionHeaderAction: {
+    width: 88,
+    minHeight: layout.minimumTouchSize,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+  },
+  selectionHeaderActionRight: {
+    alignItems: 'flex-end',
+  },
+  selectionHeaderActionText: {
+    color: colors.accent,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  selectionHeaderActionDisabled: {
+    color: colors.accentDisabled,
+  },
+  selectionHeaderCount: {
+    flex: 1,
+    minWidth: 0,
+    color: colors.textPrimary,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  headerActionPressed: {
+    opacity: 0.55,
+  },
   itemSeparator: {
     height: spacing.md,
   },
   card: {
     overflow: 'hidden',
+  },
+  cardSelected: {
+    borderWidth: 1,
+    borderColor: colors.accent,
+    backgroundColor: colors.accentSoft,
   },
   cardPressable: {
     minHeight: 142,
@@ -2018,6 +2422,20 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: radius.md,
   },
+  selectionCircle: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.textTertiary,
+    backgroundColor: colors.surface,
+  },
+  selectionCircleSelected: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accent,
+  },
   cardTitle: {
     marginTop: 2,
     color: colors.textPrimary,
@@ -2082,6 +2500,46 @@ const styles = StyleSheet.create({
     color: colors.danger,
     fontSize: 14,
     fontWeight: '600',
+  },
+  bulkActionBar: {
+    minHeight: layout.bottomTabHeight,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingHorizontal: spacing.screenPadding,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.separator,
+    backgroundColor: colors.surface,
+  },
+  bulkActionCount: {
+    flex: 1,
+    color: colors.textSecondary,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
+  },
+  bulkDeleteButton: {
+    minWidth: 164,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    backgroundColor: colors.danger,
+  },
+  bulkDeleteButtonDisabled: {
+    opacity: 0.38,
+  },
+  bulkDeleteButtonPressed: {
+    opacity: 0.72,
+  },
+  bulkDeleteButtonText: {
+    color: colors.white,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '800',
   },
   stateWrap: {
     minHeight: 240,

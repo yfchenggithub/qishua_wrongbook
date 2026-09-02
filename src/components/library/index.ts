@@ -1,3 +1,4 @@
+export * from './BulkDeleteConfirmSheet';
 export * from './LibraryBottomSheet';
 export * from './LibraryQuickView';
 export * from './LibrarySegmentedControl';

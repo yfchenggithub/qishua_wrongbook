@@ -1,5 +1,6 @@
 import {
   Animated,
+  Pressable,
   StyleSheet,
   Text,
   View,
@@ -23,6 +24,8 @@ export interface AppToastProps {
   bubbleStyle?: StyleProp<ViewStyle>;
   textStyle?: StyleProp<TextStyle>;
   maxFontSizeMultiplier?: number;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 export function getAppToastBackgroundColor(type: AppToastType): string {
@@ -56,6 +59,8 @@ export function AppToast({
   bubbleStyle,
   textStyle,
   maxFontSizeMultiplier = 1.1,
+  actionLabel,
+  onAction,
 }: AppToastProps) {
   if (!visible) {
     return null;
@@ -63,7 +68,7 @@ export function AppToast({
 
   return (
     <Animated.View
-      pointerEvents="none"
+      pointerEvents={actionLabel && onAction ? 'box-none' : 'none'}
       style={[
         styles.toastContainer,
         typeof bottomOffset === 'number' ? { bottom: bottomOffset } : null,
@@ -82,6 +87,15 @@ export function AppToast({
           style={[styles.toastText, { color: getAppToastTextColor(type) }, textStyle]}>
           {message}
         </Text>
+        {actionLabel && onAction ? (
+          <Pressable
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={onAction}
+            style={({ pressed }) => [styles.toastAction, pressed ? styles.toastActionPressed : null]}>
+            <Text style={styles.toastActionText}>{actionLabel}</Text>
+          </Pressable>
+        ) : null}
       </View>
     </Animated.View>
   );
@@ -96,6 +110,9 @@ const styles = StyleSheet.create({
   },
   toastBubble: {
     maxWidth: '86%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
     borderRadius: radius.xl,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
@@ -107,7 +124,22 @@ const styles = StyleSheet.create({
   },
   toastText: {
     ...typography.bodySmall,
+    flexShrink: 1,
     fontWeight: '600',
     textAlign: 'center',
+  },
+  toastAction: {
+    minHeight: 36,
+    justifyContent: 'center',
+    borderRadius: radius.md,
+  },
+  toastActionPressed: {
+    opacity: 0.55,
+  },
+  toastActionText: {
+    color: colors.accent,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '800',
   },
 });

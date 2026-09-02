@@ -1,7 +1,7 @@
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { useEffect, useState, type ComponentProps } from 'react';
-import { Keyboard, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Keyboard, Pressable, StyleSheet, Text, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, layout, spacing } from '@/src/styles/tokens';
@@ -15,7 +15,7 @@ const TAB_META: Record<string, { label: string; active: IconName; inactive: Icon
   settings: { label: '设置', active: 'cog', inactive: 'cog-outline' },
 };
 
-export function BottomTabBar({ state, navigation }: BottomTabBarProps) {
+export function BottomTabBar({ state, navigation, descriptors }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const [keyboardVisible, setKeyboardVisible] = useState(false);
 
@@ -28,7 +28,12 @@ export function BottomTabBar({ state, navigation }: BottomTabBarProps) {
     };
   }, []);
 
-  if (keyboardVisible) {
+  const activeRoute = state.routes[state.index];
+  const activeTabBarStyle = activeRoute
+    ? StyleSheet.flatten(descriptors[activeRoute.key]?.options.tabBarStyle) as ViewStyle | undefined
+    : undefined;
+
+  if (keyboardVisible || activeTabBarStyle?.display === 'none') {
     return null;
   }
 
