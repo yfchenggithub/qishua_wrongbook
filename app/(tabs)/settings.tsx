@@ -26,6 +26,7 @@ import {
   setSessionDeveloperModeEnabled,
 } from '@/src/services/DeveloperModeService';
 import * as ExportImageModeService from '@/src/services/ExportImageModeService';
+import { resetImageBrowserGestureGuide } from '@/src/services/ImageBrowserGuideService';
 import { Logger } from '@/src/services/Logger';
 import {
   getTodayAutomaticBackup,
@@ -526,6 +527,7 @@ export default function SettingsScreen() {
   const [isReminderTimeBusy, setIsReminderTimeBusy] = useState(false);
   const [isReminderPermissionGranted, setIsReminderPermissionGranted] = useState(false);
   const [showReminderPermissionHint, setShowReminderPermissionHint] = useState(false);
+  const [isResettingImageBrowserGuide, setIsResettingImageBrowserGuide] = useState(false);
   const [activeSheet, setActiveSheet] = useState<'print' | 'storage' | null>(null);
 
   const hasFocusedRef = useRef(false);
@@ -1606,6 +1608,26 @@ export default function SettingsScreen() {
     });
   }, [showToast]);
 
+  const handleResetImageBrowserGuide = useCallback(async () => {
+    if (isResettingImageBrowserGuide) {
+      return;
+    }
+
+    setIsResettingImageBrowserGuide(true);
+    try {
+      const reset = await resetImageBrowserGestureGuide();
+      if (!reset) {
+        showToast('操作引导恢复失败，请稍后重试', 'warning');
+        return;
+      }
+
+      Logger.info(PAGE_SCOPE, 'Reset image browser gesture guide from settings.');
+      showToast('已恢复大图操作引导，下次打开图片时会显示', 'success', TOAST_DURATION_LONG);
+    } finally {
+      setIsResettingImageBrowserGuide(false);
+    }
+  }, [isResettingImageBrowserGuide, showToast]);
+
   const shouldMaskStats = isOverviewLoading && lastUpdatedAt === null;
   const displayNumber = useCallback(
     (value: number) => (shouldMaskStats ? STATS_PLACEHOLDER : String(value)),
@@ -2042,6 +2064,20 @@ export default function SettingsScreen() {
             </Text>}
             showChevron
             title="打印与导出"
+          />
+          <SettingsDivider />
+          <SettingsRow
+            disabled={isResettingImageBrowserGuide}
+            icon="touch-app"
+            onPress={() => {
+              void handleResetImageBrowserGuide();
+            }}
+            right={isResettingImageBrowserGuide
+              ? <ActivityIndicator color={colors.accent} size="small" />
+              : undefined}
+            showChevron={!isResettingImageBrowserGuide}
+            subtitle="下次打开错题图片时展示手势提示"
+            title="重新查看大图操作引导"
           />
           {shouldShowReminderPermissionNotice ? (
             <View style={styles.permissionNotice}>

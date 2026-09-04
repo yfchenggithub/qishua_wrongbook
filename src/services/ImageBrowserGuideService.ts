@@ -21,3 +21,13 @@ export async function markImageBrowserGestureGuideSeen(): Promise<void> {
     Logger.warn(SERVICE_SCOPE, 'Failed to save the image browser gesture guide preference.', { error });
   }
 }
+
+export async function resetImageBrowserGestureGuide(): Promise<boolean> {
+  try {
+    await AsyncStorage.removeItem(IMAGE_BROWSER_GESTURE_GUIDE_SEEN_KEY);
+    return true;
+  } catch (error) {
+    Logger.warn(SERVICE_SCOPE, 'Failed to reset the image browser gesture guide preference.', { error });
+    return false;
+  }
+}
