@@ -131,6 +131,7 @@ type DetailImagePreviewItem = {
   reviewTotal?: number;
   imageIndexInSection?: number;
   imageTotalInSection?: number;
+  relatedTextId?: string;
 };
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
@@ -492,6 +493,9 @@ function buildDetailImagePreviewItems(detail: MistakeDetailViewModel): DetailIma
         reviewTotal,
         imageIndexInSection: imageIndex + 1,
         imageTotalInSection,
+        relatedTextId: typeof record.note === 'string' && record.note.trim().length > 0
+          ? record.id
+          : undefined,
       });
     }
   }
@@ -2717,6 +2721,25 @@ export default function MistakeDetailScreen() {
       showToast,
       state,
     ],
+  );
+
+  const handleOpenImageBrowserText = useCallback(
+    (item: MistakeImageBrowserItem) => {
+      if (state.kind !== 'success' || !item.relatedTextId) {
+        return;
+      }
+
+      const record = state.detail.reviewRecords.find(
+        (candidate) => candidate.id === item.relatedTextId,
+      );
+      if (!record || typeof record.note !== 'string' || record.note.trim().length <= 0) {
+        showToast('文字讲解已发生变化，请刷新后重试。', 'info');
+        return;
+      }
+
+      handleOpenReviewTextEditor(record);
+    },
+    [handleOpenReviewTextEditor, showToast, state],
   );
 
   const handleCloseReviewTextEditor = useCallback(() => {
@@ -5075,6 +5098,7 @@ export default function MistakeDetailScreen() {
             initialIndex={imageBrowserInitialIndex}
             onClose={handleCloseImageBrowser}
             onImageLongPress={handleImageBrowserLongPress}
+            onOpenRelatedText={handleOpenImageBrowserText}
           />
         </ScreenContainer>
       </Animated.View>

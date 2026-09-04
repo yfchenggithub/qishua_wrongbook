@@ -27,6 +27,7 @@ export type MistakeImageBrowserItem = {
   uri: string;
   title: string;
   subtitle?: string;
+  relatedTextId?: string;
 };
 
 export type MistakeImageBrowserLongPressHelpers = {
@@ -42,6 +43,7 @@ export interface MistakeImageBrowserProps {
     item: MistakeImageBrowserItem,
     helpers: MistakeImageBrowserLongPressHelpers,
   ) => void;
+  onOpenRelatedText?: (item: MistakeImageBrowserItem) => void;
 }
 
 type Size = {
@@ -588,6 +590,7 @@ export function MistakeImageBrowser({
   initialIndex,
   onClose,
   onImageLongPress,
+  onOpenRelatedText,
 }: MistakeImageBrowserProps) {
   const normalizedItems = useMemo(() => {
     const result: NormalizedBrowserItem[] = [];
@@ -742,13 +745,30 @@ export function MistakeImageBrowser({
                 </Text>
               ) : null}
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="关闭大图浏览"
-              style={styles.closeButton}
-              onPress={onClose}>
-              <Text style={styles.closeButtonText}>关闭</Text>
-            </Pressable>
+            <View style={styles.headerActions}>
+              {activeItem?.relatedTextId && onOpenRelatedText ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="查看本次复做的文字讲解"
+                  onPress={() => onOpenRelatedText(activeItem)}
+                  style={({ pressed }) => [
+                    styles.relatedTextButton,
+                    pressed && styles.headerButtonPressed,
+                  ]}>
+                  <Text style={styles.relatedTextButtonText}>文字讲解</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="关闭大图浏览"
+                onPress={onClose}
+                style={({ pressed }) => [
+                  styles.closeButton,
+                  pressed && styles.headerButtonPressed,
+                ]}>
+                <Text style={styles.closeButtonText}>关闭</Text>
+              </Pressable>
+            </View>
           </View>
 
           <Animated.View
@@ -837,6 +857,26 @@ const styles = StyleSheet.create({
     color: '#C7D2FE',
     marginTop: 2,
   },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  relatedTextButton: {
+    minHeight: 36,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#7C3AED',
+    backgroundColor: 'rgba(124, 58, 237, 0.2)',
+    paddingHorizontal: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  relatedTextButtonText: {
+    ...typography.bodySmall,
+    color: '#DDD6FE',
+    fontWeight: '700',
+  },
   closeButton: {
     minHeight: 36,
     minWidth: 56,
@@ -851,6 +891,9 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.white,
     fontWeight: '700',
+  },
+  headerButtonPressed: {
+    opacity: 0.72,
   },
   body: {
     flex: 1,
