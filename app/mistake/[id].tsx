@@ -127,11 +127,15 @@ type DetailImagePreviewItem = {
   section: 'question' | 'solution' | 'answer' | 'review';
   title: string;
   subtitle?: string;
+  kind?: 'image' | 'text';
+  text?: string;
+  textHighlights?: TextHighlightRange[];
   reviewIndex?: number;
   reviewTotal?: number;
   imageIndexInSection?: number;
   imageTotalInSection?: number;
   relatedTextId?: string;
+  relatedTextItemId?: string;
 };
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
@@ -477,9 +481,9 @@ function buildDetailImagePreviewItems(detail: MistakeDetailViewModel): DetailIma
     const reviewIndex = normalizeReviewIndex(record.reviewIndex, recordIndex + 1, reviewTotal);
     const reviewTitle = `复做 ${reviewIndex}/${reviewTotal}`;
     const reviewUris = buildReviewPreviewImageUris(record);
-    if (reviewUris.length <= 0) {
-      continue;
-    }
+    const reviewText = typeof record.note === 'string' ? record.note.trim() : '';
+    const reviewTextItemId = `review:${record.id}:text`;
+    const relatedTextItemId = reviewText.length > 0 ? reviewTextItemId : undefined;
 
     const imageTotalInSection = reviewUris.length;
     for (let imageIndex = 0; imageIndex < reviewUris.length; imageIndex += 1) {
@@ -493,9 +497,23 @@ function buildDetailImagePreviewItems(detail: MistakeDetailViewModel): DetailIma
         reviewTotal,
         imageIndexInSection: imageIndex + 1,
         imageTotalInSection,
-        relatedTextId: typeof record.note === 'string' && record.note.trim().length > 0
-          ? record.id
-          : undefined,
+        relatedTextItemId,
+      });
+    }
+
+    if (reviewText.length > 0) {
+      previewItems.push({
+        id: reviewTextItemId,
+        kind: 'text',
+        uri: '',
+        text: reviewText,
+        textHighlights: record.noteHighlights,
+        section: 'review',
+        title: reviewTitle,
+        subtitle: '文字讲解',
+        reviewIndex,
+        reviewTotal,
+        relatedTextId: record.id,
       });
     }
   }
@@ -898,6 +916,7 @@ function ReviewRecordCard({
               emptyText="未添加文本讲解"
               maxLength={REVIEW_TEXT_NOTE_MAX_LENGTH}
               accessibilityLabel={`第 ${record.reviewIndex} 刷文字讲解`}
+              hintText="双击全屏查看"
               onOpen={() => onOpenText?.(record)}
               highlights={record.noteHighlights}
               textStyle={styles.reviewRecordTextNoteContent}
@@ -2740,6 +2759,18 @@ export default function MistakeDetailScreen() {
       handleOpenReviewTextEditor(record);
     },
     [handleOpenReviewTextEditor, showToast, state],
+  );
+
+  const handleOpenReviewTextPreview = useCallback(
+    (record: DetailReviewRecordItem) => {
+      const note = typeof record.note === 'string' ? record.note.trim() : '';
+      if (!note) {
+        handleOpenReviewTextEditor(record);
+        return;
+      }
+      openImageBrowser(`review:${record.id}:text`);
+    },
+    [handleOpenReviewTextEditor, openImageBrowser],
   );
 
   const handleCloseReviewTextEditor = useCallback(() => {
@@ -5045,7 +5076,7 @@ export default function MistakeDetailScreen() {
                           openReviewImagePickerActionSheet(targetRecord, 'add');
                         }}
                         onAddText={handleOpenReviewTextEditor}
-                        onOpenText={handleOpenReviewTextEditor}
+                        onOpenText={handleOpenReviewTextPreview}
                         onPreview={openImageBrowser}
                         onOpenImageActions={handleOpenReviewImageActions}
                         onToggleVoicePlayback={(targetRecord) => {

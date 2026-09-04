@@ -129,7 +129,7 @@ function buildHighlightedTextSegments(
   return segments;
 }
 
-function HighlightedText({
+export function HighlightedText({
   value,
   emptyText,
   highlights,

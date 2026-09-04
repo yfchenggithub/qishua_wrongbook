@@ -3,6 +3,7 @@ import {
   Image,
   Modal,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -19,7 +20,9 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { AppToast } from '@/src/components/ui/AppToast';
+import { HighlightedText } from '@/src/components/wrongbook/TextNoteEditor';
 import { useAppToast } from '@/src/hooks/useAppToast';
+import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import { colors, spacing, typography } from '@/src/styles/tokens';
 
 export type MistakeImageBrowserItem = {
@@ -27,7 +30,11 @@ export type MistakeImageBrowserItem = {
   uri: string;
   title: string;
   subtitle?: string;
+  kind?: 'image' | 'text';
+  text?: string;
+  textHighlights?: TextHighlightRange[];
   relatedTextId?: string;
+  relatedTextItemId?: string;
 };
 
 export type MistakeImageBrowserLongPressHelpers = {
@@ -51,9 +58,15 @@ type Size = {
   height: number;
 };
 
-type NormalizedBrowserItem = MistakeImageBrowserItem & {
-  normalizedUri: string;
-};
+type NormalizedBrowserItem =
+  | (MistakeImageBrowserItem & {
+    kind: 'image';
+    normalizedUri: string;
+  })
+  | (MistakeImageBrowserItem & {
+    kind: 'text';
+    text: string;
+  });
 
 type SwitchDirection = 'prev' | 'next';
 
@@ -584,6 +597,70 @@ function SwipeZoomImageStage({
   );
 }
 
+type TextPreviewStageProps = {
+  text: string;
+  highlights?: TextHighlightRange[];
+  canShowPrev: boolean;
+  canShowNext: boolean;
+  onRequestPrev: () => void;
+  onRequestNext: () => void;
+};
+
+function TextPreviewStage({
+  text,
+  highlights,
+  canShowPrev,
+  canShowNext,
+  onRequestPrev,
+  onRequestNext,
+}: TextPreviewStageProps) {
+  return (
+    <View style={styles.textStage}>
+      <ScrollView
+        accessibilityLabel="文字讲解全文"
+        contentContainerStyle={styles.textScrollContent}
+        persistentScrollbar
+        showsVerticalScrollIndicator>
+        <HighlightedText
+          value={text}
+          emptyText="暂无文字讲解"
+          highlights={highlights}
+          selectable
+          style={styles.textPreviewContent}
+          emptyTextStyle={styles.errorText}
+        />
+      </ScrollView>
+      <View style={styles.textNavigation}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="查看上一项内容"
+          disabled={!canShowPrev}
+          onPress={onRequestPrev}
+          style={({ pressed }) => [
+            styles.textNavigationButton,
+            !canShowPrev && styles.textNavigationButtonDisabled,
+            pressed && canShowPrev && styles.headerButtonPressed,
+          ]}>
+          <Text style={styles.textNavigationButtonText}>上一项</Text>
+        </Pressable>
+        <Text style={styles.textNavigationHint}>上下滚动查看全文</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="查看下一项内容"
+          disabled={!canShowNext}
+          onPress={onRequestNext}
+          style={({ pressed }) => [
+            styles.textNavigationButton,
+            !canShowNext && styles.textNavigationButtonDisabled,
+            pressed && canShowNext && styles.headerButtonPressed,
+          ]}>
+          <Text style={styles.textNavigationButtonText}>下一项</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 export function MistakeImageBrowser({
   visible,
   items,
@@ -595,12 +672,26 @@ export function MistakeImageBrowser({
   const normalizedItems = useMemo(() => {
     const result: NormalizedBrowserItem[] = [];
     for (const item of items) {
+      if (item.kind === 'text') {
+        const normalizedText = typeof item.text === 'string' ? item.text.trim() : '';
+        if (!normalizedText) {
+          continue;
+        }
+        result.push({
+          ...item,
+          kind: 'text',
+          text: normalizedText,
+        });
+        continue;
+      }
+
       const normalizedUri = normalizeUri(item.uri);
       if (!normalizedUri) {
         continue;
       }
       result.push({
         ...item,
+        kind: 'image',
         normalizedUri,
       });
     }
@@ -725,6 +816,24 @@ export function MistakeImageBrowser({
     animateSwitchToIndex(activeIndex + 1, 'next');
   }, [activeIndex, animateSwitchToIndex]);
 
+  const handleOpenActiveText = useCallback(() => {
+    if (!activeItem) {
+      return;
+    }
+    if (activeItem.kind === 'image' && activeItem.relatedTextItemId) {
+      const textIndex = normalizedItems.findIndex(
+        (item) => item.id === activeItem.relatedTextItemId,
+      );
+      if (textIndex >= 0) {
+        animateSwitchToIndex(textIndex, textIndex > activeIndex ? 'next' : 'prev');
+      }
+      return;
+    }
+    if (activeItem.kind === 'text' && activeItem.relatedTextId) {
+      onOpenRelatedText?.(activeItem);
+    }
+  }, [activeIndex, activeItem, animateSwitchToIndex, normalizedItems, onOpenRelatedText]);
+
   return (
     <Modal
       visible={visible}
@@ -737,7 +846,7 @@ export function MistakeImageBrowser({
           <View style={styles.header}>
             <View style={styles.headerTextWrap}>
               <Text numberOfLines={1} style={styles.title}>
-                {activeItem?.title ?? '图片预览'}
+                {activeItem?.title ?? '内容预览'}
               </Text>
               {activeItem?.subtitle ? (
                 <Text numberOfLines={1} style={styles.subtitle}>
@@ -746,21 +855,24 @@ export function MistakeImageBrowser({
               ) : null}
             </View>
             <View style={styles.headerActions}>
-              {activeItem?.relatedTextId && onOpenRelatedText ? (
+              {(activeItem?.kind === 'image' && activeItem.relatedTextItemId)
+                || (activeItem?.kind === 'text' && activeItem.relatedTextId && onOpenRelatedText) ? (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel="查看本次复做的文字讲解"
-                  onPress={() => onOpenRelatedText(activeItem)}
+                  accessibilityLabel={activeItem.kind === 'text' ? '编辑本次文字讲解' : '查看本次复做的文字讲解'}
+                  onPress={handleOpenActiveText}
                   style={({ pressed }) => [
                     styles.relatedTextButton,
                     pressed && styles.headerButtonPressed,
                   ]}>
-                  <Text style={styles.relatedTextButtonText}>文字讲解</Text>
+                  <Text style={styles.relatedTextButtonText}>
+                    {activeItem.kind === 'text' ? '编辑' : '文字讲解'}
+                  </Text>
                 </Pressable>
               ) : null}
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="关闭大图浏览"
+                accessibilityLabel="关闭全屏预览"
                 onPress={onClose}
                 style={({ pressed }) => [
                   styles.closeButton,
@@ -780,7 +892,7 @@ export function MistakeImageBrowser({
               }
               stageHeightRef.current = nextHeight;
             }}>
-            {activeItem ? (
+            {activeItem?.kind === 'image' ? (
               <SwipeZoomImageStage
                 key={activeItem.id}
                 uri={activeItem.normalizedUri}
@@ -789,19 +901,29 @@ export function MistakeImageBrowser({
                 onRequestPrev={handleSwitchPrev}
                 onRequestNext={handleSwitchNext}
                 onReachFirstBoundary={() => {
-                  showBrowserToast('当前是第一张');
+                  showBrowserToast('当前是第一项');
                 }}
                 onReachLastBoundary={() => {
-                  showBrowserToast('当前是最后一张');
+                  showBrowserToast('当前是最后一项');
                 }}
                 onSingleTapClose={onClose}
                 onLongPressImage={() => {
                   onImageLongPress?.(activeItem, { showToast: showBrowserToast });
                 }}
               />
+            ) : activeItem?.kind === 'text' ? (
+              <TextPreviewStage
+                key={activeItem.id}
+                text={activeItem.text}
+                highlights={activeItem.textHighlights}
+                canShowPrev={canSwipePrev}
+                canShowNext={canSwipeNext}
+                onRequestPrev={handleSwitchPrev}
+                onRequestNext={handleSwitchNext}
+              />
             ) : (
               <View style={styles.emptyWrap}>
-                <Text style={styles.errorText}>暂无可预览图片。</Text>
+                <Text style={styles.errorText}>暂无可预览内容。</Text>
               </View>
             )}
           </Animated.View>
@@ -894,6 +1016,56 @@ const styles = StyleSheet.create({
   },
   headerButtonPressed: {
     opacity: 0.72,
+  },
+  textStage: {
+    flex: 1,
+    borderRadius: spacing.md,
+    backgroundColor: '#111827',
+    overflow: 'hidden',
+  },
+  textScrollContent: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
+  },
+  textPreviewContent: {
+    ...typography.body,
+    color: colors.white,
+    fontSize: 18,
+    lineHeight: 30,
+  },
+  textNavigation: {
+    minHeight: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255, 255, 255, 0.22)',
+    paddingHorizontal: spacing.sm,
+  },
+  textNavigationButton: {
+    minHeight: 34,
+    minWidth: 64,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  textNavigationButtonDisabled: {
+    opacity: 0.35,
+  },
+  textNavigationButtonText: {
+    ...typography.bodySmall,
+    color: colors.white,
+    fontWeight: '700',
+  },
+  textNavigationHint: {
+    ...typography.caption,
+    flex: 1,
+    color: '#C7D2FE',
+    textAlign: 'center',
   },
   body: {
     flex: 1,
