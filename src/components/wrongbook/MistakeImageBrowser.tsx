@@ -23,6 +23,10 @@ import { AppToast } from '@/src/components/ui/AppToast';
 import { HighlightedText } from '@/src/components/wrongbook/TextNoteEditor';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
+import {
+  markImageBrowserGestureGuideSeen,
+  shouldShowImageBrowserGestureGuide,
+} from '@/src/services/ImageBrowserGuideService';
 import { colors, spacing, typography } from '@/src/styles/tokens';
 
 export type MistakeImageBrowserItem = {
@@ -80,6 +84,8 @@ const SWIPE_SWITCH_VELOCITY = 760;
 const SWITCH_EXIT_DURATION_MS = 140;
 const SWITCH_ENTER_DURATION_MS = 170;
 const TAP_GUARD_RELEASE_DELAY_MS = 240;
+const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
+const GESTURE_HINT_FADE_DURATION_MS = 220;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -179,6 +185,8 @@ type SwipeZoomImageStageProps = {
   onReachFirstBoundary: () => void;
   onReachLastBoundary: () => void;
   onSingleTapClose: () => void;
+  onUserInteraction: () => void;
+  isGestureHintVisible: boolean;
   onLongPressImage?: () => void;
 };
 
@@ -191,6 +199,8 @@ function SwipeZoomImageStage({
   onReachFirstBoundary,
   onReachLastBoundary,
   onSingleTapClose,
+  onUserInteraction,
+  isGestureHintVisible,
   onLongPressImage,
 }: SwipeZoomImageStageProps) {
   const [imageFailed, setImageFailed] = useState(false);
@@ -212,6 +222,7 @@ function SwipeZoomImageStage({
   const contentHeight = useSharedValue(0);
   const hasPanMotion = useSharedValue(0);
   const suppressSingleTap = useSharedValue(0);
+  const gestureHintOpacity = useSharedValue(0);
 
   const containedSize = useMemo(
     () => computeContainedSize(containerSizeState, intrinsicSize),
@@ -292,6 +303,16 @@ function SwipeZoomImageStage({
     ],
   }));
 
+  const animatedGestureHintStyle = useAnimatedStyle(() => ({
+    opacity: gestureHintOpacity.value,
+  }));
+
+  useEffect(() => {
+    gestureHintOpacity.value = withTiming(isGestureHintVisible ? 1 : 0, {
+      duration: isGestureHintVisible ? 160 : GESTURE_HINT_FADE_DURATION_MS,
+    });
+  }, [gestureHintOpacity, isGestureHintVisible]);
+
   const singleTapGesture = Gesture.Tap()
     .shouldCancelWhenOutside(false)
     .maxDuration(250)
@@ -302,6 +323,7 @@ function SwipeZoomImageStage({
       if (hasPanMotion.value > 0.5 || suppressSingleTap.value > 0.5) {
         return;
       }
+      runOnJS(onUserInteraction)();
       runOnJS(onSingleTapClose)();
     });
 
@@ -313,6 +335,8 @@ function SwipeZoomImageStage({
       if (!success) {
         return;
       }
+
+      runOnJS(onUserInteraction)();
 
       const currentScale = scale.value;
       const nextScale = currentScale > MIN_SCALE + 0.05 ? MIN_SCALE : DOUBLE_TAP_SCALE;
@@ -353,6 +377,7 @@ function SwipeZoomImageStage({
   const pinchGesture = Gesture.Pinch()
     .shouldCancelWhenOutside(false)
     .onStart(() => {
+      runOnJS(onUserInteraction)();
       pinchStartScale.value = scale.value;
       pinchStartX.value = translateX.value;
       pinchStartY.value = translateY.value;
@@ -424,6 +449,7 @@ function SwipeZoomImageStage({
     .minDistance(1)
     .maxPointers(1)
     .onStart(() => {
+      runOnJS(onUserInteraction)();
       hasPanMotion.value = 0;
       suppressSingleTap.value = 1;
       panStartX.value = translateX.value;
@@ -526,6 +552,7 @@ function SwipeZoomImageStage({
     .minDuration(520)
     .maxDistance(12)
     .onStart(() => {
+      runOnJS(onUserInteraction)();
       suppressSingleTap.value = 1;
       hasPanMotion.value = 1;
       if (onLongPressImage) {
@@ -587,10 +614,13 @@ function SwipeZoomImageStage({
           ) : (
             <Text style={styles.errorText}>图片加载失败，请返回重试。</Text>
           )}
-
-          <View pointerEvents="none" style={styles.gestureHintWrap}>
-            <Text style={styles.gestureHintText}>上下滑动切图 · 双击放大 · 双指缩放 · 拖动查看 · 长按保存/分享 · 单击关闭</Text>
-          </View>
+          <Animated.View
+            pointerEvents="none"
+            style={[styles.gestureHintWrap, animatedGestureHintStyle]}>
+            <Text style={styles.gestureHintText}>
+              上下滑动切图 · 双击放大 · 双指缩放 · 长按保存/分享
+            </Text>
+          </Animated.View>
         </View>
       </Animated.View>
     </GestureDetector>
@@ -699,8 +729,10 @@ export function MistakeImageBrowser({
   }, [items]);
 
   const [activeIndex, setActiveIndex] = useState(0);
+  const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
   const switchingRef = useRef(false);
   const stageHeightRef = useRef(0);
+  const gestureGuideHandledRef = useRef(false);
   const {
     props: toastProps,
     showToast: showBrowserToast,
@@ -713,6 +745,10 @@ export function MistakeImageBrowser({
     opacity: stageOpacity.value,
     transform: [{ translateY: stageTranslateY.value }],
   }));
+
+  const hideGestureHint = useCallback(() => {
+    setIsGestureHintVisible(false);
+  }, []);
 
   const resolveStageTravelDistance = useCallback(() => {
     const measuredHeight = stageHeightRef.current;
@@ -798,6 +834,7 @@ export function MistakeImageBrowser({
     if (visible) {
       return;
     }
+    setIsGestureHintVisible(false);
     switchingRef.current = false;
     stageTranslateY.value = 0;
     stageOpacity.value = 1;
@@ -807,6 +844,42 @@ export function MistakeImageBrowser({
   const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
   const canSwipePrev = activeIndex > 0;
   const canSwipeNext = activeIndex < normalizedItems.length - 1;
+
+  useEffect(() => {
+    if (!visible || activeItem?.kind !== 'image' || gestureGuideHandledRef.current) {
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      const shouldShow = await shouldShowImageBrowserGestureGuide();
+      if (cancelled || !shouldShow) {
+        return;
+      }
+
+      gestureGuideHandledRef.current = true;
+      setIsGestureHintVisible(true);
+      void markImageBrowserGestureGuideSeen();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeItem?.kind, visible]);
+
+  useEffect(() => {
+    if (!isGestureHintVisible) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setIsGestureHintVisible(false);
+    }, GESTURE_HINT_VISIBLE_DURATION_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isGestureHintVisible]);
 
   const handleSwitchPrev = useCallback(() => {
     animateSwitchToIndex(activeIndex - 1, 'prev');
@@ -907,6 +980,8 @@ export function MistakeImageBrowser({
                   showBrowserToast('当前是最后一项');
                 }}
                 onSingleTapClose={onClose}
+                onUserInteraction={hideGestureHint}
+                isGestureHintVisible={isGestureHintVisible}
                 onLongPressImage={() => {
                   onImageLongPress?.(activeItem, { showToast: showBrowserToast });
                 }}
