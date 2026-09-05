@@ -38,11 +38,21 @@ export function PhotoPickerSection({
   return (
     <SurfaceCard padding={0} style={[styles.container, compact && styles.containerCompact]}>
       {images.length === 0 ? (
-        <View style={[styles.empty, compact && styles.emptyCompact]}>
+        <Pressable
+          accessibilityLabel={emptyTitle}
+          accessibilityRole="button"
+          disabled={busy}
+          onPress={onTakePhoto}
+          style={({ pressed }) => [
+            styles.empty,
+            compact && styles.emptyCompact,
+            pressed && styles.pressed,
+            busy && styles.dimmed,
+          ]}>
           <MaterialIcons name={icon} size={compact ? 40 : 54} color={colors.textTertiary} />
           <Text style={styles.emptyTitle}>{emptyTitle}</Text>
           <Text style={styles.emptySubtitle}>{emptySubtitle}</Text>
-        </View>
+        </Pressable>
       ) : (
         <FlatList
           data={images}
