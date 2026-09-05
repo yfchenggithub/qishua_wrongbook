@@ -12,6 +12,10 @@ import Animated, {
 
 import { AppToast } from '@/src/components/ui/AppToast';
 import { useAppToast } from '@/src/hooks/useAppToast';
+import {
+  markImageBrowserGestureGuideSeen,
+  shouldShowImageBrowserGestureGuide,
+} from '@/src/services/ImageBrowserGuideService';
 import { Logger } from '@/src/services/Logger';
 import { colors, spacing, typography } from '@/src/styles/tokens';
 
@@ -48,6 +52,8 @@ const DOUBLE_TAP_SCALE = 2;
 const LEGACY_DOUBLE_TAP_DELAY = 300;
 const EDGE_RESISTANCE = 0.22;
 const TAP_GUARD_RELEASE_DELAY_MS = 240;
+const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
+const GESTURE_HINT_FADE_DURATION_MS = 220;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -150,8 +156,10 @@ export function ImagePreviewModal({
   const [imageFailed, setImageFailed] = useState(false);
   const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
   const [containerSizeState, setContainerSizeState] = useState<Size>({ width: 0, height: 0 });
+  const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
   const lastTapRef = useRef(0);
   const gestureSessionRef = useRef(0);
+  const gestureGuideCheckedForOpenRef = useRef(false);
   const {
     props: toastProps,
     showToast: showPreviewToast,
@@ -171,6 +179,7 @@ export function ImagePreviewModal({
   const contentWidth = useSharedValue(0);
   const contentHeight = useSharedValue(0);
   const suppressSingleTap = useSharedValue(0);
+  const gestureHintOpacity = useSharedValue(0);
 
   const normalizedUri = useMemo(() => normalizeUri(uri), [uri]);
   const canShowImage = visible && !!normalizedUri && !imageFailed;
@@ -222,6 +231,10 @@ export function ImagePreviewModal({
     onClose();
   }
 
+  const hideGestureHint = useCallback(() => {
+    setIsGestureHintVisible(false);
+  }, []);
+
   useEffect(() => {
     setImageFailed(false);
     setIntrinsicSize(null);
@@ -258,8 +271,46 @@ export function ImagePreviewModal({
     if (visible) {
       return;
     }
+    setIsGestureHintVisible(false);
+    gestureGuideCheckedForOpenRef.current = false;
     hideToast();
   }, [hideToast, visible]);
+
+  useEffect(() => {
+    if (!visible || !normalizedUri || gestureGuideCheckedForOpenRef.current) {
+      return;
+    }
+
+    gestureGuideCheckedForOpenRef.current = true;
+    let cancelled = false;
+    void (async () => {
+      const shouldShow = await shouldShowImageBrowserGestureGuide();
+      if (cancelled || !shouldShow) {
+        return;
+      }
+
+      setIsGestureHintVisible(true);
+      void markImageBrowserGestureGuideSeen();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedUri, visible]);
+
+  useEffect(() => {
+    if (!isGestureHintVisible) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setIsGestureHintVisible(false);
+    }, GESTURE_HINT_VISIBLE_DURATION_MS);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [isGestureHintVisible]);
 
   const handleImageLongPress = useCallback(() => {
     if (!normalizedUri || !onImageLongPress) {
@@ -361,6 +412,16 @@ export function ImagePreviewModal({
     ],
   }));
 
+  const animatedGestureHintStyle = useAnimatedStyle(() => ({
+    opacity: gestureHintOpacity.value,
+  }));
+
+  useEffect(() => {
+    gestureHintOpacity.value = withTiming(isGestureHintVisible ? 1 : 0, {
+      duration: isGestureHintVisible ? 160 : GESTURE_HINT_FADE_DURATION_MS,
+    });
+  }, [gestureHintOpacity, isGestureHintVisible]);
+
   const singleTapGesture = Gesture.Tap()
     .enabled(isZoomable)
     .shouldCancelWhenOutside(false)
@@ -373,6 +434,7 @@ export function ImagePreviewModal({
         return;
       }
 
+      runOnJS(hideGestureHint)();
       runOnJS(handleClose)('preview_single_tap_close', {
         scale: scale.value,
         translateX: translateX.value,
@@ -390,6 +452,7 @@ export function ImagePreviewModal({
         return;
       }
 
+      runOnJS(hideGestureHint)();
       const currentScale = scale.value;
       const nextScale = currentScale > MIN_SCALE + 0.05 ? MIN_SCALE : DOUBLE_TAP_SCALE;
       runOnJS(logInfo)('preview_double_tap', {
@@ -444,6 +507,7 @@ export function ImagePreviewModal({
     .enabled(isZoomable)
     .shouldCancelWhenOutside(false)
     .onStart((event) => {
+      runOnJS(hideGestureHint)();
       gestureSessionRef.current += 1;
       pinchStartScale.value = scale.value;
       pinchStartX.value = translateX.value;
@@ -525,6 +589,7 @@ export function ImagePreviewModal({
     .minDistance(1)
     .maxPointers(1)
     .onStart(() => {
+      runOnJS(hideGestureHint)();
       gestureSessionRef.current += 1;
       panStartX.value = translateX.value;
       panStartY.value = translateY.value;
@@ -598,6 +663,7 @@ export function ImagePreviewModal({
     .minDuration(520)
     .maxDistance(12)
     .onStart(() => {
+      runOnJS(hideGestureHint)();
       suppressSingleTap.value = 1;
       runOnJS(handleImageLongPress)();
     })
@@ -616,6 +682,7 @@ export function ImagePreviewModal({
   );
 
   const handleLegacyContentPress = () => {
+    hideGestureHint();
     const now = Date.now();
     if (now - lastTapRef.current < LEGACY_DOUBLE_TAP_DELAY) {
       handleClose('preview_legacy_double_tap_close');
@@ -653,13 +720,15 @@ export function ImagePreviewModal({
         />
       )}
 
-      <View pointerEvents="none" style={styles.gestureHintWrap}>
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.gestureHintWrap, animatedGestureHintStyle]}>
         <Text style={styles.gestureHintText}>
           {isZoomable
             ? `单击关闭 · 双击放大 · 双指缩放 · 拖动查看${hasLongPressAction ? ' · 长按分享/保存' : ''}`
             : '双击关闭预览'}
         </Text>
-      </View>
+      </Animated.View>
     </>
   ) : (
     <Text style={styles.errorText}>

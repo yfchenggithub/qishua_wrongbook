@@ -732,7 +732,7 @@ export function MistakeImageBrowser({
   const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
   const switchingRef = useRef(false);
   const stageHeightRef = useRef(0);
-  const gestureGuideHandledRef = useRef(false);
+  const gestureGuideCheckedForOpenRef = useRef(false);
   const {
     props: toastProps,
     showToast: showBrowserToast,
@@ -835,6 +835,7 @@ export function MistakeImageBrowser({
       return;
     }
     setIsGestureHintVisible(false);
+    gestureGuideCheckedForOpenRef.current = false;
     switchingRef.current = false;
     stageTranslateY.value = 0;
     stageOpacity.value = 1;
@@ -846,10 +847,11 @@ export function MistakeImageBrowser({
   const canSwipeNext = activeIndex < normalizedItems.length - 1;
 
   useEffect(() => {
-    if (!visible || activeItem?.kind !== 'image' || gestureGuideHandledRef.current) {
+    if (!visible || activeItem?.kind !== 'image' || gestureGuideCheckedForOpenRef.current) {
       return;
     }
 
+    gestureGuideCheckedForOpenRef.current = true;
     let cancelled = false;
     void (async () => {
       const shouldShow = await shouldShowImageBrowserGestureGuide();
@@ -857,7 +859,6 @@ export function MistakeImageBrowser({
         return;
       }
 
-      gestureGuideHandledRef.current = true;
       setIsGestureHintVisible(true);
       void markImageBrowserGestureGuideSeen();
     })();
