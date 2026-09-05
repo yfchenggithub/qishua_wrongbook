@@ -1,3 +1,4 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -35,6 +36,12 @@ export interface ImagePreviewModalProps {
   onClose: () => void;
   interactionMode?: 'legacy' | 'zoomable';
   logSource?: string;
+  footerAction?: {
+    label: string;
+    icon?: keyof typeof MaterialIcons.glyphMap;
+    disabled?: boolean;
+    onPress: () => void;
+  };
   onImageLongPress?: (
     item: ImagePreviewModalImageActionItem,
     helpers: ImagePreviewModalLongPressHelpers,
@@ -151,6 +158,7 @@ export function ImagePreviewModal({
   onClose,
   interactionMode = 'legacy',
   logSource = 'unknown',
+  footerAction,
   onImageLongPress,
 }: ImagePreviewModalProps) {
   const [imageFailed, setImageFailed] = useState(false);
@@ -813,6 +821,28 @@ export function ImagePreviewModal({
             </Pressable>
           )}
 
+          {footerAction && canShowImage ? (
+            <View style={styles.footer}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={footerAction.label}
+                disabled={footerAction.disabled}
+                onPress={footerAction.onPress}
+                style={({ pressed }) => [
+                  styles.footerAction,
+                  pressed && !footerAction.disabled && styles.footerActionPressed,
+                  footerAction.disabled && styles.footerActionDisabled,
+                ]}>
+                <MaterialIcons
+                  name={footerAction.icon ?? 'crop'}
+                  size={22}
+                  color={colors.white}
+                />
+                <Text style={styles.footerActionText}>{footerAction.label}</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <AppToast
             {...toastProps}
             bottomOffset={spacing.xl}
@@ -873,6 +903,32 @@ const styles = StyleSheet.create({
   },
   contentPressed: {
     opacity: 0.96,
+  },
+  footer: {
+    paddingTop: spacing.md,
+    alignItems: 'center',
+  },
+  footerAction: {
+    minHeight: 48,
+    minWidth: 168,
+    borderRadius: 999,
+    backgroundColor: colors.accent,
+    paddingHorizontal: spacing.xl,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.sm,
+  },
+  footerActionPressed: {
+    opacity: 0.72,
+  },
+  footerActionDisabled: {
+    opacity: 0.4,
+  },
+  footerActionText: {
+    ...typography.body,
+    color: colors.white,
+    fontWeight: '700',
   },
   imageWrap: {
     width: '100%',

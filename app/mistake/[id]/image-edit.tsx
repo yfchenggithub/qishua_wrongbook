@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { File } from 'expo-file-system';
 
 import { CardContainer, ScreenContainer } from '@/src/components';
+import * as AddDraftImageEditService from '@/src/services/AddDraftImageEditService';
 import type { ImageSlot } from '@/src/services/ImageProcessService';
 import * as ImageProcessService from '@/src/services/ImageProcessService';
 import * as ImageStorageService from '@/src/services/ImageStorageService';
@@ -77,6 +78,9 @@ type PageState =
       imageType: CropImageType;
       reviewRecordId: string | null;
       draftEditId: string | null;
+      addDraftEditId: string | null;
+      sourceImageId: string | null;
+      imageIndex: number | null;
       title: string;
       sourceUri: string;
       sourceWidth: number;
@@ -331,8 +335,14 @@ function toAngleDeltaDegrees(currentAngleRad: number, startAngleRad: number): nu
   return (delta * 180) / Math.PI;
 }
 
-function buildDefaultCropRect(displayedRect: ImageRect, slot: ImageSlot): ImageRect {
-  const percent = DEFAULT_CROP_PERCENT[slot];
+function buildDefaultCropRect(
+  displayedRect: ImageRect,
+  slot: ImageSlot,
+  useFullImage = false,
+): ImageRect {
+  const percent = useFullImage
+    ? { x: 0, y: 0, width: 1, height: 1 }
+    : DEFAULT_CROP_PERCENT[slot];
   return {
     x: displayedRect.x + displayedRect.width * percent.x,
     y: displayedRect.y + displayedRect.height * percent.y,
@@ -488,7 +498,18 @@ function parseCropRectToSourceRect(
 export default function MistakeImageEditScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { id, imageSlot, imageType, sourceUri, oldImageUri, reviewRecordId, draftEditId } = useLocalSearchParams<{
+  const {
+    id,
+    imageSlot,
+    imageType,
+    sourceUri,
+    oldImageUri,
+    reviewRecordId,
+    draftEditId,
+    addDraftEditId,
+    sourceImageId,
+    imageIndex,
+  } = useLocalSearchParams<{
     id?: string | string[];
     imageSlot?: string | string[];
     imageType?: string | string[];
@@ -496,6 +517,9 @@ export default function MistakeImageEditScreen() {
     oldImageUri?: string | string[];
     reviewRecordId?: string | string[];
     draftEditId?: string | string[];
+    addDraftEditId?: string | string[];
+    sourceImageId?: string | string[];
+    imageIndex?: string | string[];
   }>();
 
   const routeMistakeId = useMemo(() => normalizeRouteText(id), [id]);
@@ -505,6 +529,13 @@ export default function MistakeImageEditScreen() {
   const routeOldImageUri = useMemo(() => normalizeRouteText(oldImageUri), [oldImageUri]);
   const routeReviewRecordId = useMemo(() => normalizeRouteText(reviewRecordId), [reviewRecordId]);
   const routeDraftEditId = useMemo(() => normalizeRouteText(draftEditId), [draftEditId]);
+  const routeAddDraftEditId = useMemo(() => normalizeRouteText(addDraftEditId), [addDraftEditId]);
+  const routeSourceImageId = useMemo(() => normalizeRouteText(sourceImageId), [sourceImageId]);
+  const routeImageIndex = useMemo(() => {
+    const normalized = normalizeRouteText(imageIndex);
+    const parsed = normalized ? Number.parseInt(normalized, 10) : Number.NaN;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }, [imageIndex]);
 
   const [state, setState] = useState<PageState>({ kind: 'loading' });
   const [isImageSizeLoading, setIsImageSizeLoading] = useState(true);
@@ -628,7 +659,10 @@ export default function MistakeImageEditScreen() {
 
     setCropBox((current) => {
       if (!current) {
-        return clampCropRect(buildDefaultCropRect(displayedImageRect, state.imageSlot), displayedImageRect);
+        return clampCropRect(
+          buildDefaultCropRect(displayedImageRect, state.imageSlot, !!state.addDraftEditId),
+          displayedImageRect,
+        );
       }
       return clampCropRect(current, displayedImageRect);
     });
@@ -656,10 +690,18 @@ export default function MistakeImageEditScreen() {
       }
       const isReviewImage = resolvedImageType === 'review_solution';
       const isDraftReviewImage = isReviewImage && !!routeDraftEditId && !routeReviewRecordId;
+      const isAddDraftQuestion = resolvedImageType === 'question' && !!routeAddDraftEditId;
       if (isReviewImage && !routeReviewRecordId && !routeDraftEditId) {
         setState({
           kind: 'error',
           message: '复做记录参数无效，请返回重试。',
+        });
+        return;
+      }
+      if (isAddDraftQuestion && (!routeSourceUri || !routeSourceImageId)) {
+        setState({
+          kind: 'error',
+          message: '题目图片参数无效，请返回重试。',
         });
         return;
       }
@@ -671,61 +713,67 @@ export default function MistakeImageEditScreen() {
         mistakeId: routeMistakeId,
         reviewRecordId: routeReviewRecordId,
         draftEditId: routeDraftEditId,
+        addDraftEditId: routeAddDraftEditId,
+        sourceImageId: routeSourceImageId,
         imageSlot: resolvedImageSlot,
         imageType: resolvedImageType,
         sourceUriShort: toShortUri(routeSourceUri),
         oldImageUriShort: toShortUri(routeOldImageUri),
       });
 
-      const detailResult = await MistakeDetailService.getMistakeDetail(routeMistakeId);
-      if (cancelled) {
-        return;
-      }
+      let detailUri: string | null = '';
+      if (!isAddDraftQuestion) {
+        const detailResult = await MistakeDetailService.getMistakeDetail(routeMistakeId);
+        if (cancelled) {
+          return;
+        }
 
-      if (!detailResult.ok || !detailResult.detail) {
-        setState({
-          kind: 'error',
-          message: detailResult.errorMessage ?? '读取图片失败，请返回重试。',
-        });
-        return;
-      }
+        if (!detailResult.ok || !detailResult.detail) {
+          setState({
+            kind: 'error',
+            message: detailResult.errorMessage ?? '读取图片失败，请返回重试。',
+          });
+          return;
+        }
 
-      const detailUri =
-        resolvedImageType === 'review_solution'
-          ? (() => {
-              if (isDraftReviewImage) {
-                return '';
-              }
-              const record = detailResult.detail.reviewRecords.find((item) => item.id === routeReviewRecordId);
-              if (!record) {
-                setState({
-                  kind: 'error',
-                  message: '复做记录不存在，请返回重试。',
-                });
-                return null;
-              }
-              const uri = typeof record.solutionImageUri === 'string' ? record.solutionImageUri.trim() : '';
-              if (record.solutionImageExists === false && !routeSourceUri) {
-                setState({
-                  kind: 'error',
-                  message: '图片文件不存在，请重新拍照。',
-                });
-                return null;
-              }
-              return uri;
-            })()
-          : (() => {
-              const slot = detailResult.detail.imageSlots.find((item) => item.type === resolvedImageType);
-              const uri = typeof slot?.uri === 'string' ? slot.uri.trim() : '';
-              if (slot?.exists === false && !routeSourceUri) {
-                setState({
-                  kind: 'error',
-                  message: '图片文件不存在，请重新拍照。',
-                });
-                return null;
-              }
-              return uri;
-            })();
+        const detail = detailResult.detail;
+        detailUri =
+          resolvedImageType === 'review_solution'
+            ? (() => {
+                if (isDraftReviewImage) {
+                  return '';
+                }
+                const record = detail.reviewRecords.find((item) => item.id === routeReviewRecordId);
+                if (!record) {
+                  setState({
+                    kind: 'error',
+                    message: '复做记录不存在，请返回重试。',
+                  });
+                  return null;
+                }
+                const uri = typeof record.solutionImageUri === 'string' ? record.solutionImageUri.trim() : '';
+                if (record.solutionImageExists === false && !routeSourceUri) {
+                  setState({
+                    kind: 'error',
+                    message: '图片文件不存在，请重新拍照。',
+                  });
+                  return null;
+                }
+                return uri;
+              })()
+            : (() => {
+                const slot = detail.imageSlots.find((item) => item.type === resolvedImageType);
+                const uri = typeof slot?.uri === 'string' ? slot.uri.trim() : '';
+                if (slot?.exists === false && !routeSourceUri) {
+                  setState({
+                    kind: 'error',
+                    message: '图片文件不存在，请重新拍照。',
+                  });
+                  return null;
+                }
+                return uri;
+              })();
+      }
       if (detailUri === null) {
         return;
       }
@@ -808,7 +856,10 @@ export default function MistakeImageEditScreen() {
         imageType: resolvedImageType,
         reviewRecordId: resolvedImageType === 'review_solution' ? routeReviewRecordId : null,
         draftEditId: isDraftReviewImage ? routeDraftEditId : null,
-        title: getImageTitle(resolvedImageSlot, resolvedImageType),
+        addDraftEditId: isAddDraftQuestion ? routeAddDraftEditId : null,
+        sourceImageId: isAddDraftQuestion ? routeSourceImageId : null,
+        imageIndex: isAddDraftQuestion ? routeImageIndex : null,
+        title: isAddDraftQuestion ? '框选题目' : getImageTitle(resolvedImageSlot, resolvedImageType),
         sourceUri: preparedSource.uri,
         sourceWidth: preparedSource.width,
         sourceHeight: preparedSource.height,
@@ -823,12 +874,15 @@ export default function MistakeImageEditScreen() {
       cancelled = true;
     };
   }, [
+    routeAddDraftEditId,
     routeDraftEditId,
+    routeImageIndex,
     routeImageSlot,
     routeImageType,
     routeMistakeId,
     routeOldImageUri,
     routeReviewRecordId,
+    routeSourceImageId,
     routeSourceUri,
   ]);
 
@@ -1038,14 +1092,55 @@ export default function MistakeImageEditScreen() {
         throw new Error('Invalid page state.');
       }
 
-      Logger.info(PAGE_SCOPE, 'Start database update for cropped image.', {
+      Logger.info(PAGE_SCOPE, 'Start committing cropped image.', {
         mistakeId: state.mistakeId,
         reviewRecordId: state.reviewRecordId,
+        addDraftEditId: state.addDraftEditId,
         imageSlot: state.imageSlot,
         imageType: state.imageType,
         newImageUriShort: toShortUri(nextImageUri),
         fileSize: nextFileSize,
       });
+
+      if (state.addDraftEditId) {
+        if (!state.sourceImageId) {
+          throw new Error('题目图片参数无效，请返回重试。');
+        }
+
+        const savedResult = await ImageStorageService.saveTempImageToMistakeFolder({
+          mistakeId: state.mistakeId,
+          type: 'question',
+          tempUri: nextImageUri,
+          width: nextWidth,
+          height: nextHeight,
+          fileSize: nextFileSize,
+          index: state.imageIndex ?? undefined,
+        });
+        if (!savedResult.ok || !savedResult.image) {
+          throw new Error(savedResult.errorMessage ?? '裁剪后的题目图片保存失败。');
+        }
+
+        try {
+          AddDraftImageEditService.saveAddDraftImageEditResult({
+            editId: state.addDraftEditId,
+            draftId: state.mistakeId,
+            sourceImageId: state.sourceImageId,
+            image: savedResult.image,
+          });
+        } catch (error) {
+          await ImageStorageService.deleteLocalImage(savedResult.image.uri);
+          throw error;
+        }
+
+        await ImageStorageService.deleteLocalImage(nextImageUri);
+        Logger.info(PAGE_SCOPE, 'Saved cropped add-draft question image result.', {
+          mistakeId: state.mistakeId,
+          addDraftEditId: state.addDraftEditId,
+          sourceImageId: state.sourceImageId,
+          imageSlot: state.imageSlot,
+        });
+        return;
+      }
 
       if (state.imageType === 'review_solution') {
         if (state.draftEditId) {
@@ -1248,7 +1343,7 @@ export default function MistakeImageEditScreen() {
           await cleanupNewImageIfNeeded(processed.uri);
           throw dbError;
         }
-        if (!state.draftEditId) {
+        if (!state.draftEditId && !state.addDraftEditId) {
           await deleteOldImageAfterSuccess(state.oldImageUri, processed.uri);
         }
 
@@ -1427,7 +1522,7 @@ export default function MistakeImageEditScreen() {
       return;
     }
 
-    if (IS_CROP_DEBUG_ENABLED) {
+    if (IS_CROP_DEBUG_ENABLED && state.kind === 'success' && !state.addDraftEditId) {
       try {
         const debugSnapshot = await collectCropDebugSnapshot(cropRect);
         Logger.info(PAGE_SCOPE, '[CROP_DEBUG] Pre-save snapshot.', debugSnapshot);
@@ -1645,7 +1740,7 @@ export default function MistakeImageEditScreen() {
               {editMode === 'crop' && hasPendingRotation ? (
                 <Text style={styles.pendingRotationText}>有未应用旋转，请先应用或重置。</Text>
               ) : null}
-              {IS_CROP_DEBUG_ENABLED && editMode === 'crop' ? (
+              {IS_CROP_DEBUG_ENABLED && !state.addDraftEditId && editMode === 'crop' ? (
                 <View style={styles.debugRow}>
                   <Text numberOfLines={1} style={styles.debugSessionText}>
                     调试会话: {debugSessionIdRef.current}
@@ -1784,7 +1879,7 @@ export default function MistakeImageEditScreen() {
               ) : null}
             </View>
 
-            {IS_CROP_DEBUG_ENABLED && editMode === 'crop' && debugProbePreview ? (
+            {IS_CROP_DEBUG_ENABLED && !state.addDraftEditId && editMode === 'crop' && debugProbePreview ? (
               <View style={styles.debugPreviewBlock}>
                 <Text style={styles.debugPreviewTitle}>调试预演输出（不入库）</Text>
                 <Image source={{ uri: debugProbePreview.uri }} style={styles.debugPreviewImage} resizeMode="contain" />
@@ -1836,7 +1931,13 @@ export default function MistakeImageEditScreen() {
               (isProcessing || (editMode === 'rotate' && !hasPendingRotation)) && styles.disabled,
             ]}>
             <Text style={styles.bottomButtonPrimaryText}>
-              {isProcessing ? '处理中...' : editMode === 'rotate' ? '重置角度' : '保存裁剪'}
+              {isProcessing
+                ? '处理中...'
+                : editMode === 'rotate'
+                  ? '重置角度'
+                  : state.addDraftEditId
+                    ? '应用框选'
+                    : '保存裁剪'}
             </Text>
           </Pressable>
         </View>

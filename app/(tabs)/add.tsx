@@ -10,7 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 
 import {
   AddMistakeProgress,
@@ -35,6 +35,7 @@ import type { CustomErrorReason } from '@/src/models/CustomErrorReason';
 import type { CustomModule } from '@/src/models/CustomModule';
 import type { ImageBatchProgress, LocalImage, LocalImageType } from '@/src/models/LocalImage';
 import { MistakeRepository } from '@/src/repositories/MistakeRepository';
+import * as AddDraftImageEditService from '@/src/services/AddDraftImageEditService';
 import { createEmptyAddMistakeDraft, validateAddMistakeDraft } from '@/src/services/AddMistakeValidationService';
 import {
   loadLastSelectedModuleId,
@@ -62,9 +63,20 @@ type SharedImageSearchParams = {
   sharedImageError?: string | string[];
 };
 
+type PendingQuestionCrop = {
+  editId: string;
+  draftId: string;
+  sourceImageId: string;
+  sourceImageUri: string;
+};
+
 function firstParam(value: string | string[] | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
   return typeof raw === 'string' && raw.trim() ? raw.trim() : null;
+}
+
+function createQuestionCropEditId(draftId: string, imageId: string): string {
+  return `add-question-crop-${draftId}-${imageId}-${Date.now()}`;
 }
 
 function isCancelMessage(message?: string): boolean {
@@ -99,6 +111,7 @@ function allOptionalImages(draft: AddMistakeDraft): LocalImage[] {
 
 export default function AddScreen() {
   const navigation = useNavigation();
+  const router = useRouter();
   const params = useLocalSearchParams<SharedImageSearchParams>();
   const [draft, setDraft] = useState<AddMistakeDraft>(() => createEmptyAddMistakeDraft());
   const [stage, setStage] = useState<AddMistakeStage>('QUESTION');
@@ -115,10 +128,16 @@ export default function AddScreen() {
     layout.primaryButtonHeight + layout.minimumTouchSize,
   );
   const [preview, setPreview] = useState<{ image: LocalImage; title: string } | null>(null);
+  const draftRef = useRef(draft);
+  const pendingQuestionCropRef = useRef<PendingQuestionCrop | null>(null);
   const lastSharedKeyRef = useRef<string | null>(null);
   const lastSharedErrorKeyRef = useRef<string | null>(null);
   const optionalSessionUrisRef = useRef<Set<string>>(new Set());
   const { props: toastProps, showToast } = useAppToast({ defaultDuration: 1900 });
+
+  useEffect(() => {
+    draftRef.current = draft;
+  }, [draft]);
 
   const imageBusy = activeImageAction !== null;
   const busy = imageBusy || saving;
@@ -206,6 +225,51 @@ export default function AddScreen() {
   }, [hasQuestion, optionalSheetVisible]);
 
   useEffect(() => () => setAddScreenHasUnsavedPhotos(false), []);
+
+  useFocusEffect(
+    useCallback(() => {
+      const pending = pendingQuestionCropRef.current;
+      if (!pending) return;
+
+      pendingQuestionCropRef.current = null;
+      const result = AddDraftImageEditService.consumeAddDraftImageEditResult(pending.editId);
+      if (!result) return;
+
+      const currentDraft = draftRef.current;
+      const sourceIndex = currentDraft.questionImages.findIndex((image) => (
+        image.id === pending.sourceImageId && image.uri === pending.sourceImageUri
+      ));
+      const isCurrentResult = result.draftId === currentDraft.draftId
+        && result.draftId === pending.draftId
+        && result.sourceImageId === pending.sourceImageId
+        && sourceIndex >= 0;
+
+      if (!isCurrentResult) {
+        void deleteLocalImage(result.image.uri);
+        Logger.warn(PAGE_SCOPE, 'Discarded stale add-draft question crop result.', {
+          editId: pending.editId,
+          pendingDraftId: pending.draftId,
+          currentDraftId: currentDraft.draftId,
+          sourceImageId: pending.sourceImageId,
+        });
+        showToast('框选结果已过期，请重新操作', 'info');
+        return;
+      }
+
+      const questionImages = [...currentDraft.questionImages];
+      questionImages[sourceIndex] = result.image;
+      const nextDraft: AddMistakeDraft = {
+        ...currentDraft,
+        questionImages,
+        questionImage: questionImages[0] ?? null,
+      };
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
+      setPreview(null);
+      void deleteLocalImage(pending.sourceImageUri);
+      showToast('已应用题目框选', 'success');
+    }, [showToast]),
+  );
 
   useEffect(() => {
     const hasUnsaved = draft.questionImages.length > 0;
@@ -324,6 +388,43 @@ export default function AddScreen() {
         },
       },
     ]);
+  }
+
+  function handleOpenQuestionCrop() {
+    const selectedImage = preview?.image;
+    if (!selectedImage || busy) return;
+
+    const imageIndex = draft.questionImages.findIndex((image) => image.id === selectedImage.id);
+    if (imageIndex < 0) {
+      setPreview(null);
+      showToast('当前图片已发生变化，请重新打开', 'info');
+      return;
+    }
+
+    const editId = createQuestionCropEditId(draft.draftId, selectedImage.id);
+    pendingQuestionCropRef.current = {
+      editId,
+      draftId: draft.draftId,
+      sourceImageId: selectedImage.id,
+      sourceImageUri: selectedImage.uri,
+    };
+    setPreview(null);
+
+    requestAnimationFrame(() => {
+      router.push({
+        pathname: '/mistake/[id]/image-edit',
+        params: {
+          id: draft.draftId,
+          imageType: 'question',
+          imageSlot: 'question',
+          sourceUri: selectedImage.uri,
+          oldImageUri: selectedImage.uri,
+          addDraftEditId: editId,
+          sourceImageId: selectedImage.id,
+          imageIndex: String(imageIndex + 1),
+        },
+      } as never);
+    });
   }
 
   function openOptionalSheet() {
@@ -578,6 +679,12 @@ export default function AddScreen() {
         title={preview?.title ?? '题目照片'}
         interactionMode="zoomable"
         logSource="add-question"
+        footerAction={preview ? {
+          label: '框选题目',
+          icon: 'crop',
+          disabled: busy,
+          onPress: handleOpenQuestionCrop,
+        } : undefined}
         onClose={() => setPreview(null)}
       />
       <AppToast {...toastProps} bottomOffset={bottomBarHeight + 12} />
