@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo } from 'react-native';
 
-const INITIAL_AUTO_HIDE_DELAY_MS = 1_800;
+const INITIAL_AUTO_HIDE_DELAY_MS = 0;
 const RESTORED_AUTO_HIDE_DELAY_MS = 3_000;
 
 export type AutoHidingControls = {
