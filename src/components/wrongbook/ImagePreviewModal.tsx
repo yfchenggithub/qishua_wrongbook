@@ -1,7 +1,9 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -56,11 +58,11 @@ type Size = {
 const MIN_SCALE = 1;
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2;
-const LEGACY_DOUBLE_TAP_DELAY = 300;
 const EDGE_RESISTANCE = 0.22;
 const TAP_GUARD_RELEASE_DELAY_MS = 240;
 const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
 const GESTURE_HINT_FADE_DURATION_MS = 220;
+const TOOLBAR_FADE_DURATION_MS = 180;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -161,11 +163,12 @@ export function ImagePreviewModal({
   footerAction,
   onImageLongPress,
 }: ImagePreviewModalProps) {
+  const insets = useSafeAreaInsets();
   const [imageFailed, setImageFailed] = useState(false);
   const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
   const [containerSizeState, setContainerSizeState] = useState<Size>({ width: 0, height: 0 });
   const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
-  const lastTapRef = useRef(0);
+  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
   const gestureSessionRef = useRef(0);
   const gestureGuideCheckedForOpenRef = useRef(false);
   const {
@@ -188,6 +191,7 @@ export function ImagePreviewModal({
   const contentHeight = useSharedValue(0);
   const suppressSingleTap = useSharedValue(0);
   const gestureHintOpacity = useSharedValue(0);
+  const toolbarOpacity = useSharedValue(1);
 
   const normalizedUri = useMemo(() => normalizeUri(uri), [uri]);
   const canShowImage = visible && !!normalizedUri && !imageFailed;
@@ -243,11 +247,15 @@ export function ImagePreviewModal({
     setIsGestureHintVisible(false);
   }, []);
 
+  const toggleToolbar = useCallback(() => {
+    hideToast();
+    setIsToolbarVisible((current) => !current);
+  }, [hideToast]);
+
   useEffect(() => {
     setImageFailed(false);
     setIntrinsicSize(null);
     setContainerSizeState({ width: 0, height: 0 });
-    lastTapRef.current = 0;
     scale.value = MIN_SCALE;
     pinchStartScale.value = MIN_SCALE;
     translateX.value = 0;
@@ -277,12 +285,16 @@ export function ImagePreviewModal({
 
   useEffect(() => {
     if (visible) {
+      setIsToolbarVisible(true);
+      toolbarOpacity.value = 1;
       return;
     }
+    setIsToolbarVisible(true);
+    toolbarOpacity.value = 1;
     setIsGestureHintVisible(false);
     gestureGuideCheckedForOpenRef.current = false;
     hideToast();
-  }, [hideToast, visible]);
+  }, [hideToast, toolbarOpacity, visible]);
 
   useEffect(() => {
     if (!visible || !normalizedUri || gestureGuideCheckedForOpenRef.current) {
@@ -424,11 +436,21 @@ export function ImagePreviewModal({
     opacity: gestureHintOpacity.value,
   }));
 
+  const animatedToolbarStyle = useAnimatedStyle(() => ({
+    opacity: toolbarOpacity.value,
+  }));
+
   useEffect(() => {
     gestureHintOpacity.value = withTiming(isGestureHintVisible ? 1 : 0, {
       duration: isGestureHintVisible ? 160 : GESTURE_HINT_FADE_DURATION_MS,
     });
   }, [gestureHintOpacity, isGestureHintVisible]);
+
+  useEffect(() => {
+    toolbarOpacity.value = withTiming(isToolbarVisible ? 1 : 0, {
+      duration: TOOLBAR_FADE_DURATION_MS,
+    });
+  }, [isToolbarVisible, toolbarOpacity]);
 
   const singleTapGesture = Gesture.Tap()
     .enabled(isZoomable)
@@ -443,7 +465,8 @@ export function ImagePreviewModal({
       }
 
       runOnJS(hideGestureHint)();
-      runOnJS(handleClose)('preview_single_tap_close', {
+      runOnJS(toggleToolbar)();
+      runOnJS(logInfo)('preview_toolbar_toggled_by_single_tap', {
         scale: scale.value,
         translateX: translateX.value,
         translateY: translateY.value,
@@ -691,15 +714,8 @@ export function ImagePreviewModal({
 
   const handleLegacyContentPress = () => {
     hideGestureHint();
-    const now = Date.now();
-    if (now - lastTapRef.current < LEGACY_DOUBLE_TAP_DELAY) {
-      handleClose('preview_legacy_double_tap_close');
-      lastTapRef.current = 0;
-      return;
-    }
-
-    logInfo('preview_legacy_single_tap_waiting_second_tap');
-    lastTapRef.current = now;
+    toggleToolbar();
+    logInfo('preview_toolbar_toggled_by_legacy_tap');
   };
 
   const content = canShowImage ? (
@@ -733,8 +749,8 @@ export function ImagePreviewModal({
         style={[styles.gestureHintWrap, animatedGestureHintStyle]}>
         <Text style={styles.gestureHintText}>
           {isZoomable
-            ? `单击关闭 · 双击放大 · 双指缩放 · 拖动查看${hasLongPressAction ? ' · 长按分享/保存' : ''}`
-            : '双击关闭预览'}
+            ? `单击隐藏工具栏 · 双击放大 · 双指缩放 · 拖动查看${hasLongPressAction ? ' · 长按分享/保存' : ''}`
+            : '单击隐藏或显示工具栏'}
         </Text>
       </Animated.View>
     </>
@@ -750,7 +766,11 @@ export function ImagePreviewModal({
       animationType="fade"
       transparent={false}
       statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={() => handleClose('preview_system_request_close')}>
+      {visible ? (
+        <StatusBar style="dark" backgroundColor={colors.imageViewerBackground} translucent />
+      ) : null}
       <GestureHandlerRootView
         style={styles.modalRoot}
         onLayout={() => {
@@ -761,24 +781,35 @@ export function ImagePreviewModal({
           );
         }}>
         <View style={styles.overlay}>
-          <View style={styles.header}>
-            <Text numberOfLines={1} style={styles.title}>
+          <Animated.View
+            pointerEvents={isToolbarVisible ? 'box-none' : 'none'}
+            style={[
+              styles.header,
+              {
+                paddingTop: insets.top + spacing.sm,
+                paddingLeft: insets.left + spacing.lg,
+                paddingRight: insets.right + spacing.lg,
+              },
+              animatedToolbarStyle,
+            ]}>
+            <Text pointerEvents="none" numberOfLines={1} style={styles.title}>
               {headerTitle}
             </Text>
             <Pressable
               accessibilityRole="button"
+              accessibilityLabel="关闭图片预览"
               style={styles.closeButton}
               onPress={() => handleClose('preview_close_button_press')}>
-              <Text style={styles.closeButtonText}>关闭</Text>
+              <MaterialIcons name="close" size={22} color={colors.textPrimary} />
             </Pressable>
-          </View>
+          </Animated.View>
 
           {isZoomable ? (
             <GestureDetector gesture={gesture}>
               <View
                 accessible
                 accessibilityRole="button"
-                accessibilityLabel="图片预览，单击关闭，双击放大或缩小，支持双指缩放和拖动查看"
+                accessibilityLabel="图片预览，单击隐藏或显示工具栏，双击放大或缩小，支持双指缩放和拖动查看"
                 onLayout={(event) => {
                   const nextWidth = event.nativeEvent.layout.width;
                   const nextHeight = event.nativeEvent.layout.height;
@@ -807,22 +838,45 @@ export function ImagePreviewModal({
                     }),
                   );
                 }}
-                style={styles.content}>
+                style={[
+                  styles.content,
+                  {
+                    marginTop: insets.top,
+                    marginBottom: insets.bottom,
+                    marginLeft: insets.left,
+                    marginRight: insets.right,
+                  },
+                ]}>
                 {content}
               </View>
             </GestureDetector>
           ) : (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="双击关闭预览"
-              style={({ pressed }) => [styles.content, pressed && styles.contentPressed]}
+              accessibilityLabel="图片预览，单击隐藏或显示工具栏"
+              style={({ pressed }) => [
+                styles.content,
+                {
+                  marginTop: insets.top,
+                  marginBottom: insets.bottom,
+                  marginLeft: insets.left,
+                  marginRight: insets.right,
+                },
+                pressed && styles.contentPressed,
+              ]}
               onPress={handleLegacyContentPress}>
               {content}
             </Pressable>
           )}
 
           {footerAction && canShowImage ? (
-            <View style={styles.footer}>
+            <Animated.View
+              pointerEvents={isToolbarVisible ? 'box-none' : 'none'}
+              style={[
+                styles.footer,
+                { bottom: insets.bottom + spacing.lg },
+                animatedToolbarStyle,
+              ]}>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={footerAction.label}
@@ -840,7 +894,7 @@ export function ImagePreviewModal({
                 />
                 <Text style={styles.footerActionText}>{footerAction.label}</Text>
               </Pressable>
-            </View>
+            </Animated.View>
           ) : null}
 
           <AppToast
@@ -856,46 +910,46 @@ export function ImagePreviewModal({
 const styles = StyleSheet.create({
   modalRoot: {
     flex: 1,
+    backgroundColor: colors.imageViewerBackground,
   },
   overlay: {
     flex: 1,
-    backgroundColor: colors.black,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.lg,
-    paddingHorizontal: spacing.md,
+    backgroundColor: colors.imageViewerBackground,
   },
   header: {
-    minHeight: 44,
+    position: 'absolute',
+    zIndex: 2,
+    top: 0,
+    left: 0,
+    right: 0,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.imageViewerBackground,
   },
   title: {
     ...typography.sectionTitle,
-    color: colors.white,
+    color: colors.textPrimary,
     flex: 1,
     fontSize: 18,
     lineHeight: 24,
   },
   closeButton: {
-    minHeight: 36,
-    minWidth: 56,
+    width: 40,
+    height: 40,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#4A4A4A',
-    paddingHorizontal: spacing.md,
+    borderColor: colors.separator,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  closeButtonText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '700',
-  },
   content: {
     flex: 1,
-    marginTop: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
@@ -905,7 +959,10 @@ const styles = StyleSheet.create({
     opacity: 0.96,
   },
   footer: {
-    paddingTop: spacing.md,
+    position: 'absolute',
+    zIndex: 2,
+    left: 0,
+    right: 0,
     alignItems: 'center',
   },
   footerAction: {
@@ -942,7 +999,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     ...typography.body,
-    color: '#D8D8D8',
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   gestureHintWrap: {

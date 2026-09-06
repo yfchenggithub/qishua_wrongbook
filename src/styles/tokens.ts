@@ -13,6 +13,7 @@ export const BRAND_ACCENT = '#34C759';
  */
 export const colors = {
   pageBackground: '#F5F5F7',
+  imageViewerBackground: '#F2F3F5',
   surface: '#FFFFFF',
   surfaceMuted: '#F2F2F7',
   textPrimary: '#1D1D1F',

@@ -1,3 +1,5 @@
+import MaterialIcons from '@expo/vector-icons/MaterialIcons';
+import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Image,
@@ -10,6 +12,7 @@ import {
   type LayoutChangeEvent,
 } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, {
   runOnJS,
   useAnimatedStyle,
@@ -86,6 +89,7 @@ const SWITCH_ENTER_DURATION_MS = 170;
 const TAP_GUARD_RELEASE_DELAY_MS = 240;
 const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
 const GESTURE_HINT_FADE_DURATION_MS = 220;
+const TOOLBAR_FADE_DURATION_MS = 180;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -184,7 +188,7 @@ type SwipeZoomImageStageProps = {
   onRequestNext: () => void;
   onReachFirstBoundary: () => void;
   onReachLastBoundary: () => void;
-  onSingleTapClose: () => void;
+  onToggleToolbar: () => void;
   onUserInteraction: () => void;
   isGestureHintVisible: boolean;
   onLongPressImage?: () => void;
@@ -198,7 +202,7 @@ function SwipeZoomImageStage({
   onRequestNext,
   onReachFirstBoundary,
   onReachLastBoundary,
-  onSingleTapClose,
+  onToggleToolbar,
   onUserInteraction,
   isGestureHintVisible,
   onLongPressImage,
@@ -324,7 +328,7 @@ function SwipeZoomImageStage({
         return;
       }
       runOnJS(onUserInteraction)();
-      runOnJS(onSingleTapClose)();
+      runOnJS(onToggleToolbar)();
     });
 
   const doubleTapGesture = Gesture.Tap()
@@ -580,7 +584,7 @@ function SwipeZoomImageStage({
         <View
           accessible
           accessibilityRole="button"
-          accessibilityLabel="图片预览，单击关闭，双击放大或缩小，支持双指缩放和拖动查看"
+          accessibilityLabel="图片预览，单击隐藏或显示工具栏，双击放大或缩小，支持双指缩放和拖动查看"
           onLayout={(event: LayoutChangeEvent) => {
             const nextWidth = event.nativeEvent.layout.width;
             const nextHeight = event.nativeEvent.layout.height;
@@ -618,7 +622,7 @@ function SwipeZoomImageStage({
             pointerEvents="none"
             style={[styles.gestureHintWrap, animatedGestureHintStyle]}>
             <Text style={styles.gestureHintText}>
-              上下滑动切图 · 双击放大 · 双指缩放 · 长按保存/分享
+              单击隐藏工具栏 · 上下滑动切图 · 双击放大 · 双指缩放 · 长按保存/分享
             </Text>
           </Animated.View>
         </View>
@@ -699,6 +703,7 @@ export function MistakeImageBrowser({
   onImageLongPress,
   onOpenRelatedText,
 }: MistakeImageBrowserProps) {
+  const insets = useSafeAreaInsets();
   const normalizedItems = useMemo(() => {
     const result: NormalizedBrowserItem[] = [];
     for (const item of items) {
@@ -730,6 +735,7 @@ export function MistakeImageBrowser({
 
   const [activeIndex, setActiveIndex] = useState(0);
   const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
+  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
   const switchingRef = useRef(false);
   const stageHeightRef = useRef(0);
   const gestureGuideCheckedForOpenRef = useRef(false);
@@ -740,15 +746,31 @@ export function MistakeImageBrowser({
   } = useAppToast({ defaultDuration: 1400, animated: false });
   const stageTranslateY = useSharedValue(0);
   const stageOpacity = useSharedValue(1);
+  const toolbarOpacity = useSharedValue(1);
 
   const stageAnimatedStyle = useAnimatedStyle(() => ({
     opacity: stageOpacity.value,
     transform: [{ translateY: stageTranslateY.value }],
   }));
 
+  const toolbarAnimatedStyle = useAnimatedStyle(() => ({
+    opacity: toolbarOpacity.value,
+  }));
+
   const hideGestureHint = useCallback(() => {
     setIsGestureHintVisible(false);
   }, []);
+
+  const toggleToolbar = useCallback(() => {
+    hideToast();
+    setIsToolbarVisible((current) => !current);
+  }, [hideToast]);
+
+  useEffect(() => {
+    toolbarOpacity.value = withTiming(isToolbarVisible ? 1 : 0, {
+      duration: TOOLBAR_FADE_DURATION_MS,
+    });
+  }, [isToolbarVisible, toolbarOpacity]);
 
   const resolveStageTravelDistance = useCallback(() => {
     const measuredHeight = stageHeightRef.current;
@@ -823,28 +845,38 @@ export function MistakeImageBrowser({
     if (!visible) {
       return;
     }
+    setIsToolbarVisible(true);
+    toolbarOpacity.value = 1;
     const safeInitialIndex = clampIndex(initialIndex, normalizedItems.length);
     setActiveIndex(safeInitialIndex);
     switchingRef.current = false;
     stageTranslateY.value = 0;
     stageOpacity.value = 1;
-  }, [initialIndex, normalizedItems.length, stageOpacity, stageTranslateY, visible]);
+  }, [initialIndex, normalizedItems.length, stageOpacity, stageTranslateY, toolbarOpacity, visible]);
 
   useEffect(() => {
     if (visible) {
       return;
     }
+    setIsToolbarVisible(true);
+    toolbarOpacity.value = 1;
     setIsGestureHintVisible(false);
     gestureGuideCheckedForOpenRef.current = false;
     switchingRef.current = false;
     stageTranslateY.value = 0;
     stageOpacity.value = 1;
     hideToast();
-  }, [hideToast, stageOpacity, stageTranslateY, visible]);
+  }, [hideToast, stageOpacity, stageTranslateY, toolbarOpacity, visible]);
 
   const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
   const canSwipePrev = activeIndex > 0;
   const canSwipeNext = activeIndex < normalizedItems.length - 1;
+
+  useEffect(() => {
+    if (activeItem?.kind === 'text') {
+      setIsToolbarVisible(true);
+    }
+  }, [activeItem?.kind]);
 
   useEffect(() => {
     if (!visible || activeItem?.kind !== 'image' || gestureGuideCheckedForOpenRef.current) {
@@ -914,11 +946,25 @@ export function MistakeImageBrowser({
       animationType="fade"
       transparent={false}
       statusBarTranslucent
+      navigationBarTranslucent
       onRequestClose={onClose}>
+      {visible ? (
+        <StatusBar style="dark" backgroundColor={colors.imageViewerBackground} translucent />
+      ) : null}
       <GestureHandlerRootView style={styles.modalRoot}>
         <View style={styles.overlay}>
-          <View style={styles.header}>
-            <View style={styles.headerTextWrap}>
+          <Animated.View
+            pointerEvents={isToolbarVisible ? 'box-none' : 'none'}
+            style={[
+              styles.header,
+              {
+                paddingTop: insets.top + spacing.sm,
+                paddingLeft: insets.left + spacing.lg,
+                paddingRight: insets.right + spacing.lg,
+              },
+              toolbarAnimatedStyle,
+            ]}>
+            <View pointerEvents="none" style={styles.headerTextWrap}>
               <Text numberOfLines={1} style={styles.title}>
                 {activeItem?.title ?? '内容预览'}
               </Text>
@@ -952,13 +998,29 @@ export function MistakeImageBrowser({
                   styles.closeButton,
                   pressed && styles.headerButtonPressed,
                 ]}>
-                <Text style={styles.closeButtonText}>关闭</Text>
+                <MaterialIcons name="close" size={22} color={colors.textPrimary} />
               </Pressable>
             </View>
-          </View>
+          </Animated.View>
 
           <Animated.View
-            style={[styles.body, stageAnimatedStyle]}
+            style={[
+              styles.body,
+              activeItem?.kind === 'text'
+                ? {
+                    paddingTop: insets.top + 72,
+                    paddingBottom: insets.bottom + spacing.xl,
+                    paddingLeft: insets.left + spacing.md,
+                    paddingRight: insets.right + spacing.md,
+                  }
+                : {
+                    paddingTop: insets.top,
+                    paddingBottom: insets.bottom,
+                    paddingLeft: insets.left,
+                    paddingRight: insets.right,
+                  },
+              stageAnimatedStyle,
+            ]}
             onLayout={(event) => {
               const nextHeight = event.nativeEvent.layout.height;
               if (!Number.isFinite(nextHeight) || nextHeight <= 0) {
@@ -980,7 +1042,7 @@ export function MistakeImageBrowser({
                 onReachLastBoundary={() => {
                   showBrowserToast('当前是最后一项');
                 }}
-                onSingleTapClose={onClose}
+                onToggleToolbar={toggleToolbar}
                 onUserInteraction={hideGestureHint}
                 isGestureHintVisible={isGestureHintVisible}
                 onLongPressImage={() => {
@@ -1005,11 +1067,19 @@ export function MistakeImageBrowser({
           </Animated.View>
 
           {activeItem ? (
-            <View pointerEvents="none" style={styles.progressWrap}>
-              <Text style={styles.progressText}>
-                {activeIndex + 1} / {normalizedItems.length}
-              </Text>
-            </View>
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.progressLayer,
+                { bottom: insets.bottom + spacing.sm },
+                toolbarAnimatedStyle,
+              ]}>
+              <View style={styles.progressWrap}>
+                <Text style={styles.progressText}>
+                  {activeIndex + 1} / {normalizedItems.length}
+                </Text>
+              </View>
+            </Animated.View>
           ) : null}
 
           <AppToast
@@ -1025,20 +1095,26 @@ export function MistakeImageBrowser({
 const styles = StyleSheet.create({
   modalRoot: {
     flex: 1,
+    backgroundColor: colors.imageViewerBackground,
   },
   overlay: {
     flex: 1,
-    backgroundColor: colors.black,
-    paddingTop: spacing.xl,
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.lg,
+    backgroundColor: colors.imageViewerBackground,
   },
   header: {
-    minHeight: 46,
+    position: 'absolute',
+    zIndex: 2,
+    top: 0,
+    left: 0,
+    right: 0,
+    minHeight: 54,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    backgroundColor: colors.imageViewerBackground,
   },
   headerTextWrap: {
     flex: 1,
@@ -1046,13 +1122,13 @@ const styles = StyleSheet.create({
   },
   title: {
     ...typography.sectionTitle,
-    color: colors.white,
+    color: colors.textPrimary,
     fontSize: 18,
     lineHeight: 24,
   },
   subtitle: {
     ...typography.caption,
-    color: '#C7D2FE',
+    color: colors.textSecondary,
     marginTop: 2,
   },
   headerActions: {
@@ -1064,31 +1140,26 @@ const styles = StyleSheet.create({
     minHeight: 36,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#7C3AED',
-    backgroundColor: 'rgba(124, 58, 237, 0.2)',
+    borderColor: '#C4B5FD',
+    backgroundColor: '#F5F3FF',
     paddingHorizontal: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
   },
   relatedTextButtonText: {
     ...typography.bodySmall,
-    color: '#DDD6FE',
+    color: '#6D28D9',
     fontWeight: '700',
   },
   closeButton: {
-    minHeight: 36,
-    minWidth: 56,
+    width: 40,
+    height: 40,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#4A4A4A',
-    paddingHorizontal: spacing.md,
+    borderColor: colors.separator,
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  closeButtonText: {
-    ...typography.bodySmall,
-    color: colors.white,
-    fontWeight: '700',
   },
   headerButtonPressed: {
     opacity: 0.72,
@@ -1145,7 +1216,6 @@ const styles = StyleSheet.create({
   },
   body: {
     flex: 1,
-    marginTop: spacing.md,
   },
   stage: {
     flex: 1,
@@ -1174,12 +1244,17 @@ const styles = StyleSheet.create({
   },
   errorText: {
     ...typography.body,
-    color: '#D8D8D8',
+    color: colors.textSecondary,
     textAlign: 'center',
   },
+  progressLayer: {
+    position: 'absolute',
+    zIndex: 2,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
   progressWrap: {
-    alignSelf: 'center',
-    marginTop: spacing.sm,
     borderRadius: 999,
     borderWidth: 1,
     borderColor: 'rgba(255, 255, 255, 0.3)',
