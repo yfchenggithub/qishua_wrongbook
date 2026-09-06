@@ -24,6 +24,7 @@ import Animated, {
 
 import { AppToast } from '@/src/components/ui/AppToast';
 import { HighlightedText } from '@/src/components/wrongbook/TextNoteEditor';
+import { useAutoHidingControls } from '@/src/hooks/useAutoHidingControls';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import type { TextHighlightRange } from '@/src/models/TextHighlight';
 import {
@@ -735,15 +736,21 @@ export function MistakeImageBrowser({
 
   const [activeIndex, setActiveIndex] = useState(0);
   const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
-  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
   const switchingRef = useRef(false);
   const stageHeightRef = useRef(0);
   const gestureGuideCheckedForOpenRef = useRef(false);
+  const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
   const {
     props: toastProps,
     showToast: showBrowserToast,
     hideToast,
   } = useAppToast({ defaultDuration: 1400, animated: false });
+  const {
+    controlsVisible: isToolbarVisible,
+    toggleControls,
+    hideControls,
+    cancelAutoHide,
+  } = useAutoHidingControls(visible && activeItem?.kind === 'image');
   const stageTranslateY = useSharedValue(0);
   const stageOpacity = useSharedValue(1);
   const toolbarOpacity = useSharedValue(1);
@@ -763,14 +770,26 @@ export function MistakeImageBrowser({
 
   const toggleToolbar = useCallback(() => {
     hideToast();
-    setIsToolbarVisible((current) => !current);
-  }, [hideToast]);
+    toggleControls();
+  }, [hideToast, toggleControls]);
+
+  const handleViewingGesture = useCallback(() => {
+    hideGestureHint();
+    hideToast();
+    hideControls();
+  }, [hideControls, hideGestureHint, hideToast]);
 
   useEffect(() => {
     toolbarOpacity.value = withTiming(isToolbarVisible ? 1 : 0, {
       duration: TOOLBAR_FADE_DURATION_MS,
     });
   }, [isToolbarVisible, toolbarOpacity]);
+
+  useEffect(() => {
+    if (!isToolbarVisible) {
+      hideGestureHint();
+    }
+  }, [hideGestureHint, isToolbarVisible]);
 
   const resolveStageTravelDistance = useCallback(() => {
     const measuredHeight = stageHeightRef.current;
@@ -845,7 +864,6 @@ export function MistakeImageBrowser({
     if (!visible) {
       return;
     }
-    setIsToolbarVisible(true);
     toolbarOpacity.value = 1;
     const safeInitialIndex = clampIndex(initialIndex, normalizedItems.length);
     setActiveIndex(safeInitialIndex);
@@ -858,7 +876,6 @@ export function MistakeImageBrowser({
     if (visible) {
       return;
     }
-    setIsToolbarVisible(true);
     toolbarOpacity.value = 1;
     setIsGestureHintVisible(false);
     gestureGuideCheckedForOpenRef.current = false;
@@ -868,15 +885,8 @@ export function MistakeImageBrowser({
     hideToast();
   }, [hideToast, stageOpacity, stageTranslateY, toolbarOpacity, visible]);
 
-  const activeItem = normalizedItems[clampIndex(activeIndex, normalizedItems.length)] ?? null;
   const canSwipePrev = activeIndex > 0;
   const canSwipeNext = activeIndex < normalizedItems.length - 1;
-
-  useEffect(() => {
-    if (activeItem?.kind === 'text') {
-      setIsToolbarVisible(true);
-    }
-  }, [activeItem?.kind]);
 
   useEffect(() => {
     if (!visible || activeItem?.kind !== 'image' || gestureGuideCheckedForOpenRef.current) {
@@ -980,6 +990,7 @@ export function MistakeImageBrowser({
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={activeItem.kind === 'text' ? '编辑本次文字讲解' : '查看本次复做的文字讲解'}
+                  onPressIn={cancelAutoHide}
                   onPress={handleOpenActiveText}
                   style={({ pressed }) => [
                     styles.relatedTextButton,
@@ -993,6 +1004,7 @@ export function MistakeImageBrowser({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="关闭全屏预览"
+                onPressIn={cancelAutoHide}
                 onPress={onClose}
                 style={({ pressed }) => [
                   styles.closeButton,
@@ -1043,7 +1055,7 @@ export function MistakeImageBrowser({
                   showBrowserToast('当前是最后一项');
                 }}
                 onToggleToolbar={toggleToolbar}
-                onUserInteraction={hideGestureHint}
+                onUserInteraction={handleViewingGesture}
                 isGestureHintVisible={isGestureHintVisible}
                 onLongPressImage={() => {
                   onImageLongPress?.(activeItem, { showToast: showBrowserToast });

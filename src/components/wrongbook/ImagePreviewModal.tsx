@@ -14,6 +14,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import { AppToast } from '@/src/components/ui/AppToast';
+import { useAutoHidingControls } from '@/src/hooks/useAutoHidingControls';
 import { useAppToast } from '@/src/hooks/useAppToast';
 import {
   markImageBrowserGestureGuideSeen,
@@ -168,7 +169,6 @@ export function ImagePreviewModal({
   const [intrinsicSize, setIntrinsicSize] = useState<Size | null>(null);
   const [containerSizeState, setContainerSizeState] = useState<Size>({ width: 0, height: 0 });
   const [isGestureHintVisible, setIsGestureHintVisible] = useState(false);
-  const [isToolbarVisible, setIsToolbarVisible] = useState(true);
   const gestureSessionRef = useRef(0);
   const gestureGuideCheckedForOpenRef = useRef(false);
   const {
@@ -176,6 +176,12 @@ export function ImagePreviewModal({
     showToast: showPreviewToast,
     hideToast,
   } = useAppToast({ defaultDuration: 1400, animated: false });
+  const {
+    controlsVisible: isToolbarVisible,
+    toggleControls,
+    hideControls,
+    cancelAutoHide,
+  } = useAutoHidingControls(visible);
 
   const scale = useSharedValue(MIN_SCALE);
   const pinchStartScale = useSharedValue(MIN_SCALE);
@@ -249,8 +255,14 @@ export function ImagePreviewModal({
 
   const toggleToolbar = useCallback(() => {
     hideToast();
-    setIsToolbarVisible((current) => !current);
-  }, [hideToast]);
+    toggleControls();
+  }, [hideToast, toggleControls]);
+
+  const hideToolbarForViewingGesture = useCallback(() => {
+    hideGestureHint();
+    hideToast();
+    hideControls();
+  }, [hideControls, hideGestureHint, hideToast]);
 
   useEffect(() => {
     setImageFailed(false);
@@ -285,11 +297,9 @@ export function ImagePreviewModal({
 
   useEffect(() => {
     if (visible) {
-      setIsToolbarVisible(true);
       toolbarOpacity.value = 1;
       return;
     }
-    setIsToolbarVisible(true);
     toolbarOpacity.value = 1;
     setIsGestureHintVisible(false);
     gestureGuideCheckedForOpenRef.current = false;
@@ -452,6 +462,12 @@ export function ImagePreviewModal({
     });
   }, [isToolbarVisible, toolbarOpacity]);
 
+  useEffect(() => {
+    if (!isToolbarVisible) {
+      hideGestureHint();
+    }
+  }, [hideGestureHint, isToolbarVisible]);
+
   const singleTapGesture = Gesture.Tap()
     .enabled(isZoomable)
     .shouldCancelWhenOutside(false)
@@ -483,7 +499,7 @@ export function ImagePreviewModal({
         return;
       }
 
-      runOnJS(hideGestureHint)();
+      runOnJS(hideToolbarForViewingGesture)();
       const currentScale = scale.value;
       const nextScale = currentScale > MIN_SCALE + 0.05 ? MIN_SCALE : DOUBLE_TAP_SCALE;
       runOnJS(logInfo)('preview_double_tap', {
@@ -538,7 +554,7 @@ export function ImagePreviewModal({
     .enabled(isZoomable)
     .shouldCancelWhenOutside(false)
     .onStart((event) => {
-      runOnJS(hideGestureHint)();
+      runOnJS(hideToolbarForViewingGesture)();
       gestureSessionRef.current += 1;
       pinchStartScale.value = scale.value;
       pinchStartX.value = translateX.value;
@@ -620,7 +636,7 @@ export function ImagePreviewModal({
     .minDistance(1)
     .maxPointers(1)
     .onStart(() => {
-      runOnJS(hideGestureHint)();
+      runOnJS(hideToolbarForViewingGesture)();
       gestureSessionRef.current += 1;
       panStartX.value = translateX.value;
       panStartY.value = translateY.value;
@@ -694,7 +710,7 @@ export function ImagePreviewModal({
     .minDuration(520)
     .maxDistance(12)
     .onStart(() => {
-      runOnJS(hideGestureHint)();
+      runOnJS(hideToolbarForViewingGesture)();
       suppressSingleTap.value = 1;
       runOnJS(handleImageLongPress)();
     })
@@ -799,6 +815,7 @@ export function ImagePreviewModal({
               accessibilityRole="button"
               accessibilityLabel="关闭图片预览"
               style={styles.closeButton}
+              onPressIn={cancelAutoHide}
               onPress={() => handleClose('preview_close_button_press')}>
               <MaterialIcons name="close" size={22} color={colors.textPrimary} />
             </Pressable>
@@ -881,6 +898,7 @@ export function ImagePreviewModal({
                 accessibilityRole="button"
                 accessibilityLabel={footerAction.label}
                 disabled={footerAction.disabled}
+                onPressIn={cancelAutoHide}
                 onPress={footerAction.onPress}
                 style={({ pressed }) => [
                   styles.footerAction,
