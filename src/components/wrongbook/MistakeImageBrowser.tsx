@@ -9,6 +9,7 @@ import {
   StyleSheet,
   Text,
   View,
+  type GestureResponderEvent,
   type LayoutChangeEvent,
 } from 'react-native';
 import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -20,6 +21,7 @@ import Animated, {
   withDelay,
   withSpring,
   withTiming,
+  type SharedValue,
 } from 'react-native-reanimated';
 
 import { AppToast } from '@/src/components/ui/AppToast';
@@ -91,6 +93,7 @@ const TAP_GUARD_RELEASE_DELAY_MS = 240;
 const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
 const GESTURE_HINT_FADE_DURATION_MS = 220;
 const TOOLBAR_FADE_DURATION_MS = 180;
+const TEXT_SINGLE_TAP_DELAY_MS = 280;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -639,6 +642,11 @@ type TextPreviewStageProps = {
   canShowNext: boolean;
   onRequestPrev: () => void;
   onRequestNext: () => void;
+  controlsVisible: boolean;
+  controlsOpacity: SharedValue<number>;
+  onToggleControls: () => void;
+  onUserInteraction: () => void;
+  onCancelAutoHide: () => void;
 };
 
 function TextPreviewStage({
@@ -648,12 +656,72 @@ function TextPreviewStage({
   canShowNext,
   onRequestPrev,
   onRequestNext,
+  controlsVisible,
+  controlsOpacity,
+  onToggleControls,
+  onUserInteraction,
+  onCancelAutoHide,
 }: TextPreviewStageProps) {
+  const touchStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
+  const pendingTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const animatedControlsStyle = useAnimatedStyle(() => ({
+    opacity: controlsOpacity.value,
+  }));
+
+  const clearPendingTap = useCallback(() => {
+    if (pendingTapTimerRef.current === null) {
+      return;
+    }
+
+    clearTimeout(pendingTapTimerRef.current);
+    pendingTapTimerRef.current = null;
+  }, []);
+
+  useEffect(() => clearPendingTap, [clearPendingTap]);
+
+  const handleTouchStart = (event: GestureResponderEvent) => {
+    const { pageX, pageY } = event.nativeEvent;
+    touchStartRef.current = { x: pageX, y: pageY, timestamp: Date.now() };
+  };
+
+  const handleTouchEnd = (event: GestureResponderEvent) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) {
+      return;
+    }
+
+    const { pageX, pageY } = event.nativeEvent;
+    const moved = Math.hypot(pageX - start.x, pageY - start.y);
+    if (moved <= 10 && Date.now() - start.timestamp <= 250) {
+      if (pendingTapTimerRef.current !== null) {
+        clearPendingTap();
+        return;
+      }
+
+      pendingTapTimerRef.current = setTimeout(() => {
+        pendingTapTimerRef.current = null;
+        onToggleControls();
+      }, TEXT_SINGLE_TAP_DELAY_MS);
+    }
+  };
+
   return (
     <View style={styles.textStage}>
       <ScrollView
         accessibilityLabel="文字讲解全文"
         contentContainerStyle={styles.textScrollContent}
+        onScrollBeginDrag={() => {
+          clearPendingTap();
+          touchStartRef.current = null;
+          onUserInteraction();
+        }}
+        onTouchCancel={() => {
+          clearPendingTap();
+          touchStartRef.current = null;
+        }}
+        onTouchEnd={handleTouchEnd}
+        onTouchStart={handleTouchStart}
         persistentScrollbar
         showsVerticalScrollIndicator>
         <HighlightedText
@@ -665,11 +733,14 @@ function TextPreviewStage({
           emptyTextStyle={styles.errorText}
         />
       </ScrollView>
-      <View style={styles.textNavigation}>
+      <Animated.View
+        pointerEvents={controlsVisible ? 'auto' : 'none'}
+        style={[styles.textNavigation, animatedControlsStyle]}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="查看上一项内容"
           disabled={!canShowPrev}
+          onPressIn={onCancelAutoHide}
           onPress={onRequestPrev}
           style={({ pressed }) => [
             styles.textNavigationButton,
@@ -683,6 +754,7 @@ function TextPreviewStage({
           accessibilityRole="button"
           accessibilityLabel="查看下一项内容"
           disabled={!canShowNext}
+          onPressIn={onCancelAutoHide}
           onPress={onRequestNext}
           style={({ pressed }) => [
             styles.textNavigationButton,
@@ -691,7 +763,7 @@ function TextPreviewStage({
           ]}>
           <Text style={styles.textNavigationButtonText}>下一项</Text>
         </Pressable>
-      </View>
+      </Animated.View>
     </View>
   );
 }
@@ -750,7 +822,7 @@ export function MistakeImageBrowser({
     toggleControls,
     hideControls,
     cancelAutoHide,
-  } = useAutoHidingControls(visible && activeItem?.kind === 'image');
+  } = useAutoHidingControls(visible, activeItem?.id);
   const stageTranslateY = useSharedValue(0);
   const stageOpacity = useSharedValue(1);
   const toolbarOpacity = useSharedValue(1);
@@ -1020,8 +1092,8 @@ export function MistakeImageBrowser({
               styles.body,
               activeItem?.kind === 'text'
                 ? {
-                    paddingTop: insets.top + 72,
-                    paddingBottom: insets.bottom + spacing.xl,
+                    paddingTop: insets.top,
+                    paddingBottom: insets.bottom,
                     paddingLeft: insets.left + spacing.md,
                     paddingRight: insets.right + spacing.md,
                   }
@@ -1070,6 +1142,11 @@ export function MistakeImageBrowser({
                 canShowNext={canSwipeNext}
                 onRequestPrev={handleSwitchPrev}
                 onRequestNext={handleSwitchNext}
+                controlsVisible={isToolbarVisible}
+                controlsOpacity={toolbarOpacity}
+                onToggleControls={toggleToolbar}
+                onUserInteraction={handleViewingGesture}
+                onCancelAutoHide={cancelAutoHide}
               />
             ) : (
               <View style={styles.emptyWrap}>
@@ -1083,7 +1160,10 @@ export function MistakeImageBrowser({
               pointerEvents="none"
               style={[
                 styles.progressLayer,
-                { bottom: insets.bottom + spacing.sm },
+                {
+                  bottom: insets.bottom
+                    + (activeItem.kind === 'text' ? 56 : spacing.sm),
+                },
                 toolbarAnimatedStyle,
               ]}>
               <View style={styles.progressWrap}>
@@ -1184,7 +1264,8 @@ const styles = StyleSheet.create({
   },
   textScrollContent: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
+    paddingTop: spacing.xl,
+    paddingBottom: 72,
   },
   textPreviewContent: {
     ...typography.body,
@@ -1193,6 +1274,11 @@ const styles = StyleSheet.create({
     lineHeight: 30,
   },
   textNavigation: {
+    position: 'absolute',
+    zIndex: 1,
+    left: 0,
+    right: 0,
+    bottom: 0,
     minHeight: 48,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1200,6 +1286,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: 'rgba(255, 255, 255, 0.22)',
+    backgroundColor: '#111827',
     paddingHorizontal: spacing.sm,
   },
   textNavigationButton: {

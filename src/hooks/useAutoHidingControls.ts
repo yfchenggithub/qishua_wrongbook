@@ -11,7 +11,10 @@ export type AutoHidingControls = {
   cancelAutoHide: () => void;
 };
 
-export function useAutoHidingControls(active: boolean): AutoHidingControls {
+export function useAutoHidingControls(
+  active: boolean,
+  resetKey?: string | null,
+): AutoHidingControls {
   const [controlsVisible, setControlsVisible] = useState(true);
   const [screenReaderEnabled, setScreenReaderEnabled] = useState(false);
   const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,7 +71,7 @@ export function useAutoHidingControls(active: boolean): AutoHidingControls {
     }
 
     return cancelAutoHide;
-  }, [active, cancelAutoHide, scheduleAutoHide, screenReaderEnabled]);
+  }, [active, cancelAutoHide, resetKey, scheduleAutoHide, screenReaderEnabled]);
 
   const toggleControls = useCallback(() => {
     if (controlsVisible) {

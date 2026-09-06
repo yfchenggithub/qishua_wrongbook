@@ -181,7 +181,7 @@ export function ImagePreviewModal({
     toggleControls,
     hideControls,
     cancelAutoHide,
-  } = useAutoHidingControls(visible);
+  } = useAutoHidingControls(visible, uri);
 
   const scale = useSharedValue(MIN_SCALE);
   const pinchStartScale = useSharedValue(MIN_SCALE);
