@@ -94,6 +94,9 @@ const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
 const GESTURE_HINT_FADE_DURATION_MS = 220;
 const TOOLBAR_FADE_DURATION_MS = 180;
 const TEXT_SINGLE_TAP_DELAY_MS = 280;
+const TOP_EDGE_PULL_ZONE = 48;
+const TOP_EDGE_PULL_DISTANCE = 32;
+const TOP_EDGE_PULL_VELOCITY = 360;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -192,7 +195,8 @@ type SwipeZoomImageStageProps = {
   onRequestNext: () => void;
   onReachFirstBoundary: () => void;
   onReachLastBoundary: () => void;
-  onToggleToolbar: () => void;
+  onSingleTapClose: () => void;
+  onShowToolbar: () => void;
   onUserInteraction: () => void;
   isGestureHintVisible: boolean;
   onLongPressImage?: () => void;
@@ -206,7 +210,8 @@ function SwipeZoomImageStage({
   onRequestNext,
   onReachFirstBoundary,
   onReachLastBoundary,
-  onToggleToolbar,
+  onSingleTapClose,
+  onShowToolbar,
   onUserInteraction,
   isGestureHintVisible,
   onLongPressImage,
@@ -231,6 +236,8 @@ function SwipeZoomImageStage({
   const hasPanMotion = useSharedValue(0);
   const suppressSingleTap = useSharedValue(0);
   const gestureHintOpacity = useSharedValue(0);
+  const topEdgePullEligible = useSharedValue(0);
+  const topEdgePullActive = useSharedValue(0);
 
   const containedSize = useMemo(
     () => computeContainedSize(containerSizeState, intrinsicSize),
@@ -254,6 +261,8 @@ function SwipeZoomImageStage({
     contentHeight.value = 0;
     hasPanMotion.value = 0;
     suppressSingleTap.value = 0;
+    topEdgePullEligible.value = 0;
+    topEdgePullActive.value = 0;
   }, [
     contentHeight,
     contentWidth,
@@ -266,6 +275,8 @@ function SwipeZoomImageStage({
     pinchStartY,
     scale,
     suppressSingleTap,
+    topEdgePullActive,
+    topEdgePullEligible,
     translateX,
     translateY,
     uri,
@@ -332,7 +343,7 @@ function SwipeZoomImageStage({
         return;
       }
       runOnJS(onUserInteraction)();
-      runOnJS(onToggleToolbar)();
+      runOnJS(onSingleTapClose)();
     });
 
   const doubleTapGesture = Gesture.Tap()
@@ -456,8 +467,12 @@ function SwipeZoomImageStage({
     .shouldCancelWhenOutside(false)
     .minDistance(1)
     .maxPointers(1)
-    .onStart(() => {
-      runOnJS(onUserInteraction)();
+    .onStart((event) => {
+      topEdgePullEligible.value = event.y <= TOP_EDGE_PULL_ZONE ? 1 : 0;
+      topEdgePullActive.value = 0;
+      if (topEdgePullEligible.value < 0.5) {
+        runOnJS(onUserInteraction)();
+      }
       hasPanMotion.value = 0;
       suppressSingleTap.value = 1;
       panStartX.value = translateX.value;
@@ -466,6 +481,12 @@ function SwipeZoomImageStage({
     .onUpdate((event) => {
       if (Math.abs(event.translationX) > 6 || Math.abs(event.translationY) > 6) {
         hasPanMotion.value = 1;
+      }
+
+      if (topEdgePullEligible.value > 0.5 && event.translationY > 0) {
+        topEdgePullActive.value = 1;
+        pageTranslateY.value = 0;
+        return;
       }
 
       if (scale.value > MIN_SCALE + 0.01) {
@@ -502,6 +523,24 @@ function SwipeZoomImageStage({
       pageTranslateY.value = rawPageShift;
     })
     .onEnd((event) => {
+      if (topEdgePullActive.value > 0.5) {
+        if (
+          event.translationY >= TOP_EDGE_PULL_DISTANCE
+          || event.velocityY >= TOP_EDGE_PULL_VELOCITY
+        ) {
+          runOnJS(onShowToolbar)();
+        }
+        topEdgePullEligible.value = 0;
+        topEdgePullActive.value = 0;
+        pageTranslateY.value = 0;
+        suppressSingleTap.value = withDelay(
+          TAP_GUARD_RELEASE_DELAY_MS,
+          withTiming(0, { duration: 80 }),
+        );
+        hasPanMotion.value = withTiming(0, { duration: 130 });
+        return;
+      }
+
       if (scale.value > MIN_SCALE + 0.01) {
         const nextTranslateX = clampTranslation(
           translateX.value,
@@ -588,7 +627,7 @@ function SwipeZoomImageStage({
         <View
           accessible
           accessibilityRole="button"
-          accessibilityLabel="图片预览，单击隐藏或显示工具栏，双击放大或缩小，支持双指缩放和拖动查看"
+          accessibilityLabel="图片预览，单击返回，顶部下拉显示工具栏，双击放大或缩小，支持双指缩放和拖动查看"
           onLayout={(event: LayoutChangeEvent) => {
             const nextWidth = event.nativeEvent.layout.width;
             const nextHeight = event.nativeEvent.layout.height;
@@ -626,7 +665,7 @@ function SwipeZoomImageStage({
             pointerEvents="none"
             style={[styles.gestureHintWrap, animatedGestureHintStyle]}>
             <Text style={styles.gestureHintText}>
-              单击隐藏工具栏 · 上下滑动切图 · 双击放大 · 双指缩放 · 长按保存/分享
+              单击返回 · 顶部下拉显示工具栏 · 上下滑动切图 · 双击放大 · 双指缩放 · 长按保存/分享
             </Text>
           </Animated.View>
         </View>
@@ -644,7 +683,8 @@ type TextPreviewStageProps = {
   onRequestNext: () => void;
   controlsVisible: boolean;
   controlsOpacity: SharedValue<number>;
-  onToggleControls: () => void;
+  onSingleTapClose: () => void;
+  onShowControls: () => void;
   onUserInteraction: () => void;
   onCancelAutoHide: () => void;
 };
@@ -658,11 +698,18 @@ function TextPreviewStage({
   onRequestNext,
   controlsVisible,
   controlsOpacity,
-  onToggleControls,
+  onSingleTapClose,
+  onShowControls,
   onUserInteraction,
   onCancelAutoHide,
 }: TextPreviewStageProps) {
-  const touchStartRef = useRef<{ x: number; y: number; timestamp: number } | null>(null);
+  const touchStartRef = useRef<{
+    x: number;
+    y: number;
+    timestamp: number;
+    topEdgePullEligible: boolean;
+  } | null>(null);
+  const topEdgePullTriggeredRef = useRef(false);
   const pendingTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animatedControlsStyle = useAnimatedStyle(() => ({
     opacity: controlsOpacity.value,
@@ -680,13 +727,38 @@ function TextPreviewStage({
   useEffect(() => clearPendingTap, [clearPendingTap]);
 
   const handleTouchStart = (event: GestureResponderEvent) => {
-    const { pageX, pageY } = event.nativeEvent;
-    touchStartRef.current = { x: pageX, y: pageY, timestamp: Date.now() };
+    const { locationY, pageX, pageY } = event.nativeEvent;
+    topEdgePullTriggeredRef.current = false;
+    touchStartRef.current = {
+      x: pageX,
+      y: pageY,
+      timestamp: Date.now(),
+      topEdgePullEligible: locationY <= TOP_EDGE_PULL_ZONE,
+    };
+  };
+
+  const handleTouchMove = (event: GestureResponderEvent) => {
+    const start = touchStartRef.current;
+    if (
+      !start?.topEdgePullEligible
+      || topEdgePullTriggeredRef.current
+      || event.nativeEvent.pageY - start.y < TOP_EDGE_PULL_DISTANCE
+    ) {
+      return;
+    }
+
+    clearPendingTap();
+    topEdgePullTriggeredRef.current = true;
+    onShowControls();
   };
 
   const handleTouchEnd = (event: GestureResponderEvent) => {
     const start = touchStartRef.current;
     touchStartRef.current = null;
+    if (topEdgePullTriggeredRef.current) {
+      topEdgePullTriggeredRef.current = false;
+      return;
+    }
     if (!start) {
       return;
     }
@@ -701,7 +773,7 @@ function TextPreviewStage({
 
       pendingTapTimerRef.current = setTimeout(() => {
         pendingTapTimerRef.current = null;
-        onToggleControls();
+        onSingleTapClose();
       }, TEXT_SINGLE_TAP_DELAY_MS);
     }
   };
@@ -713,14 +785,17 @@ function TextPreviewStage({
         contentContainerStyle={styles.textScrollContent}
         onScrollBeginDrag={() => {
           clearPendingTap();
-          touchStartRef.current = null;
-          onUserInteraction();
+          if (!touchStartRef.current?.topEdgePullEligible) {
+            onUserInteraction();
+          }
         }}
         onTouchCancel={() => {
           clearPendingTap();
           touchStartRef.current = null;
+          topEdgePullTriggeredRef.current = false;
         }}
         onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
         onTouchStart={handleTouchStart}
         persistentScrollbar
         showsVerticalScrollIndicator>
@@ -819,7 +894,7 @@ export function MistakeImageBrowser({
   } = useAppToast({ defaultDuration: 1400, animated: false });
   const {
     controlsVisible: isToolbarVisible,
-    toggleControls,
+    showControls,
     hideControls,
     cancelAutoHide,
   } = useAutoHidingControls(visible, activeItem?.id);
@@ -840,10 +915,10 @@ export function MistakeImageBrowser({
     setIsGestureHintVisible(false);
   }, []);
 
-  const toggleToolbar = useCallback(() => {
+  const showToolbar = useCallback(() => {
     hideToast();
-    toggleControls();
-  }, [hideToast, toggleControls]);
+    showControls();
+  }, [hideToast, showControls]);
 
   const handleViewingGesture = useCallback(() => {
     hideGestureHint();
@@ -1126,7 +1201,8 @@ export function MistakeImageBrowser({
                 onReachLastBoundary={() => {
                   showBrowserToast('当前是最后一项');
                 }}
-                onToggleToolbar={toggleToolbar}
+                onSingleTapClose={onClose}
+                onShowToolbar={showToolbar}
                 onUserInteraction={handleViewingGesture}
                 isGestureHintVisible={isGestureHintVisible}
                 onLongPressImage={() => {
@@ -1144,7 +1220,8 @@ export function MistakeImageBrowser({
                 onRequestNext={handleSwitchNext}
                 controlsVisible={isToolbarVisible}
                 controlsOpacity={toolbarOpacity}
-                onToggleControls={toggleToolbar}
+                onSingleTapClose={onClose}
+                onShowControls={showToolbar}
                 onUserInteraction={handleViewingGesture}
                 onCancelAutoHide={cancelAutoHide}
               />

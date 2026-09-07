@@ -6,7 +6,7 @@ const RESTORED_AUTO_HIDE_DELAY_MS = 3_000;
 
 export type AutoHidingControls = {
   controlsVisible: boolean;
-  toggleControls: () => void;
+  showControls: () => void;
   hideControls: () => void;
   cancelAutoHide: () => void;
 };
@@ -73,16 +73,10 @@ export function useAutoHidingControls(
     return cancelAutoHide;
   }, [active, cancelAutoHide, resetKey, scheduleAutoHide, screenReaderEnabled]);
 
-  const toggleControls = useCallback(() => {
-    if (controlsVisible) {
-      cancelAutoHide();
-      setControlsVisible(false);
-      return;
-    }
-
+  const showControls = useCallback(() => {
     setControlsVisible(true);
     scheduleAutoHide(RESTORED_AUTO_HIDE_DELAY_MS);
-  }, [cancelAutoHide, controlsVisible, scheduleAutoHide]);
+  }, [scheduleAutoHide]);
 
   const hideControls = useCallback(() => {
     cancelAutoHide();
@@ -91,7 +85,7 @@ export function useAutoHidingControls(
 
   return {
     controlsVisible,
-    toggleControls,
+    showControls,
     hideControls,
     cancelAutoHide,
   };

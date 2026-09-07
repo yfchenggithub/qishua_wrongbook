@@ -64,6 +64,9 @@ const TAP_GUARD_RELEASE_DELAY_MS = 240;
 const GESTURE_HINT_VISIBLE_DURATION_MS = 2_000;
 const GESTURE_HINT_FADE_DURATION_MS = 220;
 const TOOLBAR_FADE_DURATION_MS = 180;
+const TOP_EDGE_PULL_ZONE = 48;
+const TOP_EDGE_PULL_DISTANCE = 32;
+const TOP_EDGE_PULL_VELOCITY = 360;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -178,7 +181,7 @@ export function ImagePreviewModal({
   } = useAppToast({ defaultDuration: 1400, animated: false });
   const {
     controlsVisible: isToolbarVisible,
-    toggleControls,
+    showControls,
     hideControls,
     cancelAutoHide,
   } = useAutoHidingControls(visible, uri);
@@ -198,6 +201,8 @@ export function ImagePreviewModal({
   const suppressSingleTap = useSharedValue(0);
   const gestureHintOpacity = useSharedValue(0);
   const toolbarOpacity = useSharedValue(1);
+  const topEdgePullEligible = useSharedValue(0);
+  const topEdgePullActive = useSharedValue(0);
 
   const normalizedUri = useMemo(() => normalizeUri(uri), [uri]);
   const canShowImage = visible && !!normalizedUri && !imageFailed;
@@ -253,10 +258,10 @@ export function ImagePreviewModal({
     setIsGestureHintVisible(false);
   }, []);
 
-  const toggleToolbar = useCallback(() => {
+  const showToolbar = useCallback(() => {
     hideToast();
-    toggleControls();
-  }, [hideToast, toggleControls]);
+    showControls();
+  }, [hideToast, showControls]);
 
   const hideToolbarForViewingGesture = useCallback(() => {
     hideGestureHint();
@@ -277,6 +282,8 @@ export function ImagePreviewModal({
     pinchStartX.value = 0;
     pinchStartY.value = 0;
     suppressSingleTap.value = 0;
+    topEdgePullEligible.value = 0;
+    topEdgePullActive.value = 0;
     contentWidth.value = 0;
     contentHeight.value = 0;
   }, [
@@ -290,6 +297,8 @@ export function ImagePreviewModal({
     pinchStartY,
     scale,
     suppressSingleTap,
+    topEdgePullActive,
+    topEdgePullEligible,
     translateX,
     translateY,
     visible,
@@ -481,8 +490,7 @@ export function ImagePreviewModal({
       }
 
       runOnJS(hideGestureHint)();
-      runOnJS(toggleToolbar)();
-      runOnJS(logInfo)('preview_toolbar_toggled_by_single_tap', {
+      runOnJS(handleClose)('preview_single_tap_close', {
         scale: scale.value,
         translateX: translateX.value,
         translateY: translateY.value,
@@ -635,8 +643,12 @@ export function ImagePreviewModal({
     .shouldCancelWhenOutside(false)
     .minDistance(1)
     .maxPointers(1)
-    .onStart(() => {
-      runOnJS(hideToolbarForViewingGesture)();
+    .onStart((event) => {
+      topEdgePullEligible.value = event.y <= TOP_EDGE_PULL_ZONE ? 1 : 0;
+      topEdgePullActive.value = 0;
+      if (topEdgePullEligible.value < 0.5) {
+        runOnJS(hideToolbarForViewingGesture)();
+      }
       gestureSessionRef.current += 1;
       panStartX.value = translateX.value;
       panStartY.value = translateY.value;
@@ -648,6 +660,11 @@ export function ImagePreviewModal({
       });
     })
     .onUpdate((event) => {
+      if (topEdgePullEligible.value > 0.5 && event.translationY > 0) {
+        topEdgePullActive.value = 1;
+        return;
+      }
+
       if (scale.value <= MIN_SCALE + 0.01) {
         translateX.value = 0;
         translateY.value = 0;
@@ -670,7 +687,19 @@ export function ImagePreviewModal({
         scale.value,
       );
     })
-    .onEnd(() => {
+    .onEnd((event) => {
+      if (topEdgePullActive.value > 0.5) {
+        if (
+          event.translationY >= TOP_EDGE_PULL_DISTANCE
+          || event.velocityY >= TOP_EDGE_PULL_VELOCITY
+        ) {
+          runOnJS(showToolbar)();
+        }
+        topEdgePullEligible.value = 0;
+        topEdgePullActive.value = 0;
+        return;
+      }
+
       const nextTranslateX = clampTranslation(
         translateX.value,
         contentWidth.value,
@@ -730,8 +759,7 @@ export function ImagePreviewModal({
 
   const handleLegacyContentPress = () => {
     hideGestureHint();
-    toggleToolbar();
-    logInfo('preview_toolbar_toggled_by_legacy_tap');
+    handleClose('preview_legacy_single_tap_close');
   };
 
   const content = canShowImage ? (
@@ -765,8 +793,8 @@ export function ImagePreviewModal({
         style={[styles.gestureHintWrap, animatedGestureHintStyle]}>
         <Text style={styles.gestureHintText}>
           {isZoomable
-            ? `单击隐藏工具栏 · 双击放大 · 双指缩放 · 拖动查看${hasLongPressAction ? ' · 长按分享/保存' : ''}`
-            : '单击隐藏或显示工具栏'}
+            ? `单击返回 · 顶部下拉显示工具栏 · 双击放大 · 双指缩放 · 拖动查看${hasLongPressAction ? ' · 长按分享/保存' : ''}`
+            : '单击返回'}
         </Text>
       </Animated.View>
     </>
@@ -826,7 +854,7 @@ export function ImagePreviewModal({
               <View
                 accessible
                 accessibilityRole="button"
-                accessibilityLabel="图片预览，单击隐藏或显示工具栏，双击放大或缩小，支持双指缩放和拖动查看"
+                accessibilityLabel="图片预览，单击返回，顶部下拉显示工具栏，双击放大或缩小，支持双指缩放和拖动查看"
                 onLayout={(event) => {
                   const nextWidth = event.nativeEvent.layout.width;
                   const nextHeight = event.nativeEvent.layout.height;
@@ -870,7 +898,7 @@ export function ImagePreviewModal({
           ) : (
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="图片预览，单击隐藏或显示工具栏"
+              accessibilityLabel="图片预览，单击返回"
               style={({ pressed }) => [
                 styles.content,
                 {
