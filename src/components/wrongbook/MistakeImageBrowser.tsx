@@ -33,7 +33,7 @@ import {
   markImageBrowserGestureGuideSeen,
   shouldShowImageBrowserGestureGuide,
 } from '@/src/services/ImageBrowserGuideService';
-import { colors, spacing, typography } from '@/src/styles/tokens';
+import { colors, radius, spacing, typography } from '@/src/styles/tokens';
 
 export type MistakeImageBrowserItem = {
   id: string;
@@ -799,14 +799,16 @@ function TextPreviewStage({
         onTouchStart={handleTouchStart}
         persistentScrollbar
         showsVerticalScrollIndicator>
-        <HighlightedText
-          value={text}
-          emptyText="暂无文字讲解"
-          highlights={highlights}
-          selectable
-          style={styles.textPreviewContent}
-          emptyTextStyle={styles.errorText}
-        />
+        <View style={styles.textReadingCard}>
+          <HighlightedText
+            value={text}
+            emptyText="暂无文字讲解"
+            highlights={highlights}
+            selectable
+            style={styles.textPreviewContent}
+            emptyTextStyle={styles.errorText}
+          />
+        </View>
       </ScrollView>
       <Animated.View
         pointerEvents={controlsVisible ? 'auto' : 'none'}
@@ -1335,43 +1337,62 @@ const styles = StyleSheet.create({
   },
   textStage: {
     flex: 1,
-    borderRadius: spacing.md,
-    backgroundColor: '#111827',
-    overflow: 'hidden',
+    backgroundColor: colors.imageViewerBackground,
   },
   textScrollContent: {
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.xl,
-    paddingBottom: 72,
+    paddingTop: spacing.lg,
+    paddingBottom: 80,
+  },
+  textReadingCard: {
+    width: '100%',
+    alignSelf: 'flex-start',
+    borderRadius: radius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60, 60, 67, 0.08)',
+    backgroundColor: colors.surface,
+    paddingHorizontal: spacing.card,
+    paddingVertical: spacing.xl,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.05,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 2,
   },
   textPreviewContent: {
     ...typography.body,
-    color: colors.white,
+    color: colors.textPrimary,
     fontSize: 18,
     lineHeight: 30,
   },
   textNavigation: {
     position: 'absolute',
     zIndex: 1,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    minHeight: 48,
+    left: spacing.sm,
+    right: spacing.sm,
+    bottom: spacing.sm,
+    minHeight: 52,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255, 255, 255, 0.22)',
-    backgroundColor: '#111827',
-    paddingHorizontal: spacing.sm,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(60, 60, 67, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    paddingHorizontal: spacing.md,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
   },
   textNavigationButton: {
     minHeight: 34,
     minWidth: 64,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.35)',
+    borderColor: colors.separator,
+    backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.sm,
@@ -1381,13 +1402,13 @@ const styles = StyleSheet.create({
   },
   textNavigationButtonText: {
     ...typography.bodySmall,
-    color: colors.white,
+    color: colors.textPrimary,
     fontWeight: '700',
   },
   textNavigationHint: {
     ...typography.caption,
     flex: 1,
-    color: '#C7D2FE',
+    color: colors.textSecondary,
     textAlign: 'center',
   },
   body: {
