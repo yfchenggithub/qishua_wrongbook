@@ -97,6 +97,8 @@ const TEXT_SINGLE_TAP_DELAY_MS = 280;
 const TOP_EDGE_PULL_ZONE = 48;
 const TOP_EDGE_PULL_DISTANCE = 32;
 const TOP_EDGE_PULL_VELOCITY = 360;
+const TEXT_TOOLBAR_PULL_ZONE = 12;
+const TEXT_SCROLL_BOUNDARY_TOLERANCE = 2;
 const SPRING_CONFIG = {
   damping: 18,
   stiffness: 220,
@@ -681,6 +683,8 @@ type TextPreviewStageProps = {
   canShowNext: boolean;
   onRequestPrev: () => void;
   onRequestNext: () => void;
+  onReachFirstBoundary: () => void;
+  onReachLastBoundary: () => void;
   controlsVisible: boolean;
   controlsOpacity: SharedValue<number>;
   onSingleTapClose: () => void;
@@ -696,6 +700,8 @@ function TextPreviewStage({
   canShowNext,
   onRequestPrev,
   onRequestNext,
+  onReachFirstBoundary,
+  onReachLastBoundary,
   controlsVisible,
   controlsOpacity,
   onSingleTapClose,
@@ -707,9 +713,20 @@ function TextPreviewStage({
     x: number;
     y: number;
     timestamp: number;
-    topEdgePullEligible: boolean;
   } | null>(null);
-  const topEdgePullTriggeredRef = useRef(false);
+  const textPanToolbarPullTriggeredRef = useRef(false);
+  const boundaryPanRef = useRef<{
+    direction: 'prev' | 'next';
+    startTranslationY: number;
+  } | null>(null);
+  const pageSwitchTriggeredRef = useRef(false);
+  const textPanStartYRef = useRef(0);
+  const textPanInteractionHandledRef = useRef(false);
+  const scrollMetricsRef = useRef({
+    contentHeight: 0,
+    offsetY: 0,
+    viewportHeight: 0,
+  });
   const pendingTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animatedControlsStyle = useAnimatedStyle(() => ({
     opacity: controlsOpacity.value,
@@ -726,39 +743,155 @@ function TextPreviewStage({
 
   useEffect(() => clearPendingTap, [clearPendingTap]);
 
+  const isAtTextScrollTop = useCallback(() => (
+    scrollMetricsRef.current.offsetY <= TEXT_SCROLL_BOUNDARY_TOLERANCE
+  ), []);
+
+  const isAtTextScrollBottom = useCallback(() => {
+    const { contentHeight, offsetY, viewportHeight } = scrollMetricsRef.current;
+    return contentHeight <= viewportHeight + TEXT_SCROLL_BOUNDARY_TOLERANCE
+      || offsetY + viewportHeight >= contentHeight - TEXT_SCROLL_BOUNDARY_TOLERANCE;
+  }, []);
+
+  const requestBoundarySwitch = useCallback((direction: 'prev' | 'next') => {
+    if (pageSwitchTriggeredRef.current) {
+      return;
+    }
+
+    pageSwitchTriggeredRef.current = true;
+    clearPendingTap();
+    onUserInteraction();
+    if (direction === 'prev') {
+      if (canShowPrev) {
+        onRequestPrev();
+      } else {
+        onReachFirstBoundary();
+      }
+      return;
+    }
+
+    if (canShowNext) {
+      onRequestNext();
+    } else {
+      onReachLastBoundary();
+    }
+  }, [
+    canShowNext,
+    canShowPrev,
+    clearPendingTap,
+    onReachFirstBoundary,
+    onReachLastBoundary,
+    onRequestNext,
+    onRequestPrev,
+    onUserInteraction,
+  ]);
+
+  const updateBoundaryPan = useCallback((translationY: number) => {
+    if (Math.abs(translationY) <= 6) {
+      return;
+    }
+
+    const direction = translationY > 0 ? 'prev' : 'next';
+    const isAtBoundary = direction === 'prev' ? isAtTextScrollTop() : isAtTextScrollBottom();
+    if (!isAtBoundary) {
+      boundaryPanRef.current = null;
+      return;
+    }
+
+    if (boundaryPanRef.current?.direction !== direction) {
+      boundaryPanRef.current = {
+        direction,
+        startTranslationY: translationY,
+      };
+    }
+  }, [isAtTextScrollBottom, isAtTextScrollTop]);
+
+  const textScrollNativeGesture = useMemo(
+    () => Gesture.Native().shouldCancelWhenOutside(false),
+    [],
+  );
+
+  const textBoundaryPanGesture = useMemo(
+    () => Gesture.Pan()
+      .shouldCancelWhenOutside(false)
+      .minDistance(1)
+      .maxPointers(1)
+      .runOnJS(true)
+      .simultaneousWithExternalGesture(textScrollNativeGesture)
+      .onBegin((event) => {
+        textPanStartYRef.current = event.y;
+        textPanInteractionHandledRef.current = false;
+        textPanToolbarPullTriggeredRef.current = false;
+        boundaryPanRef.current = null;
+        pageSwitchTriggeredRef.current = false;
+      })
+      .onUpdate((event) => {
+        if (
+          textPanStartYRef.current <= TEXT_TOOLBAR_PULL_ZONE
+          && event.translationY >= TOP_EDGE_PULL_DISTANCE
+        ) {
+          if (!textPanToolbarPullTriggeredRef.current) {
+            textPanToolbarPullTriggeredRef.current = true;
+            onShowControls();
+          }
+          boundaryPanRef.current = null;
+          return;
+        }
+
+        if (!textPanInteractionHandledRef.current && Math.abs(event.translationY) > 6) {
+          textPanInteractionHandledRef.current = true;
+          clearPendingTap();
+          onUserInteraction();
+        }
+        updateBoundaryPan(event.translationY);
+      })
+      .onEnd((event) => {
+        if (textPanToolbarPullTriggeredRef.current) {
+          return;
+        }
+        updateBoundaryPan(event.translationY);
+        const boundaryPan = boundaryPanRef.current;
+        if (!boundaryPan) {
+          return;
+        }
+
+        const pullDistance = boundaryPan.direction === 'prev'
+          ? event.translationY - boundaryPan.startTranslationY
+          : boundaryPan.startTranslationY - event.translationY;
+        const velocityMatchesDirection = boundaryPan.direction === 'prev'
+          ? event.velocityY >= SWIPE_SWITCH_VELOCITY
+          : event.velocityY <= -SWIPE_SWITCH_VELOCITY;
+        if (pullDistance >= SWIPE_SWITCH_DISTANCE || velocityMatchesDirection) {
+          requestBoundarySwitch(boundaryPan.direction);
+        }
+      })
+      .onFinalize(() => {
+        boundaryPanRef.current = null;
+        textPanInteractionHandledRef.current = false;
+        textPanToolbarPullTriggeredRef.current = false;
+      }),
+    [
+      clearPendingTap,
+      onShowControls,
+      onUserInteraction,
+      requestBoundarySwitch,
+      textScrollNativeGesture,
+      updateBoundaryPan,
+    ],
+  );
+
   const handleTouchStart = (event: GestureResponderEvent) => {
-    const { locationY, pageX, pageY } = event.nativeEvent;
-    topEdgePullTriggeredRef.current = false;
+    const { pageX, pageY } = event.nativeEvent;
     touchStartRef.current = {
       x: pageX,
       y: pageY,
       timestamp: Date.now(),
-      topEdgePullEligible: locationY <= TOP_EDGE_PULL_ZONE,
     };
-  };
-
-  const handleTouchMove = (event: GestureResponderEvent) => {
-    const start = touchStartRef.current;
-    if (
-      !start?.topEdgePullEligible
-      || topEdgePullTriggeredRef.current
-      || event.nativeEvent.pageY - start.y < TOP_EDGE_PULL_DISTANCE
-    ) {
-      return;
-    }
-
-    clearPendingTap();
-    topEdgePullTriggeredRef.current = true;
-    onShowControls();
   };
 
   const handleTouchEnd = (event: GestureResponderEvent) => {
     const start = touchStartRef.current;
     touchStartRef.current = null;
-    if (topEdgePullTriggeredRef.current) {
-      topEdgePullTriggeredRef.current = false;
-      return;
-    }
     if (!start) {
       return;
     }
@@ -778,24 +911,41 @@ function TextPreviewStage({
     }
   };
 
+  const handleTouchCancel = () => {
+    clearPendingTap();
+    touchStartRef.current = null;
+    boundaryPanRef.current = null;
+    pageSwitchTriggeredRef.current = false;
+  };
+
   return (
-    <View style={styles.textStage}>
-      <ScrollView
+    <GestureDetector gesture={textBoundaryPanGesture}>
+      <View style={styles.textStage}>
+        <GestureDetector gesture={textScrollNativeGesture}>
+          <ScrollView
         accessibilityLabel="文字讲解全文"
         contentContainerStyle={styles.textScrollContent}
+        onContentSizeChange={(_, contentHeight) => {
+          scrollMetricsRef.current.contentHeight = contentHeight;
+        }}
+        onLayout={(event) => {
+          scrollMetricsRef.current.viewportHeight = event.nativeEvent.layout.height;
+        }}
+        onScroll={(event) => {
+          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+          scrollMetricsRef.current = {
+            contentHeight: contentSize.height,
+            offsetY: Math.max(0, contentOffset.y),
+            viewportHeight: layoutMeasurement.height,
+          };
+        }}
+        scrollEventThrottle={16}
         onScrollBeginDrag={() => {
           clearPendingTap();
-          if (!touchStartRef.current?.topEdgePullEligible) {
-            onUserInteraction();
-          }
+          onUserInteraction();
         }}
-        onTouchCancel={() => {
-          clearPendingTap();
-          touchStartRef.current = null;
-          topEdgePullTriggeredRef.current = false;
-        }}
+        onTouchCancel={handleTouchCancel}
         onTouchEnd={handleTouchEnd}
-        onTouchMove={handleTouchMove}
         onTouchStart={handleTouchStart}
         persistentScrollbar
         showsVerticalScrollIndicator>
@@ -809,7 +959,8 @@ function TextPreviewStage({
             emptyTextStyle={styles.errorText}
           />
         </View>
-      </ScrollView>
+          </ScrollView>
+        </GestureDetector>
       <Animated.View
         pointerEvents={controlsVisible ? 'auto' : 'none'}
         style={[styles.textNavigation, animatedControlsStyle]}>
@@ -841,7 +992,8 @@ function TextPreviewStage({
           <Text style={styles.textNavigationButtonText}>下一项</Text>
         </Pressable>
       </Animated.View>
-    </View>
+      </View>
+    </GestureDetector>
   );
 }
 
@@ -1220,6 +1372,12 @@ export function MistakeImageBrowser({
                 canShowNext={canSwipeNext}
                 onRequestPrev={handleSwitchPrev}
                 onRequestNext={handleSwitchNext}
+                onReachFirstBoundary={() => {
+                  showBrowserToast('当前是第一项');
+                }}
+                onReachLastBoundary={() => {
+                  showBrowserToast('当前是最后一项');
+                }}
                 controlsVisible={isToolbarVisible}
                 controlsOpacity={toolbarOpacity}
                 onSingleTapClose={onClose}
@@ -1240,10 +1398,9 @@ export function MistakeImageBrowser({
               style={[
                 styles.progressLayer,
                 {
-                  bottom: insets.bottom
-                    + (activeItem.kind === 'text' ? 56 : spacing.sm),
+                  top: insets.top + 58,
+                  right: insets.right + spacing.lg,
                 },
-                toolbarAnimatedStyle,
               ]}>
               <View style={styles.progressWrap}>
                 <Text style={styles.progressText}>
@@ -1446,24 +1603,26 @@ const styles = StyleSheet.create({
   },
   progressLayer: {
     position: 'absolute',
-    zIndex: 2,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
+    zIndex: 3,
   },
   progressWrap: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.3)',
-    backgroundColor: 'rgba(0, 0, 0, 0.34)',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 2,
+    borderColor: 'rgba(60, 60, 67, 0.12)',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
   progressText: {
     ...typography.caption,
-    color: '#E5E7EB',
-    fontSize: 11,
-    lineHeight: 14,
+    color: colors.textPrimary,
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: '700',
   },
   gestureHintWrap: {
