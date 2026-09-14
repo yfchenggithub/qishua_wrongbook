@@ -1398,7 +1398,7 @@ export function MistakeImageBrowser({
               style={[
                 styles.progressLayer,
                 {
-                  top: insets.top + 58,
+                  top: insets.top + 20,
                   right: insets.right + spacing.lg,
                 },
               ]}>
