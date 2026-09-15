@@ -34,6 +34,7 @@ import {
   MistakeDetailHeader,
   type MistakeImageBrowserItem,
   type MistakeImageBrowserLongPressHelpers,
+  type MistakeImageWorkspaceSlot,
   MistakeImageSection,
   mistakeDetailPalette,
   ReviewProgressCard,
@@ -277,11 +278,6 @@ function formatNextReviewCompact(
     return '待安排';
   }
   return `${parsed.getMonth() + 1}月${parsed.getDate()}日`;
-}
-
-function countSlotImages(slot: DetailImageSlot): number {
-  const previewCount = buildSlotPreviewImageUris(slot).length;
-  return Math.max(previewCount, normalizePreviewUri(slot.uri) ? 1 : 0);
 }
 
 function formatDurationMs(durationMs: number): string {
@@ -4402,6 +4398,38 @@ export default function MistakeDetailScreen() {
     state.kind === 'success' && reviewTextEditorRecordId
       ? state.detail.reviewRecords.find((record) => record.id === reviewTextEditorRecordId) ?? null
       : null;
+  const imageWorkspaceSlots = managedSlots.reduce<MistakeImageWorkspaceSlot[]>((slots, slot) => {
+    const slotType = slot.type;
+    if (!isManagedType(slotType)) {
+      return slots;
+    }
+
+    slots.push({
+      type: slotType,
+      title: slot.title || getDeleteTypeName(slotType),
+      imageUri: slot.uri,
+      imageExists: slot.exists,
+      fileSize: slot.fileSize,
+      emptyText: slot.emptyText,
+      emptyActionLabel:
+        slotType === 'my_solution' ? '添加我的做法' : `添加${getDeleteTypeName(slotType)}`,
+      loadErrorText: slotType === 'question' ? '题目图片加载失败' : '图片加载失败',
+      isBusy: isTypeBusy(slotType),
+      isTakePhotoLoading: takePhotoType === slotType,
+      isPickImageLoading: pickImageType === slotType,
+      isDeleteLoading: deleteType === slotType,
+      onTakePhoto: () => {
+        void takePhotoForType(slotType);
+      },
+      onPickImage: () => {
+        void pickImageForType(slotType);
+      },
+      onEdit: () => handlePressEdit(slot),
+      onDelete: () => handlePressDelete(slotType),
+      onPreview: () => openImageBrowser(`slot:${slotType}:0`),
+    });
+    return slots;
+  }, []);
   const visibleReviewRecords = state.kind === 'success'
     ? (showAllReviewRecords ? state.detail.reviewRecords : state.detail.reviewRecords.slice(0, 3))
     : [];
@@ -4654,13 +4682,6 @@ export default function MistakeDetailScreen() {
                 ) : null}
               </View>
 
-              <ReviewProgressCard
-                reviewCount={state.detail.reviewCount}
-                maxReviewCount={state.detail.maxReviewCount}
-                status={state.detail.status}
-                nextReviewText={formatNextReviewCompact(state.detail, nextReviewInfo)}
-              />
-
               <View style={styles.detailSection}>
                 <DetailSectionHeader
                   title="图片"
@@ -4668,50 +4689,10 @@ export default function MistakeDetailScreen() {
                   onAction={() => setIsImageManageMode((current) => !current)}
                 />
 
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.compactImageList}>
-                  {managedSlots.map((slot) => {
-                    const slotType = slot.type;
-                    if (!isManagedType(slotType)) {
-                      return null;
-                    }
-                    return (
-                      <MistakeImageSection
-                        key={slotType}
-                        title={slot.title || getDeleteTypeName(slotType)}
-                        imageUri={slot.uri}
-                        imageExists={slot.exists}
-                        fileSize={slot.fileSize}
-                        width={slot.width}
-                        height={slot.height}
-                        imageWidth={slot.imageWidth}
-                        imageHeight={slot.imageHeight}
-                        imageCount={countSlotImages(slot)}
-                        emptyText={slot.emptyText}
-                        emptyActionLabel={
-                          slotType === 'my_solution' ? '添加我的做法' : `添加${getDeleteTypeName(slotType)}`
-                        }
-                        loadErrorText={slotType === 'question' ? '题目图片加载失败' : '图片加载失败'}
-                        isBusy={isTypeBusy(slotType)}
-                        isTakePhotoLoading={takePhotoType === slotType}
-                        isPickImageLoading={pickImageType === slotType}
-                        isDeleteLoading={deleteType === slotType}
-                        showManagementActions={isImageManageMode}
-                        onTakePhoto={() => {
-                          void takePhotoForType(slotType);
-                        }}
-                        onPickImage={() => {
-                          void pickImageForType(slotType);
-                        }}
-                        onEdit={() => handlePressEdit(slot)}
-                        onDelete={() => handlePressDelete(slotType)}
-                        onPreview={() => openImageBrowser(`slot:${slotType}:0`)}
-                      />
-                    );
-                  })}
-                </ScrollView>
+                <MistakeImageSection
+                  slots={imageWorkspaceSlots}
+                  showManagementActions={isImageManageMode}
+                />
                 {state.detail.mySolutionText || state.detail.answerText ? (
                   <View style={styles.supplementTextList}>
                     {state.detail.mySolutionText ? (
@@ -4823,6 +4804,13 @@ export default function MistakeDetailScreen() {
                   </Text>
                 ) : null}
               </View>
+
+              <ReviewProgressCard
+                reviewCount={state.detail.reviewCount}
+                maxReviewCount={state.detail.maxReviewCount}
+                status={state.detail.status}
+                nextReviewText={formatNextReviewCompact(state.detail, nextReviewInfo)}
+              />
 
               <View style={styles.detailSection}>
                 <DetailSectionHeader title="概览" />
@@ -5591,11 +5579,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     fontWeight: '500',
-  },
-  compactImageList: {
-    gap: spacing.md,
-    paddingRight: spacing.xs,
-    paddingBottom: spacing.xs,
   },
   supplementTextList: {
     marginTop: spacing.md,

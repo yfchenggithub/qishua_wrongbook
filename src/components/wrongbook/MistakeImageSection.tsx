@@ -15,9 +15,8 @@ import { Logger } from '@/src/services/Logger';
 import { colors, radius, spacing } from '@/src/styles/tokens';
 
 const COMPONENT_SCOPE = 'MistakeImageSection';
-const MIN_TILE_WIDTH = 152;
-const MAX_TILE_WIDTH = 190;
-const PREVIEW_HEIGHT = 220;
+const PREVIEW_MIN_HEIGHT = 228;
+const PREVIEW_MAX_HEIGHT = 280;
 
 const palette = {
   surface: colors.surface,
@@ -30,29 +29,39 @@ const palette = {
   danger: '#C9342E',
 } as const;
 
-export interface MistakeImageSectionProps {
+export type MistakeImageWorkspaceType = 'question' | 'my_solution' | 'answer';
+
+export interface MistakeImageWorkspaceSlot {
+  type: MistakeImageWorkspaceType;
   title: string;
   imageUri?: string | null;
   imageExists?: boolean;
   fileSize?: number | null;
   emptyText: string;
   emptyActionLabel?: string;
-  imageCount?: number;
   loadErrorText?: string;
-  width?: number | null;
-  height?: number | null;
-  imageWidth?: number | null;
-  imageHeight?: number | null;
   isBusy?: boolean;
   isTakePhotoLoading?: boolean;
   isPickImageLoading?: boolean;
   isDeleteLoading?: boolean;
-  showManagementActions?: boolean;
   onTakePhoto: () => void;
   onPickImage: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onPreview: () => void;
+}
+
+export interface MistakeImageSectionProps {
+  slots: readonly MistakeImageWorkspaceSlot[];
+  showManagementActions?: boolean;
+}
+
+function normalizeUri(uri: string | null | undefined): string | null {
+  if (typeof uri !== 'string') {
+    return null;
+  }
+  const trimmed = uri.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 function isPositiveFinite(value: unknown): value is number {
@@ -90,14 +99,6 @@ export function calculateImagePreviewHeight(params: {
   return Math.min(maxHeight, Math.max(minHeight, scaledHeight));
 }
 
-function normalizeUri(uri: string | null | undefined): string | null {
-  if (typeof uri !== 'string') {
-    return null;
-  }
-  const trimmed = uri.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
 function formatFileSize(fileSize: number): string {
   if (fileSize < 1024) {
     return `${fileSize} B`;
@@ -108,11 +109,9 @@ function formatFileSize(fileSize: number): string {
   return `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function calculateTileWidth(viewportWidth: number): number {
-  const availableWidth = Math.floor(
-    (viewportWidth - spacing.screenPadding * 2 - spacing.md) / 2,
-  );
-  return Math.max(MIN_TILE_WIDTH, Math.min(MAX_TILE_WIDTH, availableWidth));
+function getPreviewHeight(viewportWidth: number): number {
+  const scaledHeight = Math.round(viewportWidth * 0.58);
+  return Math.max(PREVIEW_MIN_HEIGHT, Math.min(PREVIEW_MAX_HEIGHT, scaledHeight));
 }
 
 function IconAction({
@@ -156,82 +155,93 @@ function IconAction({
 }
 
 export function MistakeImageSection({
-  title,
-  imageUri,
-  imageExists,
-  fileSize,
-  emptyText,
-  emptyActionLabel,
-  imageCount = 0,
-  loadErrorText = '图片加载失败',
-  isBusy = false,
-  isTakePhotoLoading = false,
-  isPickImageLoading = false,
-  isDeleteLoading = false,
+  slots,
   showManagementActions = false,
-  onTakePhoto,
-  onPickImage,
-  onEdit,
-  onDelete,
-  onPreview,
 }: MistakeImageSectionProps) {
-  const [imageFailed, setImageFailed] = useState(false);
   const { width: viewportWidth } = useWindowDimensions();
-  const normalizedUri = useMemo(() => normalizeUri(imageUri), [imageUri]);
-  const hasImage = !!normalizedUri;
-  const canShowImage = hasImage && imageExists === true && !imageFailed;
-  const hasMissingImage = hasImage && imageExists === false;
-  const canEdit = hasImage && imageExists !== false && !isBusy;
-  const canDelete = hasImage && !isBusy;
-  const count = Math.max(imageCount, hasImage ? 1 : 0);
+  const [activeType, setActiveType] = useState<MistakeImageWorkspaceType>('question');
+  const [imageFailed, setImageFailed] = useState(false);
+  const selectedSlot = useMemo(
+    () => slots.find((slot) => slot.type === activeType) ?? slots[0] ?? null,
+    [activeType, slots],
+  );
+  const mySolutionSlot = useMemo(
+    () => slots.find((slot) => slot.type === 'my_solution') ?? null,
+    [slots],
+  );
+
+  useEffect(() => {
+    if (selectedSlot && !slots.some((slot) => slot.type === activeType)) {
+      setActiveType(selectedSlot.type);
+    }
+  }, [activeType, selectedSlot, slots]);
 
   useEffect(() => {
     setImageFailed(false);
-  }, [normalizedUri]);
+  }, [selectedSlot?.imageUri]);
 
-  const openAddMenu = () => {
-    if (isBusy) {
+  if (!selectedSlot) {
+    return null;
+  }
+
+  const normalizedUri = normalizeUri(selectedSlot.imageUri);
+  const hasImage = !!normalizedUri;
+  const canShowImage = hasImage && selectedSlot.imageExists === true && !imageFailed;
+  const hasMissingImage = hasImage && selectedSlot.imageExists === false;
+  const canEdit = hasImage && selectedSlot.imageExists !== false && !selectedSlot.isBusy;
+  const canDelete = hasImage && !selectedSlot.isBusy;
+  const shouldShowSolutionShortcut =
+    !showManagementActions
+    && activeType !== 'my_solution'
+    && !!mySolutionSlot
+    && (!normalizeUri(mySolutionSlot.imageUri) || mySolutionSlot.imageExists === false);
+
+  const openAddMenu = (slot: MistakeImageWorkspaceSlot) => {
+    if (slot.isBusy) {
       return;
     }
-    Alert.alert(`添加${title}`, '选择图片来源', [
+    Alert.alert(`添加${slot.title}`, '选择图片来源', [
       {
         text: '拍照',
         onPress: () => {
-          Logger.info(COMPONENT_SCOPE, 'Tap compact take photo action.', { title });
-          onTakePhoto();
+          Logger.info(COMPONENT_SCOPE, 'Tap workspace take photo action.', { type: slot.type });
+          slot.onTakePhoto();
         },
       },
       {
         text: '从相册选择',
         onPress: () => {
-          Logger.info(COMPONENT_SCOPE, 'Tap compact album action.', { title });
-          onPickImage();
+          Logger.info(COMPONENT_SCOPE, 'Tap workspace album action.', { type: slot.type });
+          slot.onPickImage();
         },
       },
       { text: '取消', style: 'cancel' },
     ]);
   };
 
-  return (
-    <View style={[styles.tile, { width: calculateTileWidth(viewportWidth) }]}>
-      <View style={styles.headerRow}>
-        <Text numberOfLines={1} maxFontSizeMultiplier={1.15} style={styles.title}>{title}</Text>
-        {count > 1 ? (
-          <View style={styles.countBadge}>
-            <Text style={styles.countBadgeText}>{count}</Text>
-          </View>
-        ) : null}
-      </View>
+  const handlePreviewPress = () => {
+    if (canShowImage) {
+      selectedSlot.onPreview();
+      return;
+    }
+    openAddMenu(selectedSlot);
+  };
 
+  return (
+    <View style={styles.workspaceCard}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={hasImage ? `${title}，查看大图` : (emptyActionLabel ?? `添加${title}`)}
-        disabled={isBusy && !canShowImage}
-        onPress={canShowImage ? onPreview : openAddMenu}
+        accessibilityLabel={
+          canShowImage
+            ? `${selectedSlot.title}，查看大图`
+            : (selectedSlot.emptyActionLabel ?? `添加${selectedSlot.title}`)
+        }
+        disabled={selectedSlot.isBusy && !canShowImage}
+        onPress={handlePreviewPress}
         style={({ pressed }) => [
           styles.previewBox,
-          !hasImage && styles.previewBoxEmpty,
-          pressed && styles.pressed,
+          { height: getPreviewHeight(viewportWidth) },
+          pressed && !selectedSlot.isBusy && styles.pressed,
         ]}>
         {canShowImage ? (
           <Image
@@ -245,116 +255,129 @@ export function MistakeImageSection({
         {!hasImage ? (
           <View style={styles.emptyContent}>
             <View style={styles.addIconCircle}>
-              <MaterialIcons name="add-photo-alternate" size={24} color={palette.green} />
+              <MaterialIcons name="add" size={28} color={colors.white} />
             </View>
-            <Text numberOfLines={2} style={styles.emptyActionText}>
-              {emptyActionLabel ?? emptyText}
+            <Text style={styles.emptyActionText}>
+              {selectedSlot.emptyActionLabel ?? selectedSlot.emptyText}
             </Text>
+            <Text style={styles.emptyHintText}>拍照或从相册添加</Text>
           </View>
         ) : null}
 
         {hasMissingImage ? (
           <View style={styles.emptyContent}>
-            <MaterialIcons name="image-not-supported" size={24} color={palette.mutedText} />
+            <MaterialIcons name="image-not-supported" size={28} color={palette.mutedText} />
             <Text style={styles.errorText}>图片文件不存在</Text>
+            <Text style={styles.emptyHintText}>点击重新添加</Text>
           </View>
         ) : null}
 
-        {hasImage && imageExists === true && imageFailed ? (
+        {hasImage && selectedSlot.imageExists === true && imageFailed ? (
           <View style={styles.emptyContent}>
-            <MaterialIcons name="broken-image" size={24} color={palette.mutedText} />
-            <Text style={styles.errorText}>{loadErrorText}</Text>
+            <MaterialIcons name="broken-image" size={28} color={palette.mutedText} />
+            <Text style={styles.errorText}>{selectedSlot.loadErrorText ?? '图片加载失败'}</Text>
           </View>
         ) : null}
 
         {canShowImage ? (
           <View style={styles.previewHint}>
-            <MaterialIcons name="fullscreen" size={16} color={palette.secondaryText} />
+            <MaterialIcons name="fullscreen" size={18} color={palette.secondaryText} />
           </View>
         ) : null}
       </Pressable>
+
+      {canShowImage && typeof selectedSlot.fileSize === 'number' ? (
+        <Text numberOfLines={1} style={styles.metaText}>{formatFileSize(selectedSlot.fileSize)}</Text>
+      ) : null}
+
+      <View accessibilityRole="tablist" style={styles.tabList}>
+        {slots.map((slot) => {
+          const selected = slot.type === selectedSlot.type;
+          return (
+            <Pressable
+              key={slot.type}
+              accessibilityRole="tab"
+              accessibilityState={{ selected }}
+              accessibilityLabel={`显示${slot.title}`}
+              onPress={() => setActiveType(slot.type)}
+              style={({ pressed }) => [
+                styles.tab,
+                selected && styles.tabSelected,
+                pressed && styles.pressed,
+              ]}>
+              <Text numberOfLines={1} style={[styles.tabText, selected && styles.tabTextSelected]}>
+                {slot.title}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
 
       {showManagementActions ? (
         <View style={styles.actionsRow}>
           <IconAction
             icon="photo-camera"
             label="拍照"
-            loading={isTakePhotoLoading}
-            disabled={isBusy}
-            onPress={onTakePhoto}
+            loading={selectedSlot.isTakePhotoLoading}
+            disabled={selectedSlot.isBusy}
+            onPress={selectedSlot.onTakePhoto}
           />
           <IconAction
             icon="photo-library"
             label="相册"
-            loading={isPickImageLoading}
-            disabled={isBusy}
-            onPress={onPickImage}
+            loading={selectedSlot.isPickImageLoading}
+            disabled={selectedSlot.isBusy}
+            onPress={selectedSlot.onPickImage}
           />
-          <IconAction icon="tune" label="编辑" disabled={!canEdit} onPress={onEdit} />
+          <IconAction icon="tune" label="编辑" disabled={!canEdit} onPress={selectedSlot.onEdit} />
           <IconAction
             icon="delete-outline"
             label="删除"
             danger
-            loading={isDeleteLoading}
+            loading={selectedSlot.isDeleteLoading}
             disabled={!canDelete}
-            onPress={onDelete}
+            onPress={selectedSlot.onDelete}
           />
         </View>
-      ) : (
-        <Text numberOfLines={1} style={styles.metaText}>
-          {hasImage && typeof fileSize === 'number'
-            ? `${formatFileSize(fileSize)}${count > 1 ? ` · 共 ${count} 张` : ''}`
-            : (hasImage ? '点击查看大图' : '拍照或从相册添加')}
-        </Text>
-      )}
+      ) : null}
+
+      {shouldShowSolutionShortcut && mySolutionSlot ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="添加我的做法"
+          disabled={mySolutionSlot.isBusy}
+          onPress={() => openAddMenu(mySolutionSlot)}
+          style={({ pressed }) => [
+            styles.solutionShortcut,
+            mySolutionSlot.isBusy && styles.solutionShortcutDisabled,
+            pressed && !mySolutionSlot.isBusy && styles.pressed,
+          ]}>
+          <View style={styles.solutionShortcutIcon}>
+            <MaterialIcons name="add" size={24} color={colors.white} />
+          </View>
+          <View style={styles.solutionShortcutTextWrap}>
+            <Text style={styles.solutionShortcutTitle}>添加我的做法</Text>
+            <Text style={styles.solutionShortcutDescription}>拍照或从相册添加，记录你的解题思路</Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={24} color={palette.secondaryText} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  tile: {
+  workspaceCard: {
     borderRadius: radius.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.border,
     backgroundColor: palette.surface,
-    padding: 12,
+    padding: spacing.md,
     gap: spacing.sm,
-  },
-  headerRow: {
-    minHeight: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-  },
-  title: {
-    flex: 1,
-    minWidth: 0,
-    color: palette.text,
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: '700',
-  },
-  countBadge: {
-    minWidth: 22,
-    height: 22,
-    borderRadius: radius.pill,
-    backgroundColor: palette.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  countBadgeText: {
-    color: palette.secondaryText,
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
   },
   previewBox: {
     width: '100%',
-    height: PREVIEW_HEIGHT,
-    borderRadius: 14,
+    borderRadius: radius.lg,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.border,
     backgroundColor: palette.surfaceMuted,
@@ -363,53 +386,97 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  previewBoxEmpty: {
-    borderStyle: 'dashed',
-  },
   previewImage: {
     width: '100%',
     height: '100%',
   },
   emptyContent: {
-    maxWidth: 150,
+    maxWidth: 240,
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
+    paddingHorizontal: spacing.md,
   },
   addIconCircle: {
-    width: 44,
-    height: 44,
+    width: 52,
+    height: 52,
     borderRadius: radius.pill,
-    backgroundColor: colors.accentSoft,
+    backgroundColor: palette.green,
     alignItems: 'center',
     justifyContent: 'center',
   },
   emptyActionText: {
     color: palette.green,
+    fontSize: 17,
+    lineHeight: 23,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  emptyHintText: {
+    color: palette.mutedText,
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: '600',
     textAlign: 'center',
   },
   errorText: {
     color: palette.danger,
-    fontSize: 13,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: 'center',
   },
   previewHint: {
     position: 'absolute',
-    right: spacing.sm,
-    bottom: spacing.sm,
-    width: 28,
-    height: 28,
+    right: spacing.md,
+    bottom: spacing.md,
+    width: 34,
+    height: 34,
     borderRadius: radius.pill,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.border,
     backgroundColor: 'rgba(255, 255, 255, 0.92)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  metaText: {
+    color: palette.mutedText,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  tabList: {
+    minHeight: 52,
+    borderRadius: radius.lg,
+    backgroundColor: '#F0F1F4',
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 4,
+    gap: 4,
+  },
+  tab: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: 44,
+    borderRadius: radius.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xs,
+  },
+  tabSelected: {
+    backgroundColor: palette.surface,
+    shadowColor: colors.shadow,
+    shadowOpacity: 0.05,
+    shadowRadius: 5,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+  },
+  tabText: {
+    color: palette.secondaryText,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '500',
+  },
+  tabTextSelected: {
+    color: palette.text,
+    fontWeight: '700',
   },
   actionsRow: {
     flexDirection: 'row',
@@ -421,7 +488,7 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     minHeight: 44,
-    borderRadius: 10,
+    borderRadius: radius.md,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 1,
@@ -438,10 +505,44 @@ const styles = StyleSheet.create({
   actionLabelDanger: {
     color: palette.danger,
   },
-  metaText: {
+  solutionShortcut: {
+    minHeight: 82,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: palette.border,
+    backgroundColor: '#FAFAFB',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  solutionShortcutDisabled: {
+    opacity: 0.5,
+  },
+  solutionShortcutIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: radius.pill,
+    backgroundColor: palette.green,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  solutionShortcutTextWrap: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  solutionShortcutTitle: {
+    color: palette.text,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: '700',
+  },
+  solutionShortcutDescription: {
     color: palette.mutedText,
-    fontSize: 12,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 18,
   },
   pressed: {
     opacity: 0.68,
