@@ -9,7 +9,6 @@ import {
   type GestureResponderEvent,
   Image,
   KeyboardAvoidingView,
-  type LayoutChangeEvent,
   Linking,
   Modal,
   type NativeScrollEvent,
@@ -31,11 +30,8 @@ import {
   CardContainer,
   DetailBottomActionBar,
   DetailSectionHeader,
-  DetailSectionNavigator,
   MistakeImageBrowser,
   MistakeDetailHeader,
-  type MistakeDetailSectionId,
-  type MistakeDetailSectionItem,
   type MistakeImageBrowserItem,
   type MistakeImageBrowserLongPressHelpers,
   MistakeImageSection,
@@ -140,7 +136,6 @@ type DetailImagePreviewItem = {
 
 type ManagedDetailType = Exclude<DetailImageSlotType, 'review_solution'>;
 type ReviewImageSource = 'camera' | 'album';
-type DetailAnchorId = MistakeDetailSectionId;
 type DetailModulePickerOption = {
   value: string;
   label: string;
@@ -166,15 +161,6 @@ type DetailReviewRecordWithImages = DetailReviewRecordItem & {
 };
 
 const MANAGED_IMAGE_ORDER: ManagedDetailType[] = ['question', 'my_solution', 'answer'];
-const DETAIL_NAV_BAR_HEIGHT = 56;
-const DETAIL_ANCHOR_ACTIVE_OFFSET = 116;
-const DETAIL_ANCHOR_SCROLL_OFFSET = 64;
-const DETAIL_ANCHOR_HIGHLIGHT_DURATION_MS = 1400;
-const DETAIL_ANCHOR_LABELS: Record<DetailAnchorId, string> = {
-  overview: '概览',
-  images: '图片',
-  reviews: '复做记录',
-};
 const EMPTY_BROWSE_CONTEXT: MistakeDetailService.DetailBrowseContext = {
   mode: 'none',
   ids: [],
@@ -1506,9 +1492,6 @@ export default function MistakeDetailScreen() {
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [browseContext, setBrowseContext] =
     useState<MistakeDetailService.DetailBrowseContext>(EMPTY_BROWSE_CONTEXT);
-  const [activeAnchorId, setActiveAnchorId] = useState<DetailAnchorId>('overview');
-  const [highlightedAnchorId, setHighlightedAnchorId] = useState<DetailAnchorId | null>(null);
-  const [isFloatingAnchorVisible, setIsFloatingAnchorVisible] = useState(false);
   const [isImageManageMode, setIsImageManageMode] = useState(false);
   const [showAllReviewRecords, setShowAllReviewRecords] = useState(false);
   const [isMoreMenuVisible, setIsMoreMenuVisible] = useState(false);
@@ -1517,8 +1500,6 @@ export default function MistakeDetailScreen() {
   const browseRequestIdRef = useRef(0);
   const detailScrollRef = useRef<ScrollView | null>(null);
   const titleInputRef = useRef<TextInput | null>(null);
-  const anchorNavLayoutRef = useRef<{ y: number; height: number } | null>(null);
-  const anchorLayoutsRef = useRef<Partial<Record<DetailAnchorId, number>>>({});
   const hasFocusedRef = useRef(false);
   const titleTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const voicePlaybackResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1538,7 +1519,6 @@ export default function MistakeDetailScreen() {
   const bottomEdgePullDistanceRef = useRef(0);
   const pageEnterTranslateY = useRef(new Animated.Value(0)).current;
   const pageEnterOpacity = useRef(new Animated.Value(1)).current;
-  const anchorHighlightTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const allowNextLeaveRef = useRef(false);
   const switchToastKeyRef = useRef<string | null>(null);
   const [titleSelectAllOnFocus, setTitleSelectAllOnFocus] = useState(false);
@@ -1558,11 +1538,6 @@ export default function MistakeDetailScreen() {
     touchMoveCountRef.current = 0;
     topEdgePullDistanceRef.current = 0;
     bottomEdgePullDistanceRef.current = 0;
-    anchorNavLayoutRef.current = null;
-    anchorLayoutsRef.current = {};
-    setActiveAnchorId('overview');
-    setHighlightedAnchorId(null);
-    setIsFloatingAnchorVisible(false);
     setIsImageManageMode(false);
     setShowAllReviewRecords(false);
     setIsMoreMenuVisible(false);
@@ -1607,83 +1582,6 @@ export default function MistakeDetailScreen() {
     }
     router.replace('/(tabs)/library' as never);
   }, [router]);
-
-  const handleAnchorLayout = useCallback((anchorId: DetailAnchorId, event: LayoutChangeEvent) => {
-    const nextY = Math.max(0, Math.round(event.nativeEvent.layout.y));
-    if (anchorLayoutsRef.current[anchorId] === nextY) {
-      return;
-    }
-
-    anchorLayoutsRef.current = {
-      ...anchorLayoutsRef.current,
-      [anchorId]: nextY,
-    };
-  }, []);
-
-  const handleAnchorNavLayout = useCallback((event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    anchorNavLayoutRef.current = {
-      y: Math.max(0, Math.round(y)),
-      height: Math.max(0, Math.round(height)),
-    };
-  }, []);
-
-  const resolveActiveAnchorId = useCallback((scrollY: number, maxScrollY: number): DetailAnchorId => {
-    if (maxScrollY > 0 && scrollY >= maxScrollY - spacing.lg) {
-      return 'reviews';
-    }
-
-    const thresholdY = scrollY + DETAIL_ANCHOR_ACTIVE_OFFSET;
-    let nextAnchorId: DetailAnchorId = 'overview';
-    for (const anchorId of ['overview', 'images', 'reviews'] as const) {
-      const anchorY = anchorLayoutsRef.current[anchorId];
-      if (typeof anchorY === 'number' && thresholdY >= anchorY) {
-        nextAnchorId = anchorId;
-      }
-    }
-
-    return nextAnchorId;
-  }, []);
-
-  const handleAnchorPress = useCallback(
-    (anchorId: DetailAnchorId) => {
-      const targetY = anchorLayoutsRef.current[anchorId];
-      const label = DETAIL_ANCHOR_LABELS[anchorId];
-      if (typeof targetY !== 'number') {
-        showToast(`${label}位置准备中，请稍后再试。`, 'anchor', TOAST_DURATION_SHORT);
-        return;
-      }
-
-      const anchorNavLayout = anchorNavLayoutRef.current;
-      const floatingTriggerY = anchorNavLayout
-        ? anchorNavLayout.y + anchorNavLayout.height - spacing.md
-        : Number.POSITIVE_INFINITY;
-      const willShowFloatingAnchor =
-        Math.max(0, targetY - DETAIL_ANCHOR_SCROLL_OFFSET) >= floatingTriggerY;
-
-      const scrollOffset = isFloatingAnchorVisible || willShowFloatingAnchor
-        ? DETAIL_ANCHOR_SCROLL_OFFSET
-        : spacing.sm;
-
-      detailScrollRef.current?.scrollTo({
-        y: Math.max(0, targetY - scrollOffset),
-        animated: true,
-      });
-      setActiveAnchorId(anchorId);
-      setHighlightedAnchorId(anchorId);
-
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-      }
-      anchorHighlightTimerRef.current = setTimeout(() => {
-        setHighlightedAnchorId(null);
-        anchorHighlightTimerRef.current = null;
-      }, DETAIL_ANCHOR_HIGHLIGHT_DURATION_MS);
-
-      showToast(`已跳转到 ${label}`, 'anchor', TOAST_DURATION_SHORT);
-    },
-    [isFloatingAnchorVisible, showToast],
-  );
 
   const loadModuleOptionsForPicker = useCallback(async () => {
     setIsModuleOptionsLoading(true);
@@ -3117,10 +3015,6 @@ export default function MistakeDetailScreen() {
         clearTimeout(voicePlaybackResetTimerRef.current);
         voicePlaybackResetTimerRef.current = null;
       }
-      if (anchorHighlightTimerRef.current) {
-        clearTimeout(anchorHighlightTimerRef.current);
-        anchorHighlightTimerRef.current = null;
-      }
       voiceRecordingStartedAtRef.current = null;
       voiceStopInProgressRef.current = false;
       void Promise.all([
@@ -4111,14 +4005,6 @@ export default function MistakeDetailScreen() {
     const maxScrollY = Math.max(0, contentHeight - viewportHeight);
     maxScrollYRef.current = maxScrollY;
     lastScrollYRef.current = y;
-    const nextAnchorId = resolveActiveAnchorId(y, maxScrollY);
-    setActiveAnchorId((current) => (current === nextAnchorId ? current : nextAnchorId));
-    const anchorNavLayout = anchorNavLayoutRef.current;
-    const nextFloatingAnchorVisible = anchorNavLayout
-      ? y >= anchorNavLayout.y + anchorNavLayout.height - spacing.md
-      : false;
-    setIsFloatingAnchorVisible((current) =>
-      current === nextFloatingAnchorVisible ? current : nextFloatingAnchorVisible);
 
     if (scrollBoundaryLockRef.current === 'bottom' && y < maxScrollY - BOTTOM_RELEASE_DISTANCE) {
       scrollBoundaryLockRef.current = null;
@@ -4126,7 +4012,7 @@ export default function MistakeDetailScreen() {
     if (scrollBoundaryLockRef.current === 'top' && y > TOP_PULL_RELEASE_DISTANCE) {
       scrollBoundaryLockRef.current = null;
     }
-  }, [resolveActiveAnchorId]);
+  }, []);
 
   const handlePressDeleteMistake = useCallback(() => {
     if (state.kind !== 'success' || isDeletingMistake) {
@@ -4516,16 +4402,6 @@ export default function MistakeDetailScreen() {
     state.kind === 'success' && reviewTextEditorRecordId
       ? state.detail.reviewRecords.find((record) => record.id === reviewTextEditorRecordId) ?? null
       : null;
-  const detailImageCount = managedSlots.reduce((total, slot) => total + countSlotImages(slot), 0);
-  const detailSectionItems: readonly MistakeDetailSectionItem[] = [
-    { id: 'overview', label: '概览' },
-    { id: 'images', label: '图片', count: detailImageCount },
-    {
-      id: 'reviews',
-      label: '复做记录',
-      count: state.kind === 'success' ? state.detail.reviewRecords.length : 0,
-    },
-  ];
   const visibleReviewRecords = state.kind === 'success'
     ? (showAllReviewRecords ? state.detail.reviewRecords : state.detail.reviewRecords.slice(0, 3))
     : [];
@@ -4548,8 +4424,6 @@ export default function MistakeDetailScreen() {
       ? isJoinReviewPlanDisabled
       : (!canStartDetailReview || isStartDetailReviewDisabled));
   const detailPrimaryBusy = isJoiningReviewPlan || isArchivingMistake || isDeletingMistake;
-  const shouldShowFloatingAnchorNav = state.kind === 'success' && isFloatingAnchorVisible;
-  const floatingAnchorTop = insets.top + DETAIL_NAV_BAR_HEIGHT;
   return (
     <View style={styles.pageRoot}>
       <MistakeDetailHeader
@@ -4787,20 +4661,170 @@ export default function MistakeDetailScreen() {
                 nextReviewText={formatNextReviewCompact(state.detail, nextReviewInfo)}
               />
 
-              <View onLayout={handleAnchorNavLayout}>
-                <DetailSectionNavigator
-                  items={detailSectionItems}
-                  activeId={activeAnchorId}
-                  onPress={handleAnchorPress}
+              <View style={styles.detailSection}>
+                <DetailSectionHeader
+                  title="图片"
+                  actionLabel={isImageManageMode ? '完成' : '管理'}
+                  onAction={() => setIsImageManageMode((current) => !current)}
                 />
+
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.compactImageList}>
+                  {managedSlots.map((slot) => {
+                    const slotType = slot.type;
+                    if (!isManagedType(slotType)) {
+                      return null;
+                    }
+                    return (
+                      <MistakeImageSection
+                        key={slotType}
+                        title={slot.title || getDeleteTypeName(slotType)}
+                        imageUri={slot.uri}
+                        imageExists={slot.exists}
+                        fileSize={slot.fileSize}
+                        width={slot.width}
+                        height={slot.height}
+                        imageWidth={slot.imageWidth}
+                        imageHeight={slot.imageHeight}
+                        imageCount={countSlotImages(slot)}
+                        emptyText={slot.emptyText}
+                        emptyActionLabel={
+                          slotType === 'my_solution' ? '添加我的做法' : `添加${getDeleteTypeName(slotType)}`
+                        }
+                        loadErrorText={slotType === 'question' ? '题目图片加载失败' : '图片加载失败'}
+                        isBusy={isTypeBusy(slotType)}
+                        isTakePhotoLoading={takePhotoType === slotType}
+                        isPickImageLoading={pickImageType === slotType}
+                        isDeleteLoading={deleteType === slotType}
+                        showManagementActions={isImageManageMode}
+                        onTakePhoto={() => {
+                          void takePhotoForType(slotType);
+                        }}
+                        onPickImage={() => {
+                          void pickImageForType(slotType);
+                        }}
+                        onEdit={() => handlePressEdit(slot)}
+                        onDelete={() => handlePressDelete(slotType)}
+                        onPreview={() => openImageBrowser(`slot:${slotType}:0`)}
+                      />
+                    );
+                  })}
+                </ScrollView>
+                {state.detail.mySolutionText || state.detail.answerText ? (
+                  <View style={styles.supplementTextList}>
+                    {state.detail.mySolutionText ? (
+                      <View style={styles.supplementTextRow}>
+                        <Text style={styles.supplementTextTitle}>我的做法</Text>
+                        <Text selectable style={styles.supplementTextBody}>{state.detail.mySolutionText}</Text>
+                      </View>
+                    ) : null}
+                    {state.detail.answerText ? (
+                      <View style={styles.supplementTextRow}>
+                        <Text style={styles.supplementTextTitle}>答案／解析</Text>
+                        <Text selectable style={styles.supplementTextBody}>{state.detail.answerText}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                ) : null}
               </View>
 
-              <View
-                onLayout={(event) => handleAnchorLayout('overview', event)}
-                style={[
-                  styles.detailSection,
-                  highlightedAnchorId === 'overview' && styles.anchorTargetHighlighted,
-                ]}>
+              <View style={styles.detailSection}>
+                <DetailSectionHeader
+                  title="复做记录"
+                  actionLabel={
+                    state.detail.reviewRecords.length > 3
+                      ? (showAllReviewRecords ? '收起' : '查看全部')
+                      : undefined
+                  }
+                  onAction={() => setShowAllReviewRecords((current) => !current)}
+                />
+
+                <View style={styles.reviewTimelineGroup}>
+                  {state.detail.reviewRecords.length <= 0 ? (
+                    <View style={styles.reviewTimelineEmpty}>
+                      <View style={styles.reviewTimelineEmptyIcon}>
+                        <MaterialIcons
+                          name="history"
+                          size={24}
+                          color={mistakeDetailPalette.secondaryText}
+                        />
+                      </View>
+                      <Text style={styles.reviewTimelineEmptyTitle}>还没有复做记录</Text>
+                      <Text style={styles.reviewTimelineEmptyText}>
+                        完成第一次复做后，记录会显示在这里
+                      </Text>
+                    </View>
+                  ) : (
+                    visibleReviewRecords.map((record) => (
+                      <ReviewRecordCard
+                        key={record.id}
+                        record={record}
+                        isBusy={isReviewRecordImageBusy(record.id)}
+                        isVoicePlaying={activeVoiceRecordId === record.id}
+                        isVoiceBusy={isVoicePlaybackBusy || isVoiceRecordingBusy}
+                        isVoicePlaybackLocked={activeVoiceRecordingRecordId !== null}
+                        isVoiceRecording={activeVoiceRecordingRecordId === record.id}
+                        recordingElapsedMs={recordingElapsedMs}
+                        isVoiceLocked={
+                          !!activeVoiceRecordingRecordId && activeVoiceRecordingRecordId !== record.id
+                        }
+                        isTextActionDisabled={
+                          isSavingReviewText
+                          || activeVoiceRecordingRecordId !== null
+                          || isVoiceRecordingBusy
+                        }
+                        onAddImage={(targetRecord) => {
+                          openReviewImagePickerActionSheet(targetRecord, 'add');
+                        }}
+                        onAddText={handleOpenReviewTextEditor}
+                        onOpenText={handleOpenReviewTextPreview}
+                        onPreview={openImageBrowser}
+                        onOpenImageActions={handleOpenReviewImageActions}
+                        onToggleVoicePlayback={(targetRecord) => {
+                          void handleToggleReviewVoicePlayback(targetRecord);
+                        }}
+                        onStartVoiceRecording={(targetRecord) => {
+                          void handleStartReviewVoiceRecording(targetRecord);
+                        }}
+                        onStopAndSaveVoiceRecording={(targetRecord) => {
+                          void handleStopAndSaveReviewVoiceRecording(targetRecord);
+                        }}
+                      />
+                    ))
+                  )}
+
+                  {!showAllReviewRecords && state.detail.reviewRecords.length > visibleReviewRecords.length ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="显示全部复做记录"
+                      onPress={() => setShowAllReviewRecords(true)}
+                      style={({ pressed }) => [
+                        styles.showMoreReviewsButton,
+                        pressed && styles.detailPressed,
+                      ]}>
+                      <Text style={styles.showMoreReviewsText}>
+                        还有 {state.detail.reviewRecords.length - visibleReviewRecords.length} 条记录
+                      </Text>
+                      <MaterialIcons
+                        name="keyboard-arrow-down"
+                        size={20}
+                        color={mistakeDetailPalette.green}
+                      />
+                    </Pressable>
+                  ) : null}
+                </View>
+
+                {browseSummaryText ? <Text style={styles.browseSummaryText}>{browseSummaryText}</Text> : null}
+                {browseContext.ids.length > 1 ? (
+                  <Text style={styles.browseHintText}>
+                    在页面边界快速拉动可切换上一题或下一题
+                  </Text>
+                ) : null}
+              </View>
+
+              <View style={styles.detailSection}>
                 <DetailSectionHeader title="概览" />
                 <View style={styles.overviewGroup}>
                   <View style={styles.overviewRow}>
@@ -4947,179 +4971,6 @@ export default function MistakeDetailScreen() {
                   </Pressable>
                 </View>
               </View>
-
-              <View
-                onLayout={(event) => handleAnchorLayout('images', event)}
-                style={[
-                  styles.detailSection,
-                  highlightedAnchorId === 'images' && styles.anchorTargetHighlighted,
-                ]}>
-                <DetailSectionHeader
-                  title="图片"
-                  actionLabel={isImageManageMode ? '完成' : '管理'}
-                  onAction={() => setIsImageManageMode((current) => !current)}
-                />
-
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.compactImageList}>
-                  {managedSlots.map((slot) => {
-                    const slotType = slot.type;
-                    if (!isManagedType(slotType)) {
-                      return null;
-                    }
-                    return (
-                      <MistakeImageSection
-                        key={slotType}
-                        title={slot.title || getDeleteTypeName(slotType)}
-                        imageUri={slot.uri}
-                        imageExists={slot.exists}
-                        fileSize={slot.fileSize}
-                        width={slot.width}
-                        height={slot.height}
-                        imageWidth={slot.imageWidth}
-                        imageHeight={slot.imageHeight}
-                        imageCount={countSlotImages(slot)}
-                        emptyText={slot.emptyText}
-                        emptyActionLabel={
-                          slotType === 'my_solution' ? '添加我的做法' : `添加${getDeleteTypeName(slotType)}`
-                        }
-                        loadErrorText={slotType === 'question' ? '题目图片加载失败' : '图片加载失败'}
-                        isBusy={isTypeBusy(slotType)}
-                        isTakePhotoLoading={takePhotoType === slotType}
-                        isPickImageLoading={pickImageType === slotType}
-                        isDeleteLoading={deleteType === slotType}
-                        showManagementActions={isImageManageMode}
-                        onTakePhoto={() => {
-                          void takePhotoForType(slotType);
-                        }}
-                        onPickImage={() => {
-                          void pickImageForType(slotType);
-                        }}
-                        onEdit={() => handlePressEdit(slot)}
-                        onDelete={() => handlePressDelete(slotType)}
-                        onPreview={() => openImageBrowser(`slot:${slotType}:0`)}
-                      />
-                    );
-                  })}
-                </ScrollView>
-                {state.detail.mySolutionText || state.detail.answerText ? (
-                  <View style={styles.supplementTextList}>
-                    {state.detail.mySolutionText ? (
-                      <View style={styles.supplementTextRow}>
-                        <Text style={styles.supplementTextTitle}>我的做法</Text>
-                        <Text selectable style={styles.supplementTextBody}>{state.detail.mySolutionText}</Text>
-                      </View>
-                    ) : null}
-                    {state.detail.answerText ? (
-                      <View style={styles.supplementTextRow}>
-                        <Text style={styles.supplementTextTitle}>答案／解析</Text>
-                        <Text selectable style={styles.supplementTextBody}>{state.detail.answerText}</Text>
-                      </View>
-                    ) : null}
-                  </View>
-                ) : null}
-              </View>
-
-              <View
-                onLayout={(event) => handleAnchorLayout('reviews', event)}
-                style={[
-                  styles.detailSection,
-                  highlightedAnchorId === 'reviews' && styles.anchorTargetHighlighted,
-                ]}>
-                <DetailSectionHeader
-                  title="复做记录"
-                  actionLabel={
-                    state.detail.reviewRecords.length > 3
-                      ? (showAllReviewRecords ? '收起' : '查看全部')
-                      : undefined
-                  }
-                  onAction={() => setShowAllReviewRecords((current) => !current)}
-                />
-
-                <View style={styles.reviewTimelineGroup}>
-                  {state.detail.reviewRecords.length <= 0 ? (
-                    <View style={styles.reviewTimelineEmpty}>
-                      <View style={styles.reviewTimelineEmptyIcon}>
-                        <MaterialIcons
-                          name="history"
-                          size={24}
-                          color={mistakeDetailPalette.secondaryText}
-                        />
-                      </View>
-                      <Text style={styles.reviewTimelineEmptyTitle}>还没有复做记录</Text>
-                      <Text style={styles.reviewTimelineEmptyText}>
-                        完成第一次复做后，记录会显示在这里
-                      </Text>
-                    </View>
-                  ) : (
-                    visibleReviewRecords.map((record) => (
-                      <ReviewRecordCard
-                        key={record.id}
-                        record={record}
-                        isBusy={isReviewRecordImageBusy(record.id)}
-                        isVoicePlaying={activeVoiceRecordId === record.id}
-                        isVoiceBusy={isVoicePlaybackBusy || isVoiceRecordingBusy}
-                        isVoicePlaybackLocked={activeVoiceRecordingRecordId !== null}
-                        isVoiceRecording={activeVoiceRecordingRecordId === record.id}
-                        recordingElapsedMs={recordingElapsedMs}
-                        isVoiceLocked={
-                          !!activeVoiceRecordingRecordId && activeVoiceRecordingRecordId !== record.id
-                        }
-                        isTextActionDisabled={
-                          isSavingReviewText
-                          || activeVoiceRecordingRecordId !== null
-                          || isVoiceRecordingBusy
-                        }
-                        onAddImage={(targetRecord) => {
-                          openReviewImagePickerActionSheet(targetRecord, 'add');
-                        }}
-                        onAddText={handleOpenReviewTextEditor}
-                        onOpenText={handleOpenReviewTextPreview}
-                        onPreview={openImageBrowser}
-                        onOpenImageActions={handleOpenReviewImageActions}
-                        onToggleVoicePlayback={(targetRecord) => {
-                          void handleToggleReviewVoicePlayback(targetRecord);
-                        }}
-                        onStartVoiceRecording={(targetRecord) => {
-                          void handleStartReviewVoiceRecording(targetRecord);
-                        }}
-                        onStopAndSaveVoiceRecording={(targetRecord) => {
-                          void handleStopAndSaveReviewVoiceRecording(targetRecord);
-                        }}
-                      />
-                    ))
-                  )}
-
-                  {!showAllReviewRecords && state.detail.reviewRecords.length > visibleReviewRecords.length ? (
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="显示全部复做记录"
-                      onPress={() => setShowAllReviewRecords(true)}
-                      style={({ pressed }) => [
-                        styles.showMoreReviewsButton,
-                        pressed && styles.detailPressed,
-                      ]}>
-                      <Text style={styles.showMoreReviewsText}>
-                        还有 {state.detail.reviewRecords.length - visibleReviewRecords.length} 条记录
-                      </Text>
-                      <MaterialIcons
-                        name="keyboard-arrow-down"
-                        size={20}
-                        color={mistakeDetailPalette.green}
-                      />
-                    </Pressable>
-                  ) : null}
-                </View>
-
-                {browseSummaryText ? <Text style={styles.browseSummaryText}>{browseSummaryText}</Text> : null}
-                {browseContext.ids.length > 1 ? (
-                  <Text style={styles.browseHintText}>
-                    在页面边界快速拉动可切换上一题或下一题
-                  </Text>
-                ) : null}
-              </View>
             </>
           ) : null}
 
@@ -5133,19 +4984,6 @@ export default function MistakeDetailScreen() {
           />
         </ScreenContainer>
       </Animated.View>
-
-      {shouldShowFloatingAnchorNav ? (
-        <View
-          pointerEvents="box-none"
-          style={[styles.floatingAnchorWrap, { top: floatingAnchorTop }]}>
-          <DetailSectionNavigator
-            floating
-            items={detailSectionItems}
-            activeId={activeAnchorId}
-            onPress={handleAnchorPress}
-          />
-        </View>
-      ) : null}
 
       {state.kind === 'success' ? (
         <DetailBottomActionBar
@@ -5464,17 +5302,6 @@ const styles = StyleSheet.create({
   loadingText: {
     ...typography.body,
     color: colors.textSecondary,
-  },
-  floatingAnchorWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    zIndex: 30,
-    elevation: 4,
-  },
-  anchorTargetHighlighted: {
-    borderRadius: 20,
-    backgroundColor: 'rgba(52, 199, 89, 0.05)',
   },
   detailPressed: {
     opacity: 0.62,

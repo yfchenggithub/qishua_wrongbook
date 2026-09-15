@@ -1,5 +1,5 @@
 import MaterialIcons from '@expo/vector-icons/MaterialIcons';
-import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import type { MistakeStatus } from '@/src/models/Mistake';
 import { colors, radius, spacing } from '@/src/styles/tokens';
@@ -13,17 +13,8 @@ const palette = {
   greenFill: colors.accent,
   greenSoft: colors.accentSoft,
   border: colors.separator,
-  segment: '#E9E9ED',
   pending: '#D8D8DC',
 } as const;
-
-export type MistakeDetailSectionId = 'overview' | 'images' | 'reviews';
-
-export type MistakeDetailSectionItem = {
-  id: MistakeDetailSectionId;
-  label: string;
-  count?: number;
-};
 
 export function MistakeDetailHeader({
   topInset,
@@ -110,49 +101,6 @@ export function ReviewProgressCard({
           ))}
         </View>
       </View>
-    </View>
-  );
-}
-
-export function DetailSectionNavigator({
-  items,
-  activeId,
-  floating = false,
-  onPress,
-  style,
-}: {
-  items: readonly MistakeDetailSectionItem[];
-  activeId: MistakeDetailSectionId;
-  floating?: boolean;
-  onPress: (id: MistakeDetailSectionId) => void;
-  style?: StyleProp<ViewStyle>;
-}) {
-  return (
-    <View style={[styles.segmentOuter, floating && styles.segmentOuterFloating, style]}>
-      {items.map((item) => {
-        const active = item.id === activeId;
-        const text = typeof item.count === 'number' ? `${item.label} ${item.count}` : item.label;
-        return (
-          <Pressable
-            key={item.id}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            accessibilityLabel={`跳转到${text}`}
-            onPress={() => onPress(item.id)}
-            style={({ pressed }) => [
-              styles.segmentItem,
-              active && styles.segmentItemActive,
-              pressed && styles.segmentItemPressed,
-            ]}>
-            <Text
-              numberOfLines={1}
-              maxFontSizeMultiplier={1.2}
-              style={[styles.segmentText, active && styles.segmentTextActive]}>
-              {text}
-            </Text>
-          </Pressable>
-        );
-      })}
     </View>
   );
 }
@@ -358,53 +306,6 @@ const styles = StyleSheet.create({
   },
   progressDotCompleted: {
     backgroundColor: palette.greenFill,
-  },
-  segmentOuter: {
-    minHeight: 52,
-    borderRadius: 18,
-    backgroundColor: palette.segment,
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 4,
-    gap: 4,
-  },
-  segmentOuterFloating: {
-    borderRadius: 0,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: palette.border,
-    paddingHorizontal: spacing.screenPadding,
-    paddingVertical: 6,
-    backgroundColor: 'rgba(245, 245, 247, 0.98)',
-  },
-  segmentItem: {
-    flex: 1,
-    minWidth: 0,
-    minHeight: 44,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 5,
-  },
-  segmentItemActive: {
-    backgroundColor: palette.surface,
-    shadowColor: '#000000',
-    shadowOpacity: 0.05,
-    shadowRadius: 5,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
-  },
-  segmentItemPressed: {
-    opacity: 0.7,
-  },
-  segmentText: {
-    color: palette.secondaryText,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
-  segmentTextActive: {
-    color: palette.text,
-    fontWeight: '700',
   },
   sectionHeader: {
     minHeight: 44,
