@@ -7,6 +7,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -14,8 +15,9 @@ import { Logger } from '@/src/services/Logger';
 import { colors, radius, spacing } from '@/src/styles/tokens';
 
 const COMPONENT_SCOPE = 'MistakeImageSection';
-const TILE_WIDTH = 208;
-const PREVIEW_HEIGHT = 156;
+const MIN_TILE_WIDTH = 152;
+const MAX_TILE_WIDTH = 190;
+const PREVIEW_HEIGHT = 220;
 
 const palette = {
   surface: colors.surface,
@@ -106,6 +108,13 @@ function formatFileSize(fileSize: number): string {
   return `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function calculateTileWidth(viewportWidth: number): number {
+  const availableWidth = Math.floor(
+    (viewportWidth - spacing.screenPadding * 2 - spacing.md) / 2,
+  );
+  return Math.max(MIN_TILE_WIDTH, Math.min(MAX_TILE_WIDTH, availableWidth));
+}
+
 function IconAction({
   icon,
   label,
@@ -167,6 +176,7 @@ export function MistakeImageSection({
   onPreview,
 }: MistakeImageSectionProps) {
   const [imageFailed, setImageFailed] = useState(false);
+  const { width: viewportWidth } = useWindowDimensions();
   const normalizedUri = useMemo(() => normalizeUri(imageUri), [imageUri]);
   const hasImage = !!normalizedUri;
   const canShowImage = hasImage && imageExists === true && !imageFailed;
@@ -203,7 +213,7 @@ export function MistakeImageSection({
   };
 
   return (
-    <View style={styles.tile}>
+    <View style={[styles.tile, { width: calculateTileWidth(viewportWidth) }]}>
       <View style={styles.headerRow}>
         <Text numberOfLines={1} maxFontSizeMultiplier={1.15} style={styles.title}>{title}</Text>
         {count > 1 ? (
@@ -303,8 +313,7 @@ export function MistakeImageSection({
 
 const styles = StyleSheet.create({
   tile: {
-    width: TILE_WIDTH,
-    borderRadius: 18,
+    borderRadius: radius.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: palette.border,
     backgroundColor: palette.surface,
