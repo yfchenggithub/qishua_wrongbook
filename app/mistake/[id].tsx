@@ -1,5 +1,4 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -4238,34 +4237,6 @@ export default function MistakeDetailScreen() {
     titleInputRef.current?.focus();
   }, []);
 
-  const handleCopyQuestionCode = useCallback(async () => {
-    if (state.kind !== 'success') {
-      return;
-    }
-
-    const questionCode = state.detail.questionCode.trim();
-    if (!questionCode) {
-      return;
-    }
-
-    if (typeof Clipboard.setStringAsync !== 'function') {
-      showToast('当前设备不支持复制编号。', 'error');
-      return;
-    }
-
-    try {
-      await Clipboard.setStringAsync(questionCode);
-      showToast(`已复制编号 ${questionCode}`, 'success', TOAST_DURATION_SHORT);
-    } catch (error) {
-      Logger.error(PAGE_SCOPE, 'Failed to copy mistake question code.', {
-        mistakeId: state.detail.id,
-        questionCode,
-        error,
-      });
-      showToast('编号复制失败，请重试。', 'error');
-    }
-  }, [showToast, state]);
-
   const handleSaveTitle = useCallback(async () => {
     if (state.kind !== 'success' || isSavingTitle) {
       return;
@@ -4514,27 +4485,6 @@ export default function MistakeDetailScreen() {
           {state.kind === 'success' ? (
             <>
               <View style={styles.detailTitleSection}>
-                {state.detail.questionCode ? (
-                  <Pressable
-                    accessibilityHint="点击复制编号"
-                    accessibilityLabel={`错题编号 ${state.detail.questionCode}`}
-                    accessibilityRole="button"
-                    hitSlop={6}
-                    onPress={() => void handleCopyQuestionCode()}
-                    style={({ pressed }) => [
-                      styles.detailQuestionCodeBadge,
-                      pressed && styles.detailQuestionCodeBadgePressed,
-                    ]}>
-                    <Text style={styles.detailQuestionCodeText}>
-                      {state.detail.questionCode}
-                    </Text>
-                    <MaterialIcons
-                      name="content-copy"
-                      size={14}
-                      color={mistakeDetailPalette.green}
-                    />
-                  </Pressable>
-                ) : null}
                 <View style={styles.detailTitleRow}>
                   {isTitleEditing ? (
                     <View style={styles.detailTitleInputWrap}>
@@ -4638,6 +4588,18 @@ export default function MistakeDetailScreen() {
                   </Pressable>
                   <Text style={styles.metadataSeparator}>·</Text>
                   <Text style={styles.detailMetadataText}>{formatDateShort(state.detail.createdAt)}</Text>
+                  {state.detail.questionCode ? (
+                    <>
+                      <Text style={styles.metadataSeparator}>·</Text>
+                      <Text
+                        accessibilityHint="长按可复制编号"
+                        accessibilityLabel={`错题编号 ${state.detail.questionCode}`}
+                        selectable
+                        style={styles.detailQuestionCodeText}>
+                        {state.detail.questionCode}
+                      </Text>
+                    </>
+                  ) : null}
                 </View>
 
                 {state.detail.errorReason ? (
@@ -5298,29 +5260,11 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     paddingHorizontal: spacing.xs,
   },
-  detailQuestionCodeBadge: {
-    alignSelf: 'flex-start',
-    minHeight: 30,
-    borderRadius: 9,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSoft,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  detailQuestionCodeBadgePressed: {
-    opacity: 0.62,
-  },
   detailQuestionCodeText: {
-    color: mistakeDetailPalette.green,
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '800',
-    letterSpacing: 0.4,
+    color: mistakeDetailPalette.secondaryText,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '400',
   },
   detailTitleRow: {
     minWidth: 0,
@@ -5403,7 +5347,7 @@ const styles = StyleSheet.create({
     minHeight: 28,
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
+    flexWrap: 'nowrap',
     columnGap: spacing.sm,
   },
   metadataTextButton: {
