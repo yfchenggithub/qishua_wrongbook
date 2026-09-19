@@ -1,4 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import * as Clipboard from 'expo-clipboard';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -4237,6 +4238,29 @@ export default function MistakeDetailScreen() {
     titleInputRef.current?.focus();
   }, []);
 
+  const handleCopyQuestionCode = useCallback(async () => {
+    if (state.kind !== 'success') {
+      return;
+    }
+
+    const questionCode = state.detail.questionCode.trim();
+    if (!questionCode) {
+      return;
+    }
+
+    try {
+      await Clipboard.setStringAsync(questionCode);
+      showToast(`已复制编号 ${questionCode}`, 'success', TOAST_DURATION_SHORT);
+    } catch (error) {
+      Logger.error(PAGE_SCOPE, 'Failed to copy mistake question code.', {
+        mistakeId: state.detail.id,
+        questionCode,
+        error,
+      });
+      showToast('编号复制失败，请重试。', 'error');
+    }
+  }, [showToast, state]);
+
   const handleSaveTitle = useCallback(async () => {
     if (state.kind !== 'success' || isSavingTitle) {
       return;
@@ -4592,8 +4616,10 @@ export default function MistakeDetailScreen() {
                     <>
                       <Text style={styles.metadataSeparator}>·</Text>
                       <Text
-                        accessibilityHint="长按可复制编号"
+                        accessibilityHint="点击可复制编号，长按可选择文本"
                         accessibilityLabel={`错题编号 ${state.detail.questionCode}`}
+                        accessibilityRole="button"
+                        onPress={() => void handleCopyQuestionCode()}
                         selectable
                         style={styles.detailQuestionCodeText}>
                         {state.detail.questionCode}
