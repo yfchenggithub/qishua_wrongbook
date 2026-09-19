@@ -4465,6 +4465,7 @@ export default function MistakeDetailScreen() {
         ]}>
         <ScreenContainer
           scroll
+          withPadding={false}
           safeAreaEdges={[]}
           scrollRef={detailScrollRef}
           keyboardShouldPersistTaps="handled"
@@ -4571,10 +4572,6 @@ export default function MistakeDetailScreen() {
                     </Pressable>
                   )}
 
-                  <View accessibilityLabel="本地离线数据" style={styles.offlineBadge}>
-                    <MaterialIcons name="wifi-off" size={13} color={mistakeDetailPalette.green} />
-                    <Text style={styles.offlineBadgeText}>离线</Text>
-                  </View>
                 </View>
 
                 {isSavingTitle ? (
@@ -5251,9 +5248,12 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   screenContent: {
-    paddingTop: spacing.xl,
+    // The detail header is fixed above this scroll view, so a compact top inset
+    // keeps the title visually tied to the navigation bar.
+    paddingTop: 0,
+    paddingHorizontal: spacing.sm,
     paddingBottom: spacing.xl + layout.bottomTabHeight,
-    gap: spacing.xl,
+    gap: spacing.md,
     backgroundColor: mistakeDetailPalette.background,
   },
   backButton: {
@@ -5342,26 +5342,6 @@ const styles = StyleSheet.create({
   },
   detailTitleClearButtonPressed: {
     opacity: 0.55,
-  },
-  offlineBadge: {
-    flexShrink: 0,
-    minHeight: 30,
-    borderRadius: 9,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.accentSoft,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 9,
-    marginTop: 5,
-  },
-  offlineBadgeText: {
-    color: mistakeDetailPalette.green,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
   },
   titleSavingInline: {
     minHeight: 24,
