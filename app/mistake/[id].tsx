@@ -4805,25 +4805,27 @@ export default function MistakeDetailScreen() {
               </View>
 
               <View style={styles.detailSection}>
-                <DetailSectionHeader title="概览" />
+                <DetailSectionHeader title="补充信息" />
                 <View style={styles.overviewGroup}>
-                  <View style={styles.overviewRow}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="管理标签"
+                    onPress={() => {
+                      if (state.detail.tags.length <= 0) {
+                        handleOpenTagAddModal();
+                        return;
+                      }
+                      setIsTagManageMode((current) => !current);
+                    }}
+                    style={({ pressed }) => [
+                      styles.overviewRow,
+                      pressed && styles.overviewRowPressed,
+                    ]}>
                     <Text style={styles.overviewLabel}>标签</Text>
                     <View style={styles.overviewValue}>
-                      <View style={styles.overviewTagRow}>
-                        {state.detail.tags.length > 0 ? (
-                          state.detail.tags.map((tag) => {
-                            if (!isTagManageMode) {
-                              return (
-                                <TagChip
-                                  key={tag.id}
-                                  label={tag.name}
-                                  selected
-                                  style={styles.overviewTagChip}
-                                  textStyle={styles.overviewTagChipText}
-                                />
-                              );
-                            }
+                      {isTagManageMode ? (
+                        <View style={styles.overviewTagRow}>
+                          {state.detail.tags.map((tag) => {
                             const deleting = deletingTagId === tag.id;
                             return (
                               <Pressable
@@ -4850,12 +4852,7 @@ export default function MistakeDetailScreen() {
                                 )}
                               </Pressable>
                             );
-                          })
-                        ) : (
-                          <Text style={styles.overviewEmptyText}>暂无</Text>
-                        )}
-
-                        {isTagManageMode ? (
+                          })}
                           <Pressable
                             accessibilityRole="button"
                             accessibilityLabel="添加标签"
@@ -4865,59 +4862,40 @@ export default function MistakeDetailScreen() {
                               styles.overviewAddTag,
                               pressed && styles.detailPressed,
                             ]}>
-                            <MaterialIcons name="add" size={16} color={mistakeDetailPalette.green} />
+                            <MaterialIcons name="add" size={16} color={mistakeDetailPalette.secondaryText} />
                             <Text style={styles.overviewAddTagText}>添加</Text>
                           </Pressable>
-                        ) : null}
-                      </View>
+                        </View>
+                      ) : (
+                        <Text numberOfLines={1} style={styles.overviewSummaryText}>
+                          {state.detail.tags.length > 0
+                            ? state.detail.tags.map((tag) => tag.name).join(' · ')
+                            : '未添加'}
+                        </Text>
+                      )}
                     </View>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={isTagManageMode ? '完成标签管理' : '管理标签'}
-                      onPress={() => {
-                        if (state.detail.tags.length <= 0) {
-                          handleOpenTagAddModal();
-                          return;
-                        }
-                        setIsTagManageMode((current) => !current);
-                      }}
-                      style={({ pressed }) => [
-                        styles.overviewAction,
-                        pressed && styles.detailPressed,
-                      ]}>
-                      <Text style={styles.overviewActionText}>
-                        {isTagManageMode ? '完成' : '管理'}
-                      </Text>
-                    </Pressable>
-                  </View>
+                    <MaterialIcons name="chevron-right" size={22} color={colors.textMuted} />
+                  </Pressable>
 
                   <View style={styles.overviewDivider} />
 
-                  <View style={[styles.overviewRow, styles.overviewNoteRow]}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="编辑错题备注"
+                    disabled={isDeletingMistake}
+                    onPress={handleOpenNoteModal}
+                    style={({ pressed }) => [
+                      styles.overviewRow,
+                      pressed && !isDeletingMistake && styles.overviewRowPressed,
+                    ]}>
                     <Text style={styles.overviewLabel}>备注</Text>
                     <View style={styles.overviewValue}>
-                      <TextNotePreview
-                        value={hasNoteContent ? noteInput : ''}
-                        emptyText="暂无备注"
-                        maxLength={NOTE_MAX_LENGTH}
-                        accessibilityLabel="错题备注"
-                        disabled={isDeletingMistake}
-                        onOpen={handleOpenNoteModal}
-                        highlights={noteHighlightsInput}
-                        style={styles.overviewNotePreview}
-                        textStyle={styles.overviewNoteText}
-                        emptyTextStyle={styles.overviewEmptyText}
-                        openOnSinglePress
-                        showFooter={false}
-                        numberOfLines={2}
-                      />
+                      <Text numberOfLines={1} style={styles.overviewSummaryText}>
+                        {hasNoteContent ? noteInput : '未添加'}
+                      </Text>
                     </View>
-                    <MaterialIcons
-                      name="chevron-right"
-                      size={22}
-                      color={mistakeDetailPalette.secondaryText}
-                    />
-                  </View>
+                    <MaterialIcons name="chevron-right" size={22} color={colors.textMuted} />
+                  </Pressable>
 
                   <View style={styles.overviewDivider} />
 
@@ -4935,19 +4913,15 @@ export default function MistakeDetailScreen() {
                     }
                     style={({ pressed }) => [
                       styles.overviewRow,
-                      styles.relatedOverviewRow,
                       pressed && styles.overviewRowPressed,
                     ]}>
                     <Text style={styles.overviewLabel}>相关错题</Text>
-                    <View style={styles.overviewValue} />
-                    <Text style={styles.relatedCountInline}>
-                      {relatedSummary.total > 0 ? `共 ${relatedSummary.total} 题` : '暂无'}
-                    </Text>
-                    <MaterialIcons
-                      name="chevron-right"
-                      size={22}
-                      color={mistakeDetailPalette.secondaryText}
-                    />
+                    <View style={styles.overviewValue}>
+                      <Text numberOfLines={1} style={styles.overviewSummaryText}>
+                        {relatedSummary.total > 0 ? `${relatedSummary.total} 道` : '未关联'}
+                      </Text>
+                    </View>
+                    <MaterialIcons name="chevron-right" size={22} color={colors.textMuted} />
                   </Pressable>
                 </View>
               </View>
@@ -5422,18 +5396,12 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   overviewRow: {
-    minHeight: 76,
+    minHeight: 60,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-  },
-  overviewNoteRow: {
-    minHeight: 92,
-  },
-  relatedOverviewRow: {
-    minHeight: 76,
+    paddingVertical: spacing.xs,
   },
   overviewRowPressed: {
     backgroundColor: '#F7F7F9',
@@ -5454,6 +5422,12 @@ const styles = StyleSheet.create({
   overviewValue: {
     flex: 1,
     minWidth: 0,
+  },
+  overviewSummaryText: {
+    color: mistakeDetailPalette.secondaryText,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '400',
   },
   overviewTagRow: {
     flexDirection: 'row',
@@ -5500,7 +5474,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
   },
   overviewAddTagText: {
-    color: mistakeDetailPalette.green,
+    color: mistakeDetailPalette.secondaryText,
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',
