@@ -165,11 +165,6 @@ export function MistakeImageSection({
     () => slots.find((slot) => slot.type === activeType) ?? slots[0] ?? null,
     [activeType, slots],
   );
-  const mySolutionSlot = useMemo(
-    () => slots.find((slot) => slot.type === 'my_solution') ?? null,
-    [slots],
-  );
-
   useEffect(() => {
     if (selectedSlot && !slots.some((slot) => slot.type === activeType)) {
       setActiveType(selectedSlot.type);
@@ -190,12 +185,6 @@ export function MistakeImageSection({
   const hasMissingImage = hasImage && selectedSlot.imageExists === false;
   const canEdit = hasImage && selectedSlot.imageExists !== false && !selectedSlot.isBusy;
   const canDelete = hasImage && !selectedSlot.isBusy;
-  const shouldShowSolutionShortcut =
-    !showManagementActions
-    && activeType !== 'my_solution'
-    && !!mySolutionSlot
-    && (!normalizeUri(mySolutionSlot.imageUri) || mySolutionSlot.imageExists === false);
-
   const openAddMenu = (slot: MistakeImageWorkspaceSlot) => {
     if (slot.isBusy) {
       return;
@@ -341,27 +330,6 @@ export function MistakeImageSection({
         </View>
       ) : null}
 
-      {shouldShowSolutionShortcut && mySolutionSlot ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="添加我的做法"
-          disabled={mySolutionSlot.isBusy}
-          onPress={() => openAddMenu(mySolutionSlot)}
-          style={({ pressed }) => [
-            styles.solutionShortcut,
-            mySolutionSlot.isBusy && styles.solutionShortcutDisabled,
-            pressed && !mySolutionSlot.isBusy && styles.pressed,
-          ]}>
-          <View style={styles.solutionShortcutIcon}>
-            <MaterialIcons name="add" size={24} color={colors.white} />
-          </View>
-          <View style={styles.solutionShortcutTextWrap}>
-            <Text style={styles.solutionShortcutTitle}>添加我的做法</Text>
-            <Text style={styles.solutionShortcutDescription}>拍照或从相册添加，记录你的解题思路</Text>
-          </View>
-          <MaterialIcons name="chevron-right" size={24} color={palette.secondaryText} />
-        </Pressable>
-      ) : null}
     </View>
   );
 }
@@ -504,45 +472,6 @@ const styles = StyleSheet.create({
   },
   actionLabelDanger: {
     color: palette.danger,
-  },
-  solutionShortcut: {
-    minHeight: 82,
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.border,
-    backgroundColor: '#FAFAFB',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-  },
-  solutionShortcutDisabled: {
-    opacity: 0.5,
-  },
-  solutionShortcutIcon: {
-    width: 46,
-    height: 46,
-    borderRadius: radius.pill,
-    backgroundColor: palette.green,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  solutionShortcutTextWrap: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  solutionShortcutTitle: {
-    color: palette.text,
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: '700',
-  },
-  solutionShortcutDescription: {
-    color: palette.mutedText,
-    fontSize: 13,
-    lineHeight: 18,
   },
   pressed: {
     opacity: 0.68,
