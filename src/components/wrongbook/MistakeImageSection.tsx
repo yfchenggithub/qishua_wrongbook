@@ -15,8 +15,8 @@ import { Logger } from '@/src/services/Logger';
 import { colors, radius, spacing } from '@/src/styles/tokens';
 
 const COMPONENT_SCOPE = 'MistakeImageSection';
-const PREVIEW_MIN_HEIGHT = 228;
-const PREVIEW_MAX_HEIGHT = 280;
+const PREVIEW_MIN_HEIGHT = 274;
+const PREVIEW_MAX_HEIGHT = 336;
 
 const palette = {
   surface: colors.surface,
@@ -110,7 +110,7 @@ function formatFileSize(fileSize: number): string {
 }
 
 function getPreviewHeight(viewportWidth: number): number {
-  const scaledHeight = Math.round(viewportWidth * 0.58);
+  const scaledHeight = Math.round(viewportWidth * 0.7);
   return Math.max(PREVIEW_MIN_HEIGHT, Math.min(PREVIEW_MAX_HEIGHT, scaledHeight));
 }
 
@@ -394,8 +394,8 @@ const styles = StyleSheet.create({
   },
   previewHint: {
     position: 'absolute',
-    right: spacing.md,
-    bottom: spacing.md,
+    right: 12,
+    bottom: 12,
     width: 34,
     height: 34,
     borderRadius: radius.pill,
