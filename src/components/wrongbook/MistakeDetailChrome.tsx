@@ -75,31 +75,24 @@ export function ReviewProgressCard({
   const mastered = status === 'mastered' || completed >= total;
 
   return (
-    <View style={styles.progressCard}>
-      <View style={styles.progressCountWrap}>
+    <View style={styles.progressSummary}>
+      <View style={styles.progressSummaryRow}>
         <View style={styles.progressFractionRow}>
           <Text maxFontSizeMultiplier={1.15} style={styles.progressNumber}>{completed}</Text>
           <Text maxFontSizeMultiplier={1.15} style={styles.progressTotal}> / {total}</Text>
         </View>
-        <Text style={[styles.progressCaption, mastered && styles.progressCaptionMastered]}>
-          {mastered ? '已掌握' : `已完成 ${completed} 次`}
+        <Text numberOfLines={1} style={[styles.nextReviewText, mastered && styles.nextReviewTextMastered]}>
+          {mastered ? '七刷已完成' : `下一次：${nextReviewText}`}
         </Text>
       </View>
 
-      <View style={styles.progressDivider} />
-
-      <View style={styles.progressScheduleWrap}>
-        <Text numberOfLines={1} style={styles.nextReviewText}>
-          {mastered ? '七刷已完成' : `下一次：${nextReviewText}`}
-        </Text>
-        <View accessibilityLabel={`已完成 ${completed} / ${total} 次`} style={styles.dotRow}>
-          {Array.from({ length: total }, (_, index) => (
-            <View
-              key={index}
-              style={[styles.progressDot, index < completed && styles.progressDotCompleted]}
-            />
-          ))}
-        </View>
+      <View accessibilityLabel={`已完成 ${completed} / ${total} 次`} style={styles.dotRow}>
+        {Array.from({ length: total }, (_, index) => (
+          <View
+            key={index}
+            style={[styles.progressDot, index < completed && styles.progressDotCompleted]}
+          />
+        ))}
       </View>
     </View>
   );
@@ -232,21 +225,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  progressCard: {
-    minHeight: 152,
-    borderRadius: 20,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: palette.border,
-    backgroundColor: palette.surface,
-    flexDirection: 'row',
-    alignItems: 'center',
+  progressSummary: {
+    gap: 14,
     paddingHorizontal: 20,
-    paddingVertical: 20,
+    paddingBottom: 18,
   },
-  progressCountWrap: {
-    width: 96,
-    minWidth: 84,
-    gap: 3,
+  progressSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: spacing.md,
   },
   progressFractionRow: {
     flexDirection: 'row',
@@ -254,44 +242,29 @@ const styles = StyleSheet.create({
   },
   progressNumber: {
     color: palette.green,
-    fontSize: 50,
-    lineHeight: 56,
+    fontSize: 32,
+    lineHeight: 38,
     fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   progressTotal: {
     color: palette.secondaryText,
-    fontSize: 24,
-    lineHeight: 32,
+    fontSize: 20,
+    lineHeight: 26,
     fontWeight: '600',
     fontVariant: ['tabular-nums'],
   },
-  progressCaption: {
-    color: palette.secondaryText,
+  nextReviewText: {
+    flex: 1,
+    minWidth: 0,
+    color: palette.text,
     fontSize: 15,
     lineHeight: 21,
     fontWeight: '500',
   },
-  progressCaptionMastered: {
+  nextReviewTextMastered: {
     color: palette.green,
     fontWeight: '700',
-  },
-  progressDivider: {
-    width: StyleSheet.hairlineWidth,
-    height: 72,
-    marginHorizontal: 12,
-    backgroundColor: palette.border,
-  },
-  progressScheduleWrap: {
-    flex: 1,
-    minWidth: 0,
-    gap: 20,
-  },
-  nextReviewText: {
-    color: palette.text,
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: '500',
   },
   dotRow: {
     flexDirection: 'row',

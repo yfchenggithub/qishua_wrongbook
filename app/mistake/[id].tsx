@@ -4697,17 +4697,31 @@ export default function MistakeDetailScreen() {
               </View>
 
               <View style={styles.detailSection}>
-                <DetailSectionHeader
-                  title="复做记录"
-                  actionLabel={
-                    state.detail.reviewRecords.length > 3
-                      ? (showAllReviewRecords ? '收起' : '查看全部')
-                      : undefined
-                  }
-                  onAction={() => setShowAllReviewRecords((current) => !current)}
-                />
-
                 <View style={styles.reviewTimelineGroup}>
+                  <View style={styles.reviewProgressHeader}>
+                    <Text maxFontSizeMultiplier={1.25} style={styles.reviewProgressTitle}>复做进度</Text>
+                    {state.detail.reviewRecords.length > 3 ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={showAllReviewRecords ? '收起' : '查看全部'}
+                        onPress={() => setShowAllReviewRecords((current) => !current)}
+                        style={({ pressed }) => [styles.reviewProgressAction, pressed && styles.detailPressed]}>
+                        <Text maxFontSizeMultiplier={1.2} style={styles.reviewProgressActionText}>
+                          {showAllReviewRecords ? '收起' : '查看全部'}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+
+                  <ReviewProgressCard
+                    reviewCount={state.detail.reviewCount}
+                    maxReviewCount={state.detail.maxReviewCount}
+                    status={state.detail.status}
+                    nextReviewText={formatNextReviewCompact(state.detail, nextReviewInfo)}
+                  />
+
+                  <View style={styles.reviewTimelineDivider} />
+
                   {state.detail.reviewRecords.length <= 0 ? (
                     <View style={styles.reviewTimelineEmpty}>
                       <View style={styles.reviewTimelineEmptyIcon}>
@@ -4789,13 +4803,6 @@ export default function MistakeDetailScreen() {
                   </Text>
                 ) : null}
               </View>
-
-              <ReviewProgressCard
-                reviewCount={state.detail.reviewCount}
-                maxReviewCount={state.detail.maxReviewCount}
-                status={state.detail.status}
-                nextReviewText={formatNextReviewCompact(state.detail, nextReviewInfo)}
-              />
 
               <View style={styles.detailSection}>
                 <DetailSectionHeader title="概览" />
@@ -5558,6 +5565,38 @@ const styles = StyleSheet.create({
     borderColor: mistakeDetailPalette.border,
     backgroundColor: mistakeDetailPalette.surface,
     overflow: 'hidden',
+  },
+  reviewProgressHeader: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    paddingLeft: spacing.lg,
+    paddingRight: spacing.sm,
+  },
+  reviewProgressTitle: {
+    flex: 1,
+    color: mistakeDetailPalette.text,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
+  },
+  reviewProgressAction: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  reviewProgressActionText: {
+    color: mistakeDetailPalette.green,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
+  },
+  reviewTimelineDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: spacing.lg,
+    backgroundColor: mistakeDetailPalette.border,
   },
   reviewTimelineItem: {
     borderBottomWidth: StyleSheet.hairlineWidth,
